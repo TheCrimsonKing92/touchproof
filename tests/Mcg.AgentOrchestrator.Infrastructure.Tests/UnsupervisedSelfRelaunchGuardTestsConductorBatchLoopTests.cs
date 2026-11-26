@@ -37,15 +37,23 @@ public sealed class UnsupervisedSelfRelaunchGuardTestsConductorBatchLoopTests : 
             },
             getLandingFileScopes: _ =>
                 ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"]);
+        var windowId = Guid.NewGuid();
+        var now = PreTesterResolverObservationTests.Start;
+        var policy = ConductorAutonomyPolicy.Conservative with
+        {
+            PreTesterResolverObservationWindowId = ownerAlive ? windowId : null
+        };
+        driver.PreTesterResolverObservation = PreTesterResolverObservationTests.Window(fixture.Root);
 
         var output = AsyncLocalConsoleRouter.Capture(() =>
         {
             var loop = new ConductorBatchLoop(
+                utcNow: () => now,
                 selfRelaunch: SupervisedSelfRelaunchGuard.Create(fixture.Root,
                     ConductorSelfRelaunch.CreateSupervisorDelegated(),
                     (title, body, key) => attention.Add((title, body, key)), probe),
                 selfRelaunchEnabled: true);
-            var summary = loop.Run(kernel, driver, ConductorAutonomyPolicy.Conservative,
+            var summary = loop.Run(kernel, driver, policy,
                 NoStopPath(), maxIterations: 4);
             var artifact = ConductorContinuityExitArtifactFactory.FromLoopSummary(summary, true);
             if (ownerAlive)
@@ -53,6 +61,20 @@ public sealed class UnsupervisedSelfRelaunchGuardTestsConductorBatchLoopTests : 
                 Assert.Equal("delegated-to-continuity-supervisor", summary.Handoff?.Reason);
                 Assert.Equal("self-relaunch-handoff", summary.StopReason);
                 Assert.True(artifact.RestartRequested);
+                var checkpoint = Assert.IsType<string>(artifact.ResolverObservationHandoff);
+                var path = PreTesterResolverObservationTests.CorpusPath(fixture.Root, windowId);
+                Assert.False(File.Exists(path + ".receipt.json"));
+                now = now.AddHours(1);
+                using var next = PreTesterResolverObservationTests.Window(fixture.Root, handoff: checkpoint);
+                using (var tick = Assert.IsType<PreTesterReverseDependencyObservation.Tick>(next.BeginTick(windowId, () => now)))
+                    tick.Complete();
+                now = PreTesterResolverObservationTests.Start + PreTesterReverseDependencyObservation.Duration;
+                Assert.Null(next.BeginTick(windowId, () => now));
+                var seal = PreTesterResolverObservationTests.Receipt(path);
+                var corpus = PreTesterResolverCorpus.Read(path, seal.Sha256!);
+                Assert.Equal(now, corpus.Header.Deadline);
+                Assert.Equal(2, corpus.Producers.Select(producer => producer.SessionId).Distinct().Count());
+                Assert.Equal(summary.Ticks + 1, corpus.Manifest.CompleteTickCount);
             }
             else
             {

@@ -3,6 +3,11 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+if (args.Length > 0 && args[0] == PreTesterResolverReplayCommand.Name)
+{
+    return PreTesterResolverReplayCommand.Run(args, Console.Error);
+}
+
 if (args.Length > 0 && args[0].Equals(DecisionSnapshotCommand.Name, StringComparison.OrdinalIgnoreCase))
 {
     return await DecisionSnapshotCommand.RunAsync(args, Console.Out, Console.Error);
