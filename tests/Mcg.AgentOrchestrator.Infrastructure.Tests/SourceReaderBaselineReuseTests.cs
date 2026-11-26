@@ -147,6 +147,9 @@ public sealed class SourceReaderBaselineReuseTests
         var shared = SourceReaderAnalysisCache.Current;
         var directory = Path.GetDirectoryName(shared.EntryPath("probe"))!;
         Assert.True(IsWithin(directory, AssemblySourceReaderAnalysisCacheIsolation.Root));
+        var processTemp = Path.GetTempPath();
+        if (OperatingSystem.IsWindows() && File.Exists(AssemblyTempRedirect.RootLeasePath(processTemp)))
+            Assert.Equal(Path.Combine(processTemp, "source-reader-analysis"), directory);
         var localRoots = new[]
         {
             Environment.GetEnvironmentVariable("LOCALAPPDATA"),
