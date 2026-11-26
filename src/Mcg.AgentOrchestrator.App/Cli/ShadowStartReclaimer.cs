@@ -13,6 +13,29 @@ internal static class ShadowStartReclaimer
     private const uint OpenExisting = 3;
     private const uint OpenReparsePoint = 0x00200000;
     private const uint BackupSemantics = 0x02000000;
+    private const int FileDispositionInfoEx = 21;
+    private const uint FileDispositionOnClose = 8;
+
+    internal static FileStream CreateRegisteredStore(string path, Action<ShadowFileIdentity> register)
+    {
+        // The OS removes the empty file if the supervisor dies before saving its identity.
+        var handle = File.OpenHandle(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None,
+            FileOptions.DeleteOnClose);
+        try
+        {
+            register(ReadIdentity(handle));
+            // Clear delete-on-close on the same handle only after the record is durable.
+            if (!SetFileInformationByHandle(handle, FileDispositionInfoEx,
+                    BitConverter.GetBytes(FileDispositionOnClose), sizeof(uint)))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), $"Cannot keep registered store: {path}.");
+            return new FileStream(handle, FileAccess.ReadWrite);
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
+    }
 
     internal static ShadowFileIdentity CaptureDirectory(string path)
     {
@@ -28,7 +51,7 @@ internal static class ShadowStartReclaimer
         {
             Pin(run.Scratch, run.ScratchIdentity);
             if (Pin(run.State, run.StateIdentity) is not null)
-                OpenStores(run.State);
+                OpenStores(run.State, run.CandidateMayCreateSidecars);
             var staging = Pin(run.Staging, run.StagingIdentity, delete: true);
             if (staging is not null)
                 OpenStores(run.Staging);
@@ -74,23 +97,27 @@ internal static class ShadowStartReclaimer
             return true;
         }
 
-        void OpenStores(string root)
+        void OpenStores(string root, bool candidateMayCreateSidecars = false)
         {
             foreach (var name in run.Databases)
             {
                 var database = Path.Combine(root, name);
                 OpenStore(database, run.StoreIdentities);
+                // SQLite can recreate sidecars after its last connection closes. Once release is
+                // verified, the launch record authorizes those exact slots for registered state copies.
+                var candidateSidecars = candidateMayCreateSidecars && run.StoreIdentities?.ContainsKey(database) == true;
                 foreach (var suffix in ShadowStartCopyPlan.Suffixes.Skip(1))
-                    OpenStore(database + suffix, run.CreatedSidecarIdentities);
+                    OpenStore(database + suffix, run.CreatedSidecarIdentities, candidateSidecars);
             }
         }
 
-        void OpenStore(string path, Dictionary<string, ShadowFileIdentity>? identities)
+        void OpenStore(string path, Dictionary<string, ShadowFileIdentity>? identities, bool candidateSidecar = false)
         {
             var handle = Open(path, directory: false, delete: true);
             if (handle is null) return;
             files.Add(handle);
-            if (identities is null || !identities.TryGetValue(path, out var recorded) || ReadIdentity(handle) != recorded)
+            if (!candidateSidecar &&
+                (identities is null || !identities.TryGetValue(path, out var recorded) || ReadIdentity(handle) != recorded))
                 throw new IOException($"Store file identity mismatch: {path}.");
         }
     }

@@ -134,9 +134,10 @@ public sealed class ShadowStartCommandTests
             $rootIndex -lt 0 -or $args[$rootIndex + 1] -ne $root -or
             $stateIndex -lt 0 -or $args[$stateIndex + 1] -ne $state -or
             $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT -ne $root) { exit 3 }
-        if ($mode -eq 'hold-wal') {
+        if ($mode -eq 'reopen-wal') {
             Add-Type -TypeDefinition @'
         using System;
+        using System.IO;
         using System.Runtime.InteropServices;
         using System.Text;
 
@@ -145,8 +146,18 @@ public sealed class ShadowStartCommandTests
             private static extern int sqlite3_open(byte[] path, out IntPtr database);
             [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
             private static extern int sqlite3_exec(IntPtr database, string sql, IntPtr callback, IntPtr state, IntPtr error);
+            [DllImport("winsqlite3.dll", CallingConvention = CallingConvention.Cdecl)]
+            private static extern int sqlite3_close(IntPtr database);
 
-            public static void HoldWal(string path) {
+            public static void ReopenWalAndHold(string path) {
+                IntPtr first = OpenAndWriteWal(path);
+                if (sqlite3_close(first) != 0) throw new InvalidOperationException("SQLite did not close.");
+                if (File.Exists(path + "-wal") || File.Exists(path + "-shm"))
+                    throw new InvalidOperationException("The first SQLite connection did not remove its sidecars.");
+                OpenAndWriteWal(path); // Keep the second connection open until the containing job terminates.
+            }
+
+            private static IntPtr OpenAndWriteWal(string path) {
                 IntPtr database;
                 int result = sqlite3_open(Encoding.UTF8.GetBytes(path + "\0"), out database);
                 if (result == 0) {
@@ -155,11 +166,11 @@ public sealed class ShadowStartCommandTests
                         IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
                 }
                 if (result != 0) throw new InvalidOperationException("SQLite error: " + result);
-                // Keep this connection open until the containing job terminates.
+                return database;
             }
         }
         '@
-            [ShadowFixtureSqlite]::HoldWal((Join-Path $state 'state.db'))
+            [ShadowFixtureSqlite]::ReopenWalAndHold((Join-Path $state 'state.db'))
             [Console]::WriteLine('wal-ready')
         }
         if ($args[1] -ne 'no-marker') { [IO.File]::WriteAllText($args[1], 'started') }
@@ -183,7 +194,7 @@ public sealed class ShadowStartCommandTests
             }
         }
         if ($mode -eq 'slow') { Start-Sleep -Seconds 30 }
-        if ($mode -eq 'no-first-tick' -or $mode -eq 'hold-wal') {
+        if ($mode -eq 'reopen-wal') {
             Wait-Event -SourceIdentifier 'fixture-release'
             exit 4
         }

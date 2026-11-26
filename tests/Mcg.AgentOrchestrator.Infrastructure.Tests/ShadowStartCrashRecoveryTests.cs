@@ -67,14 +67,14 @@ public sealed class ShadowStartCrashRecoveryTests
         if (!OperatingSystem.IsWindows()) return;
         using var fixture = new ShadowStartCommandTests.Fixture();
         fixture.CreateDatabase("state.db");
-        var run = Seed(fixture, "settled-job", phase: ShadowStartPhase.Running, useRealDatabase: true);
+        var run = Seed(fixture, "settled-job", useRealDatabase: true);
         var database = Path.Combine(run.State, "state.db");
         var start = new ProcessStartInfo("powershell.exe")
         {
             WorkingDirectory = run.Scratch, UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
             ArgumentList = { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
-                fixture.CandidateScriptPath, "hold-wal", "no-marker", "conduct", "--no-dispatch",
+                fixture.CandidateScriptPath, "reopen-wal", "no-marker", "conduct", "--no-dispatch",
                 "--disposable-fixture", "--repository-root", run.Scratch, "--expected-state-directory", run.State }
         };
         start.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = run.Scratch;
@@ -85,6 +85,15 @@ public sealed class ShadowStartCrashRecoveryTests
             AcceptanceJobCustodianHost.BindShadowStart(run.Scratch, run.State), registry.SettlementPath(run.Id));
         using var observer = Process.GetProcessById(custody.CustodianIdentity.ProcessId);
         _ = observer.SafeHandle;
+        var recorded = run with
+        {
+            Phase = ShadowStartPhase.Running,
+            CandidatePid = identity.ProcessId,
+            CandidateStarted = identity.StartedAt,
+            CandidateImagePath = identity.ImagePath,
+            CandidateMayCreateSidecars = true
+        };
+        registry.Save(recorded);
         candidate.Resume();
         Assert.Equal("wal-ready", await candidate.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15)));
         Assert.True(new FileInfo(database + "-wal").Length > 32);
@@ -95,17 +104,6 @@ public sealed class ShadowStartCrashRecoveryTests
         Assert.True(observer.WaitForExit(15000), "The job custodian did not settle and exit.");
         Assert.Equal(0, observer.ExitCode);
         Assert.True(File.Exists(registry.SettlementPath(run.Id)));
-        foreach (var path in new[] { database + "-wal", database + "-shm" })
-        {
-            using var sidecar = File.OpenRead(path);
-            Assert.Equal(run.CreatedSidecarIdentities![path], ShadowStartReclaimer.ReadIdentity(sidecar.SafeFileHandle));
-        }
-        var recorded = run with
-        {
-            CandidatePid = identity.ProcessId,
-            CandidateStarted = identity.StartedAt,
-            CandidateImagePath = identity.ImagePath
-        };
         registry.Save(recorded with { CandidateStarted = identity.StartedAt.AddMinutes(-1) });
         var mismatch = new StringWriter();
         registry.Recover(fixture.Source, mismatch);
@@ -114,15 +112,24 @@ public sealed class ShadowStartCrashRecoveryTests
         Assert.True(File.Exists(database + "-wal"));
 
         registry.Save(recorded);
+        var locked = new StringWriter();
+        using (File.Open(database + "-wal", FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            registry.Recover(fixture.Source, locked);
+            Assert.Contains("cleanup_reason=sharing-violation", locked.ToString());
+            Assert.True(File.Exists(database));
+            Assert.True(Directory.Exists(run.Staging));
+        }
+
         var diagnostics = new StringWriter();
-
         registry.Recover(fixture.Source, diagnostics);
-
         Assert.Empty(diagnostics.ToString());
         Assert.False(File.Exists(database));
         Assert.False(File.Exists(database + "-wal"));
         Assert.False(File.Exists(database + "-shm"));
         Assert.False(Directory.Exists(run.Staging));
+        using var receipt = JsonDocument.Parse(File.ReadAllText(registry.ReceiptPath(run.Id)));
+        Assert.Equal("reclaimed", receipt.RootElement.GetProperty("cleanup").GetString());
     }
 
     [Theory]
@@ -239,12 +246,8 @@ public sealed class ShadowStartCrashRecoveryTests
         if (useRealDatabase)
             File.Copy(Path.Combine(fixture.Source, "state.db"), database, overwrite: true);
         var stores = new[] { database, Put(staging, "state.db") }.ToDictionary(path => path, ReadIdentity);
-        var sidecars = ShadowStartCopyPlan.Suffixes.Skip(1).ToDictionary(suffix => database + suffix, suffix =>
-        {
-            using var file = new FileStream(database + suffix, FileMode.CreateNew);
-            if (!useRealDatabase) file.Write("fixture"u8);
-            return ShadowStartReclaimer.ReadIdentity(file.SafeFileHandle);
-        });
+        var sidecars = useRealDatabase ? null : ShadowStartCopyPlan.Suffixes.Skip(1)
+            .Select(suffix => Put(state, "state.db" + suffix)).ToDictionary(path => path, ReadIdentity);
         using var owner = Process.GetCurrentProcess();
         var run = new ShadowStartRun(id, ShadowScratchRetention.Disposable, fixture.Source, scratch, state, staging,
             ["state.db"], liveOwner ? owner.Id : int.MaxValue, owner.StartTime.ToUniversalTime(), phase,

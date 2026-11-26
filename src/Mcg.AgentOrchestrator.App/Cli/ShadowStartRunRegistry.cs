@@ -10,14 +10,15 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal enum ShadowStartPhase { Unspecified, Copying, LaunchPending, Running, Released, Reclaimed }
 
 // Older StoreIdentities maps may contain sidecars adopted during cleanup.
-// Only CreatedSidecarIdentities provides proof that the run created a sidecar.
+// Only CreatedSidecarIdentities proves creation before launch.
 internal sealed record ShadowStartRun(Guid Id, ShadowScratchRetention Intent, string Source, string Scratch,
     string State, string Staging, string[] Databases, int OwnerPid, DateTimeOffset OwnerStarted,
     ShadowStartPhase Phase, ShadowFileIdentity? ScratchIdentity = null, ShadowFileIdentity? StateIdentity = null,
     ShadowFileIdentity? StagingIdentity = null, string? CleanupReason = null,
     int? CandidatePid = null, DateTimeOffset? CandidateStarted = null,
     Dictionary<string, ShadowFileIdentity>? StoreIdentities = null, string? CandidateImagePath = null,
-    Dictionary<string, ShadowFileIdentity>? CreatedSidecarIdentities = null)
+    Dictionary<string, ShadowFileIdentity>? CreatedSidecarIdentities = null,
+    bool CandidateMayCreateSidecars = false)
 {
     internal string JobName => $@"Global\McgShadowStart-{Id:N}";
 }
@@ -81,10 +82,14 @@ internal sealed class ShadowStartRunRegistry : IDisposable
     }
 
     private bool HasCandidateSettlement(ShadowStartRun run) =>
-        run is { CandidatePid: { } pid, CandidateStarted: { } started, CandidateImagePath: { } image } &&
-        pid > 0 && Path.IsPathFullyQualified(image) &&
+        ReadCandidateIdentity(run) is { } identity &&
         DurableAcceptanceJob.HasSettlementReceipt(SettlementPath(run.Id), run.JobName,
-            new SpawnProcessIdentity(pid, started, image));
+            identity);
+
+    private static SpawnProcessIdentity? ReadCandidateIdentity(ShadowStartRun run) =>
+        run is { CandidatePid: { } pid, CandidateStarted: { } started, CandidateImagePath: { } image } &&
+        pid > 0 && started != default && Path.IsPathFullyQualified(image)
+            ? new(pid, started, image) : null;
 
     internal ShadowStartCleanup Cleanup(ShadowStartRun run, string? reason, ShadowStartMeasurement? measurement,
         IReadOnlyList<ShadowStartCapacity>? capacity, string? candidate)
@@ -184,6 +189,8 @@ internal sealed class ShadowStartRunRegistry : IDisposable
         run.Id != Guid.Empty && run is { Intent: ShadowScratchRetention.Disposable, OwnerPid: > 0 } &&
         run.OwnerStarted != default &&
         run.Phase is >= ShadowStartPhase.Copying and <= ShadowStartPhase.Reclaimed &&
+        (!run.CandidateMayCreateSidecars ||
+            (run.Phase >= ShadowStartPhase.Running && ReadCandidateIdentity(run) is not null)) &&
         IsCanonical(run.Source) && IsCanonical(run.Scratch) && IsCanonical(run.State) && IsCanonical(run.Staging) &&
         PathsEqual(run.State, Path.Combine(run.Scratch, ".orchestrator")) &&
         PathsEqual(Path.GetFileName(run.Staging), run.Id.ToString("N")) &&

@@ -53,10 +53,11 @@ public sealed class ShadowStartReclamationTests
         AssertReclaimed(fixture, "partial", expectedRuns: 2);
 
         var marker = fixture.Scratch("timeout-started");
-        var timeout = fixture.Run("no-first-tick", "timeout", startupSeconds: "8", extra: Disposable, marker: marker);
+        var timeout = fixture.Run("reopen-wal", "timeout", startupSeconds: "8", extra: Disposable, marker: marker);
         Assert.Equal("started", File.ReadAllText(marker));
         Assert.Equal(1, timeout.Exit);
         Assert.Contains("assertion=startup-ceiling", timeout.Error);
+        Assert.Contains("wal-ready", timeout.Error);
         Assert.Contains("cleanup=reclaimed", timeout.Error);
         AssertReclaimed(fixture, "timeout", expectedRuns: 3);
 
@@ -68,20 +69,39 @@ public sealed class ShadowStartReclamationTests
         AssertReclaimed(fixture, "after-interruption", expectedRuns: 5);
     }
 
-    [Fact]
-    public void ForeignWalBeforeCandidateLaunchDefersCleanupAndRefusesLaunch()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ForeignWalBeforeCandidateLaunchDefersCleanupAndRefusesLaunch(bool afterFirstBackup)
     {
         if (!OperatingSystem.IsWindows()) return;
         using var fixture = new ShadowStartCommandTests.Fixture();
         fixture.CreateDatabase("state.db");
         var marker = fixture.Scratch("candidate-started");
-        var database = Path.Combine(fixture.Scratch("foreign-wal"), ".orchestrator", "state.db");
-        var hooks = fixture.Hooks with { BeforeBackup = store => File.WriteAllText(store.Destination + "-wal", "foreign WAL") };
+        if (afterFirstBackup) fixture.CreateDatabase("cohort-acceptance.db");
+        string? database = null;
+        var hooks = afterFirstBackup
+            ? fixture.Hooks with
+            {
+                BeforeCopy = store =>
+                {
+                    if (database is null) database = store.Destination;
+                    else File.WriteAllText(database + "-wal", "foreign WAL");
+                }
+            }
+            : fixture.Hooks with
+            {
+                BeforeBackup = store =>
+                {
+                    database = store.Destination;
+                    File.WriteAllText(database + "-wal", "foreign WAL");
+                }
+            };
 
         var result = fixture.Run("normal", "foreign-wal", extra: Disposable, hooks: hooks, marker: marker);
 
         Assert.Equal(1, result.Exit);
-        Assert.Contains("assertion=database-backup", result.Error);
+        Assert.Contains(afterFirstBackup ? "assertion=candidate-launch" : "assertion=database-backup", result.Error);
         Assert.Contains($"Destination sidecar already exists: {database}-wal.", result.Error);
         Assert.Contains("cleanup=deferred", result.Error);
         Assert.False(File.Exists(marker));
@@ -100,7 +120,7 @@ public sealed class ShadowStartReclamationTests
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         ready.Created += (_, _) => started.TrySetResult();
         ready.EnableRaisingEvents = true;
-        var run = Task.Run(() => fixture.Run("hold-wal", "cancelled", extra: Disposable,
+        var run = Task.Run(() => fixture.Run("reopen-wal", "cancelled", extra: Disposable,
             marker: fixture.Scratch("ready"), cancellationToken: cancel.Token));
         try
         {
@@ -120,6 +140,22 @@ public sealed class ShadowStartReclamationTests
         Assert.Contains("assertion=cancelled", result.Error);
         Assert.Contains("cleanup=reclaimed", result.Error);
         AssertReclaimed(fixture, "cancelled", expectedRuns: 1);
+    }
+
+    [Fact]
+    public void RegistrationFailureDiscardsTheUnregisteredStore()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var fixture = new ShadowStartCommandTests.Fixture();
+        var database = Path.Combine(fixture.Source, "state.db");
+
+        Assert.Throws<IOException>(() =>
+        {
+            using var file = ShadowStartReclaimer.CreateRegisteredStore(database,
+                _ => throw new IOException("Injected registration failure."));
+        });
+
+        Assert.False(File.Exists(database));
     }
 
     private static void AssertReclaimed(ShadowStartCommandTests.Fixture fixture, string scratch, int expectedRuns)

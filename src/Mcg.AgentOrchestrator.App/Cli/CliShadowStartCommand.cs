@@ -154,14 +154,21 @@ internal static class CliShadowStartCommand
 
             void SetPhase(ShadowStartPhase phase, SpawnProcessIdentity? candidate)
             {
-                if (run is not null)
-                    UpdateRun(run with
-                    {
-                        Phase = phase,
-                        CandidatePid = candidate?.ProcessId,
-                        CandidateStarted = candidate?.StartedAt,
-                        CandidateImagePath = candidate?.ImagePath
-                    });
+                if (run is null) return;
+                if (phase == ShadowStartPhase.Running)
+                {
+                    // Establish empty destination sidecar slots before the suspended candidate can run.
+                    foreach (var name in run.Databases)
+                        RequireNoDestinationSidecars(Path.Combine(run.State, name));
+                }
+                UpdateRun(run with
+                {
+                    Phase = phase,
+                    CandidatePid = candidate?.ProcessId,
+                    CandidateStarted = candidate?.StartedAt,
+                    CandidateImagePath = candidate?.ImagePath,
+                    CandidateMayCreateSidecars = phase == ShadowStartPhase.Running
+                });
             }
 
             void UpdateRun(ShadowStartRun updated)
@@ -170,27 +177,18 @@ internal static class CliShadowStartCommand
                 run = updated;
             }
 
-            FileStream CreateOwnedStore(string path)
-            {
-                var file = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
-                try
+            FileStream CreateOwnedStore(string path) =>
+                ShadowStartReclaimer.CreateRegisteredStore(path, identity =>
                 {
                     var current = run!;
                     var isDatabase = current.Databases.Contains(Path.GetFileName(path), StringComparer.Ordinal);
                     var recorded = isDatabase ? current.StoreIdentities : current.CreatedSidecarIdentities;
                     var identities = recorded is null ? new Dictionary<string, ShadowFileIdentity>() :
                         new Dictionary<string, ShadowFileIdentity>(recorded);
-                    identities.Add(path, ShadowStartReclaimer.ReadIdentity(file.SafeFileHandle));
+                    identities.Add(path, identity);
                     UpdateRun(isDatabase ? current with { StoreIdentities = identities } :
                         current with { CreatedSidecarIdentities = identities });
-                    return file;
-                }
-                catch
-                {
-                    file.Dispose();
-                    throw;
-                }
-            }
+                });
 
             void PrepareStagedDatabase(string database)
             {
@@ -343,15 +341,7 @@ internal static class CliShadowStartCommand
             createOwnedStore?.Invoke(store.Destination).Dispose();
             hooks.BeforeBackup?.Invoke(store);
             if (createOwnedStore is not null)
-            {
-                // SQLite can remove existing sidecars during backup. Refuse foreign files before opening the destination.
-                foreach (var suffix in ShadowStartCopyPlan.Suffixes.Skip(1))
-                {
-                    var sidecar = store.Destination + suffix;
-                    if (EntryExists(sidecar))
-                        throw new IOException($"Destination sidecar already exists: {sidecar}.");
-                }
-            }
+                RequireNoDestinationSidecars(store.Destination);
             using (var copy = new SqliteConnection(new SqliteConnectionStringBuilder
             {
                 DataSource = store.Destination, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false
@@ -369,13 +359,16 @@ internal static class CliShadowStartCommand
                 }
                 snapshot.Connection.BackupDatabase(copy);
             }
-            if (createOwnedStore is not null)
-            {
-                // SQLite can open these files in place. Cleanup can only recognize these exact
-                // objects, even if SQLite later removes a file and something recreates its name.
-                foreach (var suffix in ShadowStartCopyPlan.Suffixes.Skip(1))
-                    createOwnedStore(store.Destination + suffix).Dispose();
-            }
+        }
+    }
+
+    private static void RequireNoDestinationSidecars(string database)
+    {
+        foreach (var suffix in ShadowStartCopyPlan.Suffixes.Skip(1))
+        {
+            var sidecar = database + suffix;
+            if (EntryExists(sidecar))
+                throw new IOException($"Destination sidecar already exists: {sidecar}.");
         }
     }
 
