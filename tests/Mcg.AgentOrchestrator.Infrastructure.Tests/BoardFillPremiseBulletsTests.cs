@@ -10,6 +10,9 @@ public sealed class BoardFillPremiseBulletsTests
     [InlineData("backlog note A.")]
     [InlineData("*note B7*.")]
     [InlineData("**note B7**.")]
+    [InlineData("“note B7”.")]
+    [InlineData("‘note B7’.")]
+    [InlineData("the following paragraph.\n\n  See note B7.")]
     public void BulletCount_RuntimeObservationWithEvidencePathOrNoteId_CountsOnlySourceClaims(string citation)
     {
         var premise = WithSourceClaims($"runtime-observation: Results are recorded in {citation}");
@@ -25,6 +28,7 @@ public sealed class BoardFillPremiseBulletsTests
     [InlineData("runtime-observation: Recorded in note xyz.")]
     [InlineData("runtime-observation: Recorded in note abc-123.")]
     [InlineData("runtime-observation: Recorded in *note abc-123*.")]
+    [InlineData("runtime-observation: Recorded in “note abc-123”.")]
     [InlineData("runtime-observation: Recorded in round.json.")]
     [InlineData("runtime-observation: Recorded in operator-evidence/round.")]
     [InlineData("runtime-observation: Recorded in operator-evidence.json/round.")]
@@ -55,6 +59,27 @@ public sealed class BoardFillPremiseBulletsTests
         Assert.Contains($"{marker} Separate item cites operator-evidence/round.json.", payload);
         Assert.DoesNotContain("runtime-observation: Figures are in note B7.", payload);
         Assert.Contains($"{marker} Separate item follows a cited observation.", payload);
+    }
+
+    [Theory]
+    [InlineData("> ")]
+    [InlineData("\n ")]
+    public void SourceClaims_AdjacentMarkdownBlocks_KeepTheirOwnCitations(string blockStart)
+    {
+        var separateBlock = $"{blockStart}Separate block cites note B7.";
+        var followingBlock = $"{blockStart}Separate block follows a cited observation.";
+        var premise = WithSourceClaims($"""
+            runtime-observation: Rounds failed often.
+            {separateBlock}
+            - runtime-observation: Figures are in note B7.
+            {followingBlock}
+            """);
+
+        Assert.Equal(3, BoardFillVerifierContract.BulletCount(premise));
+        var payload = BoardFillPremiseBullets.SourceClaimPremise(premise);
+        Assert.Contains($"runtime-observation: Rounds failed often.\n{separateBlock}", payload);
+        Assert.DoesNotContain("runtime-observation: Figures are in note B7.", payload);
+        Assert.EndsWith($"{followingBlock}\n- The second source claim cites `src/Second.cs:8`.", payload);
     }
 
     private static string WithSourceClaims(string bullet) => $"""
