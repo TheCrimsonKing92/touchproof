@@ -35,7 +35,7 @@ public sealed class FocusedEvidenceOverflowPackingTests
         nameof(WorkerBuildEvidenceRequirementTests),
         nameof(WorkerContextRendererDispatchPathTests),
         nameof(WorkerDispatchBuildEvidenceClassificationTests),
-        "WorkerDispatchCompletionClassifierTests",
+        nameof(WorkerDispatchHeartbeatCensusTests),
         nameof(WorkerDispatchJobAccountingTests),
         nameof(WorkerDispatchTestsDispatchPreparation),
         nameof(WorkerDispatchTestsModelSelection)

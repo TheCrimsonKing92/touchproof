@@ -404,21 +404,8 @@ internal static partial class AcceptancePolicyShardPlanner
         IsPolicyShardProjectCheck(check) &&
         policyShardPlan.IncludesProject(check.Project);
 
-    internal static bool IsExtractedInfrastructureProject(string project)
-    {
-        var normalized = NormalizePath(project);
-        const string infrastructureTestsRoot = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/";
-        if (string.IsNullOrWhiteSpace(normalized) ||
-            normalized.IndexOf(infrastructureTestsRoot, StringComparison.OrdinalIgnoreCase) < 0 ||
-            normalized.EndsWith(InfrastructureTestsProject, StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        var fileName = Path.GetFileName(normalized);
-        return fileName.StartsWith("Mcg.AgentOrchestrator.Infrastructure.", StringComparison.OrdinalIgnoreCase) &&
-            fileName.EndsWith(".Tests.csproj", StringComparison.OrdinalIgnoreCase);
-    }
+    internal static bool IsExtractedInfrastructureProject(string project) =>
+        RepositoryProjectOwnership.IsExtractedInfrastructureProject(NormalizePath(project));
 
     internal static bool ProjectMatches(string project, string expectedProject) =>
         NormalizePath(project)?.EndsWith(
