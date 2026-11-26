@@ -517,8 +517,17 @@ public static partial class RepositoryTestImpactPlanner
 
         var classFilters = new List<string>();
         TestClassDeclarations? projectDeclarations = null;
+        var routesExtractedProjects = testProjectPrefix.Equals(
+            RepositoryProjectOwnership.InfrastructureTestsRoot, StringComparison.OrdinalIgnoreCase);
         foreach (var file in changedTestSources)
         {
+            var nestedProject = declarationReader.ReadNestedProjectFile(testProjectPrefix, file.Path);
+            if (nestedProject is not null &&
+                !(routesExtractedProjects && RepositoryProjectOwnership.IsExtractedInfrastructureProject(nestedProject)))
+            {
+                continue;
+            }
+
             var fileName = Path.GetFileName(file.Path);
             var baseName = TestIdentityFilenameAssumption.GetClassNameCandidate(file.Path);
             var declarations = declarationReader.ReadFile(file.Path);
