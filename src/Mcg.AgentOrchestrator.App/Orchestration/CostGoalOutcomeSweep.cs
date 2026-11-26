@@ -15,11 +15,13 @@ internal sealed class CostGoalOutcomeSweep(
     Action<string> reportFailure,
     Func<IReadOnlyList<TickStepObservation>>? readTicks = null,
     Func<WorkerUsageSampleSource>? readWorkerUsage = null,
-    Func<string, DateTimeOffset?>? readLandedAt = null)
+    Func<string, DateTimeOffset?>? readLandedAt = null,
+    Func<string, string[], IReadOnlyDictionary<string, bool>>? readAncestryBatch = null)
 {
     private static readonly ConditionalWeakTable<ConductorBatchLoop, CostGoalOutcomeSweep> TickSweeps = new();
     private readonly object runGate = new();
     private readonly Dictionary<GoalId, string> reportedFailures = new();
+    private readonly Dictionary<(string Ancestor, string Commit), bool> ancestry = new();
     private (BacklogStore Backlog, ConductEventLogWriter Events)? stores;
 
     internal CostGoalOutcomeGateLedgerReader GateLedger { get; } = new(orchestratorDirectory);
@@ -56,22 +58,11 @@ internal sealed class CostGoalOutcomeSweep(
             var gates = new Lazy<OutcomeGateObservation[]>(() => GateLedger.Read(evaluatedAt));
             var ticks = new Lazy<IReadOnlyList<TickStepObservation>>(() => readTicks?.Invoke() ?? []);
             var workerUsage = new Lazy<WorkerUsageSampleSource?>(() => readWorkerUsage?.Invoke());
-            var ancestry = new Dictionary<(string Ancestor, string Commit), bool>();
-
-            bool Contains(string ancestor, string commit)
-            {
-                if (string.Equals(ancestor, commit, StringComparison.OrdinalIgnoreCase)) return true;
-                var pair = (ancestor, commit);
-                if (!ancestry.TryGetValue(pair, out var contained))
-                    ancestry[pair] = contained = containsCommit(ancestor, commit);
-                return contained;
-            }
-
             foreach (var goalId in ReadFiledGoalIds())
             {
                 try
                 {
-                    store.WithGoalLock(goalId, () => SweepGoal(goalId, evaluatedAt, adoptions, gates, ticks, workerUsage, Contains));
+                    store.WithGoalLock(goalId, () => SweepGoal(goalId, evaluatedAt, adoptions, gates, ticks, workerUsage));
                     reportedFailures.Remove(goalId);
                 }
                 catch (Exception ex)
@@ -86,10 +77,35 @@ internal sealed class CostGoalOutcomeSweep(
         }
     }
 
+    private bool Contains(string ancestor, string commit)
+    {
+        if (string.Equals(ancestor, commit, StringComparison.OrdinalIgnoreCase)) return true;
+        var pair = (ancestor, commit);
+        if (!ancestry.TryGetValue(pair, out var contained))
+            ancestry[pair] = contained = containsCommit(ancestor, commit);
+        return contained;
+    }
+
+    private void PrefetchAncestry(string ancestor, IEnumerable<string> commits)
+    {
+        if (readAncestryBatch is null || !IsFullObjectId(ancestor)) return;
+
+        var unknown = commits.Where(commit => !string.Equals(ancestor, commit, StringComparison.OrdinalIgnoreCase) &&
+                !ancestry.ContainsKey((ancestor, commit)) && IsFullObjectId(commit))
+            .Distinct().ToArray();
+        // A walk and validation of non-matches can take two launches.
+        if (unknown.Length < 3) return;
+
+        foreach (var (commit, contained) in readAncestryBatch(ancestor, unknown))
+            ancestry.Add((ancestor, commit), contained);
+    }
+
+    private static bool IsFullObjectId(string revision) =>
+        revision.Length is 40 or 64 && revision.All(char.IsAsciiHexDigit);
+
     private void SweepGoal(GoalId goalId, DateTimeOffset evaluatedAt,
         Lazy<(string Commit, DateTimeOffset At)[]> adoptions, Lazy<OutcomeGateObservation[]> gates,
-        Lazy<IReadOnlyList<TickStepObservation>> ticks, Lazy<WorkerUsageSampleSource?> workerUsage,
-        Func<string, string, bool> contains)
+        Lazy<IReadOnlyList<TickStepObservation>> ticks, Lazy<WorkerUsageSampleSource?> workerUsage)
     {
         var record = store.Read(goalId);
         if (record is null) return;
@@ -103,7 +119,10 @@ internal sealed class CostGoalOutcomeSweep(
         {
             var landed = resolveLandedHomeCommit(goalId);
             if (string.IsNullOrWhiteSpace(landed)) return;
-            var first = adoptions.Value.FirstOrDefault(candidate => contains(landed, candidate.Commit));
+            PrefetchAncestry(landed, adoptions.Value.Select(candidate => candidate.Commit).TakeWhile(commit =>
+                !string.Equals(landed, commit, StringComparison.OrdinalIgnoreCase) &&
+                !ancestry.GetValueOrDefault((landed, commit))));
+            var first = adoptions.Value.FirstOrDefault(candidate => Contains(landed, candidate.Commit));
             if (first.Commit is null) return;
             adoption = new(landed, first.Commit, first.At);
             store.Write(goalId, record = record with { Adoption = adoption });
@@ -121,10 +140,11 @@ internal sealed class CostGoalOutcomeSweep(
                     (!CostGoalOutcomeMetric.IsWorkerUsageMetric(baseline.Line.Name) ||
                      CostGoalOutcomeMetric.HasGateSource(baseline.Line.Guard?.Name)))
                     ? gates.Value : [],
-                adoption.LandedHomeCommit, contains, adoption.AdoptedAt, evaluatedAt,
+                adoption.LandedHomeCommit, Contains, adoption.AdoptedAt, evaluatedAt,
                 ticks: record.Filing.Baselines.Any(baseline => CostGoalOutcomeMetric.TickStepName(baseline.Line.Name) is not null)
                     ? ticks.Value : null,
-                measureWorkerUsage: MeasureWorkerUsage);
+                measureWorkerUsage: MeasureWorkerUsage,
+                prefetchAncestry: readAncestryBatch is null ? null : PrefetchAncestry);
         var (backlog, events) = stores ??= openStores();
         CostGoalOutcomeVerdict.Apply(goalId, results, store, backlog, events);
     }
@@ -168,11 +188,47 @@ internal sealed class CostGoalOutcomeSweep(
             (ancestor, commit) =>
             {
                 var result = GitCli.Run(workspace.ExecutionDirectory, "merge-base", "--is-ancestor", "--", ancestor, commit);
-                if (result.ExitCode is 0 or 1) return result.ExitCode == 0;
+                if (result.ProcessStarted && !result.DrainTimedOut && result.ExitCode is 0 or 1)
+                    return result.ExitCode == 0;
                 throw new InvalidOperationException($"Unable to check cost goal ancestry for {ancestor} in {commit}.");
             }, reportFailure, () => TickStepLedgerReader.Read(workspace.ConductEventsLogPath),
             () => WorkerUsageSampleSource.Read(workspace.SqliteStatePath),
-            commit => WorkerUsageSampleSource.ReadLandedAt(workspace.ExecutionDirectory, commit));
+            commit => WorkerUsageSampleSource.ReadLandedAt(workspace.ExecutionDirectory, commit),
+            (ancestor, commits) => ReadGitAncestryBatch(workspace.ExecutionDirectory, ancestor, commits));
+    }
+
+    internal static IReadOnlyDictionary<string, bool> ReadGitAncestryBatch(
+        string workingDirectory, string ancestor, string[] commits)
+    {
+        var walk = GitCli.RunWithStandardInput(workingDirectory, GitCli.DefaultTimeoutMilliseconds,
+            $"^{ancestor}\n{string.Join('\n', commits)}\n", "rev-list", "--ancestry-path", "--stdin");
+        var answers = new Dictionary<string, bool>();
+        // Retry unresolved pairs individually, in their original order, so the caller sees
+        // the same per-pair failures and can still short-circuit the adoption search.
+        if (!walk.ProcessStarted || walk.DrainTimedOut || walk.ExitCode != 0 || walk.Error.Length != 0)
+            return answers;
+
+        var descendants = walk.Output.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var commit in commits.Where(descendants.Contains))
+            answers.Add(commit, true);
+
+        var remaining = commits.Where(commit => !answers.ContainsKey(commit)).ToArray();
+        if (remaining.Length == 0) return answers;
+
+        // rev-list peels tags. Absence is conclusive only when the requested ID itself is a commit.
+        var types = GitCli.RunWithStandardInput(workingDirectory, GitCli.DefaultTimeoutMilliseconds,
+            $"{ancestor}\n{string.Join('\n', remaining)}\n", "cat-file", "--batch-check=%(objectname) %(objecttype)");
+        if (!types.ProcessStarted || types.DrainTimedOut || types.ExitCode != 0 || types.Error.Length != 0)
+            return answers;
+
+        var objects = types.Output.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // A tag or abbreviation used as the ancestor can denote the same commit as a candidate.
+        if (!objects.Contains($"{ancestor} commit")) return answers;
+        foreach (var commit in remaining.Where(commit => objects.Contains($"{commit} commit")))
+            answers.Add(commit, false);
+        return answers;
     }
 
     private static string? ReadRecoveredLandingCommit(GoalOperationJournalSummary journal)
