@@ -8,7 +8,7 @@ public sealed class AgentRosterReloadWiringBoundaryTests
             "src", "Mcg.AgentOrchestrator.App", "Cli", "CliCommandHandlers.Goals.cs"));
         Assert.Equal(1, source.Split("AgentRosterReloader.ForConductLoop(", StringSplitOptions.None).Length - 1);
         var assignment = source.IndexOf("context.Agents = agentRoster.View;", StringComparison.Ordinal);
-        var driver = source.IndexOf("var loopDriver = new ConductorDriver(", StringComparison.Ordinal);
+        var driver = source.IndexOf("var loopDriver =", StringComparison.Ordinal);
         var sweep = source.IndexOf("TerminalGoalSweepResult reconcileSweep(", StringComparison.Ordinal);
         var refresh = source.IndexOf("agentRoster.Refresh();", StringComparison.Ordinal);
         var reaper = source.IndexOf("loopReaper.BeginRefreshCycle();", StringComparison.Ordinal);

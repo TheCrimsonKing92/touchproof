@@ -297,6 +297,28 @@ The default Windows host holds one in-memory entry. It validates the SQLite main
 
 `BoardFillSnapshotMeasurementTests.Bounded_windows_report_paired_costs_and_freshness` emits cold, unchanged, changed and mixed receipts. It reports repeated calling-thread CPU measurements with each arm's spread and the observed accounting increment. Deltas within that increment or with inconsistent direction are inconclusive. SQLite tracing runs separately and counts statements and rows, including production note setup and coverage repair on the writer side. The fixture checks raw contents and the selected action. Retained bytes are estimated from a managed live-heap delta across caches populated from each window's final database. The historical whole-step CPU and delivered backlog row counters serve as workload context.
 
+### Collect an ordinary pre-Tester resolver window
+
+After normal acceptance, verify the workspace and both live lease holders. Match the child to the healthy `ACTIVATION_ADOPTED` build and the supervisor to the same observer-capable build using `SUPERVISOR_HANDOFF` and the live owner's `SUPERVISOR_BUILD` event. Check both PIDs, process start times, and staged build identities. On first adoption the previous supervisor can transfer its lease with a child it launched without an observation grant. Match `LOOP_START` to the live child's PID and require `resolverObservationLaunch=verified` before setting a window ID.
+
+If the supervisor is still on the previous build or the child lacks verified launch readiness, keep the window ID unset and use the [manual bounce fallback](#manual-bounce-fallback-after-loop-affecting-code-lands). Wait for the child and supervisor lease holders to exit before restarting, then check both replacement identities and the new child's `LOOP_START`. A policy request on an unverified child emits `POLICY_WARNING` with `message=pretester-resolver-launch-unverified` and leaves recording disabled.
+
+Check that the verified child's `LOOP_START` reports `policySource=file:<resolved policy path>` for the intended project. An explicit `--policy` preset disables file reload. If a preset is active, restart under the same supervisor workflow with the file-backed policy and verify its source and launch readiness. Then set `preTesterResolverObservationWindowId` in that file to a fresh UUID. Confirm `POLICY_RELOAD` and the matching `PRE_TESTER_RESOLVER_WINDOW` recording event. An absent or null value disables recording.
+
+The state directory holds `pretester-resolver-observation/<window-id>.jsonl` and its `.receipt.json` sidecar. The deadline is 24 hours after the first captured tick starts. A clean scheduled renewal or delegated activation checkpoints the corpus and authorizes the next supervised child to continue it. An unexpected exit, unfinished tick, or failed capture leaves the window incomplete. Reusing a UUID preserves the existing window and its deadline.
+
+Package both files with the digest from a `complete` receipt, the healthy adoption identity, and the pinned optimization candidate and original resolver build identities. An `insufficient-coverage` receipt records the captured mix for inspection. Only `complete` qualifies for the parent goal's CPU claim. The offline command compares selections, provenance, and diagnostics against the same sealed inputs in both builds:
+
+```powershell
+dotnet <observer-App.dll> pretester-resolver-replay <corpus.jsonl> <expected-sha256> <new-receipt.json> <candidate-build.json> <oracle-build.json>
+```
+
+Each build JSON supplies `StartingRevision`, `Revision`, `AppPath` (absolute path to a staged App with its dependencies and `.git-head`), `AppSha256`, `DependencySha256` (a map from staged DLL filenames to SHA-256 digests), and `Amendments` (an array). Use optimization candidate `e0042d3f51c90944ec03ff5f0055850762505ea7` and original starting revision `08f295076eae4d1c14660a846e3c917de32d7a9d`. The compatible oracle exposes the original matching loop and selection operation from resolver blob `23f9044420b64de6750682f80404e8d51c618779`, as in revision `98f6d646e8c2bfb524e6e9a3d6bd7915a0ad114f`.
+
+Stage each replay App from its own clean checkout with `-p:IncludeSourceRevisionInInformationalVersion=true`. Build the oracle with `-p:DebugType=embedded -p:ChecksumAlgorithm=SHA256` so the App carries the compiler's resolver source checksum. Record the checkout revision in the staged `.git-head` and hash the staged App and adjacent dependency DLLs. Supply `RepositoryPath` for the oracle and for any amended build as the absolute path to a local checkout containing its starting and actual revisions. Enumerate any amendments. Replay verifies the revision, source checksum, and binary digests, then records the actual oracle resolver blob.
+
+The command exits 0 for equivalent results, 1 for mismatches, and 2 for invalid inputs or failed execution. The parent acceptance still owns the paired optimization CPU evidence. Associate the package with goal `85288928` before applying its current authoritative resume transition.
+
 ### Manual bounce fallback after loop-affecting code lands
 
 Use this procedure when self-relaunch is disabled, when activation reverts, or when the running supervisor predates the automatic activation implementation. Re-arm the landed code deliberately:
