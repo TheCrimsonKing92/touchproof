@@ -13,6 +13,7 @@ public sealed class BoardFillPremiseBulletsTests
     [InlineData("“note B7”.")]
     [InlineData("‘note B7’.")]
     [InlineData("the following paragraph.\n\n  See note B7.")]
+    [InlineData("the following paragraph.\n\n  ---\n\n  See note B7.")]
     public void BulletCount_RuntimeObservationWithEvidencePathOrNoteId_CountsOnlySourceClaims(string citation)
     {
         var premise = WithSourceClaims($"runtime-observation: Results are recorded in {citation}");
@@ -64,6 +65,10 @@ public sealed class BoardFillPremiseBulletsTests
     [Theory]
     [InlineData("> ")]
     [InlineData("\n ")]
+    [InlineData("---\n")]
+    [InlineData("***\n")]
+    [InlineData("___\n")]
+    [InlineData(" _ _ _ \n")]
     public void SourceClaims_AdjacentMarkdownBlocks_KeepTheirOwnCitations(string blockStart)
     {
         var separateBlock = $"{blockStart}Separate block cites note B7.";
