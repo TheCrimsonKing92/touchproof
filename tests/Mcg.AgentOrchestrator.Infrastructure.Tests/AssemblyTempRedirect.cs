@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Infrastructure.Tests builds a self-contained Microsoft.Testing.Platform executable.
 // Select a process-local temp root before tests create scratch files, but commit it only
 // after its Low label (where required), child-directory write, and cleanup are verified.
-internal static class AssemblyTempRedirect
+internal static partial class AssemblyTempRedirect
 {
     internal const string LowInheritableLevel = "(OI)(CI)L";
     internal const int MaxRootsReapedPerProcess = 32;
@@ -17,6 +17,15 @@ internal static class AssemblyTempRedirect
 
     [ModuleInitializer]
     internal static void Install()
+    {
+        try { InstallProcessRoot(); }
+        finally { InstallSourceReaderCache(processRootPath); }
+    }
+
+    // Only the test assembly that compiles the source-reader cache fixture implements this hook.
+    static partial void InstallSourceReaderCache(string? ownedRoot);
+
+    private static void InstallProcessRoot()
     {
         if (!OperatingSystem.IsWindows())
         {
