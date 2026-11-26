@@ -23,7 +23,6 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
     internal Goal Goal { get; private set; }
     internal AcceptanceVerificationSummary Summary { get; private set; } = null!;
     internal SoloAcceptanceConsumptionContext Context { get; set; } = null!;
-    internal IWorkerIntegrityLabeler? BaselineIntegrityLabeler { get; init; }
     internal List<TaskId> Starts { get; } = [];
     internal int BaselineRuns { get; private set; }
     internal int CandidateRuns { get; private set; }
@@ -82,13 +81,12 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
     internal GoalAcceptanceVerifier CreateVerifier(string checkout, bool baselineThrows = false, bool baselineFails = false,
         bool collidingPassedRows = false, bool mixed = false, bool singleRow = false, string? firstCase = null,
         Action? onFailedBuild = null, bool captureFails = false, Exception? baselineException = null,
-        IReadOnlyDictionary<string, string?>? laneEnvironment = null)
+        string? baselineMissingToolFor = null)
     {
         string? candidateTrx = null;
         return new(new GoalAcceptanceVerifierTestOverrides
         {
             BuildStorageRootForTests = new(Path.Combine(Root, "dotnet")),
-            BaselineIntegrityLabelerForTests = BaselineIntegrityLabeler,
             ShardPermitRootForTests = Path.Combine(Root, "permits"),
             PartitionVerdictWithinAttemptRerunEnabled = false,
             MainBaselineDiscoveryCacheEnabled = false
@@ -112,6 +110,9 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
             string[] names = method < 0
                 ? collidingPassedRows || singleRow ? [First] : mixed ? [First, Long, Unknown] : [First, Long]
                 : [args[method + 1].Trim('*')];
+            if (baseline && baselineMissingToolFor is not null && names.SequenceEqual([baselineMissingToolFor]))
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(9009,
+                    "'dotnet' is not recognized as an internal or external command") { LaneToolResolution = new() });
             if (firstCase is not null)
                 names = names.Select(name => name == First ? name + firstCase : name).ToArray();
             Directory.CreateDirectory(args[results + 1]);
@@ -129,8 +130,7 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
                 passed ? $"Passed! - Failed: 0, Passed: {names.Length}, Total: {names.Length}." :
                     $"Failed! - Failed: {names.Length}, Passed: 0, Total: {names.Length}.")
             {
-                LaneToolResolution = laneEnvironment is null ? new() :
-                    AcceptanceBareCommandResolver.ResolveLaneTools(laneEnvironment, directory)
+                LaneToolResolution = new()
             });
         });
     }
@@ -138,14 +138,14 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
     internal async Task Produce(bool baselineThrows = false, bool buildFails = false, bool baselineFails = false,
         bool collidingPassedRows = false, string? attemptId = null, bool mixed = false,
         string? candidateWorktree = null, Goal? goal = null, bool singleRow = false, string? firstCase = null,
-        Exception? baselineException = null, IReadOnlyDictionary<string, string?>? laneEnvironment = null)
+        Exception? baselineException = null, string? baselineMissingToolFor = null)
     {
         var checkout = candidateWorktree ?? Repo;
         var checkedGoal = goal ?? Goal;
         var failedBuilds = 0;
         var verifier = CreateVerifier(checkout, baselineThrows, baselineFails, collidingPassedRows, mixed,
             singleRow, firstCase, buildFails ? () => failedBuilds++ : null, baselineException: baselineException,
-            laneEnvironment: laneEnvironment);
+            baselineMissingToolFor: baselineMissingToolFor);
         var baselineDidNotExecute = baselineThrows || baselineException is not null;
         await using var owner = AcceptanceExecutionOwners.CreateAttempt(checkout, checkedGoal.Id,
             options: new(RunId: attemptId ?? "solo-attempt", ResultsPrefix: attemptId is null

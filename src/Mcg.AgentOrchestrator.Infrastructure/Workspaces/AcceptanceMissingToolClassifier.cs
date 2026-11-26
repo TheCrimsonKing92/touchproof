@@ -21,8 +21,6 @@ internal static class AcceptanceMissingToolClassifier
 
     internal static AcceptanceCheckResult Attach(AcceptanceCheckResult check)
     {
-        if (!check.Passed && check.LaneToolResolution?.MissingTool is { } missingTool)
-            return AttachLaneFailure(check, missingTool);
         if (check.Passed || !string.IsNullOrWhiteSpace(check.FailureClassification) ||
             check.FailureCauseEvidence is not null ||
             check.TestResultPaths is { Count: > 0 } || check.FailingTestIdentities is { Count: > 0 })
@@ -48,23 +46,10 @@ internal static class AcceptanceMissingToolClassifier
             $"; signature={matched.Signature}; source={matched.Source}; tool={matched.Tool ?? "unknown"}";
         return check with
         {
+            LaneToolResolution = check.LaneToolResolution is null ? null : new(matched.Tool ?? "unknown"),
             FailureClassification = classification,
             FailureCauseEvidence = new AcceptanceFailureCauseEvidence(
                 AcceptanceFailureCause.EnvironmentalApparatus, evidence, check.Name, classification)
-        };
-    }
-
-    internal static AcceptanceCheckResult AttachLaneFailure(AcceptanceCheckResult check, string tool)
-    {
-        const string classification = AcceptanceFailureClassifications.MissingTool;
-        var detail = $"Acceptance lane environment cannot resolve {tool}.";
-        return check with
-        {
-            LaneToolResolution = new(tool),
-            FailureClassification = classification,
-            FailureCauseEvidence = new(AcceptanceFailureCause.EnvironmentalApparatus, detail, check.Name, classification),
-            FailingTestAttributions = null,
-            OutputTail = detail + Environment.NewLine + check.OutputTail
         };
     }
 

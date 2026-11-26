@@ -79,7 +79,8 @@ internal sealed class SoloBaselineRepairStore
             var rank = finding.Inherited ? 3 : finding.Reason is null ? 2 : finding.Request is not null ? 1 : 0;
             string? disputedGroup = null;
             var (storageKey, stored) = ReadSelectionFinding(db, transaction, goal, finding);
-            var replacesUnverified = finding.LaneEnvironmentVerified && stored is { LaneEnvironmentVerified: false };
+            var replacesUnverified = finding is { LaneEnvironmentVerified: true, Reason: null } &&
+                stored is { LaneEnvironmentVerified: false };
             if (replacesUnverified && stored is { Inherited: true }) disputedGroup = stored.GroupKey;
             var prior = rank is 2 or 3 && !replacesUnverified ? stored : null;
             var replaceUnavailableProof = prior is { Reason: null } && prior.Proof != finding.Proof &&

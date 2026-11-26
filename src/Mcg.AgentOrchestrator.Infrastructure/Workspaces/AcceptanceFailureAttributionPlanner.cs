@@ -290,19 +290,16 @@ internal static class AcceptanceFailureAttributionPlanner
         FocusedEvidenceArmRunResult baseline,
         int identityLimit)
     {
-        var missingTool = candidate.LaneToolResolution?.MissingTool ??
-            baseline.Checks.FirstOrDefault(check => check.LaneToolResolution?.MissingTool is not null &&
-                checkNamesBySelector.Values.Contains(check.Name, StringComparer.Ordinal))?.LaneToolResolution?.MissingTool;
-        if (missingTool is not null)
-            return candidate.FailureClassification == AcceptanceFailureClassifications.MissingTool
-                ? candidate : AcceptanceMissingToolClassifier.AttachLaneFailure(candidate, missingTool);
+        if (candidate.FailureClassification == AcceptanceFailureClassifications.MissingTool ||
+            candidate.LaneToolResolution?.MissingTool is not null)
+            return Unattributed(candidate, identities.All, "The candidate check lacks usable tool execution evidence.");
 
         var attributions = IncludeOmittedAsUnattributed(
             ClassifyBaselineFailures(identities.Selected, selectors, checkNamesBySelector, baseline),
             identities.Omitted, identityLimit);
         if (candidate.LaneToolResolution is not { MissingTool: null })
         {
-            attributions = attributions.Select(attribution => attribution.Origin == AcceptanceTestFailureOrigin.Inherited
+            attributions = attributions.Select(attribution => attribution.Origin != AcceptanceTestFailureOrigin.Unattributed
                 ? Attribution(attribution.TestIdentity, AcceptanceTestFailureOrigin.Unattributed,
                     "The candidate lane did not attest tool resolution.")
                 : attribution).ToArray();
@@ -329,18 +326,18 @@ internal static class AcceptanceFailureAttributionPlanner
                     $"focused baseline result was missing at merge-base {baseline.Sha}");
             }
 
-            if (check.FailureClassification == AcceptanceFailureClassifications.FocusedSelectionAbsentAtBaseline)
-            {
-                return Attribution(identity, AcceptanceTestFailureOrigin.Introduced,
-                    $"focused identity was absent at merge-base {baseline.Sha}");
-            }
-
             if (check.FailureClassification is AcceptanceFailureClassifications.FocusedSelectionApparatusFailure or
                 AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable or AcceptanceFailureClassifications.MissingTool ||
                 check.LaneToolResolution?.MissingTool is not null)
             {
                 return Attribution(identity, AcceptanceTestFailureOrigin.Unattributed,
                     $"focused baseline apparatus was unavailable at merge-base {baseline.Sha}");
+            }
+
+            if (check.FailureClassification == AcceptanceFailureClassifications.FocusedSelectionAbsentAtBaseline)
+            {
+                return Attribution(identity, AcceptanceTestFailureOrigin.Introduced,
+                    $"focused identity was absent at merge-base {baseline.Sha}");
             }
 
             var baselineFailures = (check.FailingTestIdentities ?? [])

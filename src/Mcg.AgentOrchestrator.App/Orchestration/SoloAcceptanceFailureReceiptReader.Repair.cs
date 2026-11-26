@@ -11,6 +11,8 @@ internal sealed record SoloRepairPartition(
 
 internal static partial class SoloAcceptanceFailureReceiptReader
 {
+    internal const string LaneEvidenceUnavailable = "The verifier did not attest tool execution for this selection.";
+
     internal static SoloRepairPartition? ReadRepairPartition(Goal goal, SoloAcceptanceConsumptionContext? current,
         AcceptanceVerificationSummary? completion = null)
     {
@@ -46,7 +48,6 @@ internal static partial class SoloAcceptanceFailureReceiptReader
             foreach (var item in proof.Checks)
             {
                 var check = item.Check;
-                if (check.LaneToolResolution?.MissingTool is not null) continue;
                 if (SoloCoveredCheckInheritance.CoveredChecks(check, checks) is not null) continue;
                 var canPartition = !introducedOnly || checkAttributions[check.Name].ToArray() is
                     [{ Origin: AcceptanceFailureOrigin.Introduced, Cause: AcceptanceFailureCause.NotClassified }];
@@ -57,21 +58,22 @@ internal static partial class SoloAcceptanceFailureReceiptReader
                 var identities = (check.FailingTestIdentities ?? []).DefaultIfEmpty("").Distinct(StringComparer.Ordinal);
                 foreach (var identity in identities)
                 {
-                    if (proof.Bindings.Any(binding => binding.CheckName == check.Name && binding.TestIdentity == identity &&
-                        proof.BaselineChecks.Any(baseline => baseline.Check.Name == binding.BaselineCheckName &&
-                            baseline.Check.LaneToolResolution?.MissingTool is not null)))
-                        continue;
                     var finding = BindRepairSelection(NewUnresolvedFinding(receipt.CandidateSha, receipt.MainSha,
                         receipt.BaselineSha, receipt.AttemptId, receipt.Evidence, check.Name, identity, check.TestProjectPath,
-                        SoloHoldReasons.BaselineInheritedOrUncovered), check);
+                        SoloHoldReasons.BaselineInheritedOrUncovered), check) with { CandidateArtifacts = item.Artifacts };
                     try
                     {
-                        if (strict?.Failure is not null)
+                        if (!finding.LaneEnvironmentVerified)
+                            findings.Add(finding with { Reason = LaneEvidenceUnavailable });
+                        else if (strict?.Failure is not null)
                         {
                             if (strict.IntroducedRowFeedback?.TryGetValue((check.Name, identity), out var feedback) != true) continue;
                             var binding = proof.Bindings.Single(b => b.CheckName == check.Name && b.TestIdentity == identity);
                             var baseline = proof.BaselineChecks.Single(b => b.Check.Name == binding.BaselineCheckName);
-                            findings.Add(finding with { Reason = null, Feedback = feedback,
+                            var baselineAttested = baseline.Check.LaneToolResolution is { MissingTool: null } ||
+                                baseline.Check is { LaneToolResolution: null, BaselineSourceAbsence: not null };
+                            findings.Add(finding with { Reason = baselineAttested ? null : LaneEvidenceUnavailable,
+                                Feedback = baselineAttested ? feedback : null,
                                 ProofBaselineCheck = binding.BaselineCheckName == finding.BaselineCheck ? null : binding.BaselineCheckName,
                                 CandidateArtifacts = item.Artifacts, BaselineArtifacts = baseline.Artifacts });
                         }
@@ -94,12 +96,13 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         }
     }
 
-    internal static IReadOnlyList<SoloRepairFinding> ReadReceiptlessCompletion(AcceptanceVerificationSummary completion)
+    internal static IReadOnlyList<SoloRepairFinding> ReadUnresolvedCompletion(AcceptanceVerificationSummary completion)
     {
         var observed = completion.RequiredUnmetCriteria.ToLookup(check => check.Name, StringComparer.Ordinal);
         var failedChecks = completion.FailedChecks ?? observed.Select(check => check.Key).ToArray();
         return UnresolvedFindings(failedChecks, completion.BranchHeadSha, completion.MainHeadSha, completion.AttemptId,
-            observed, proof: null, SoloHoldReasons.CaptureUnavailable).Where(finding => finding.Identity.Length > 0).ToArray();
+            observed, completion.SoloFailureReceipt?.Evidence, SoloHoldReasons.CaptureUnavailable)
+            .Where(finding => finding.Identity.Length > 0).ToArray();
     }
 
     private static SoloRepairPartition UnresolvedChecks(AcceptanceFailureSummary summary, SoloAcceptanceFailureReceipt? receipt,
@@ -119,12 +122,16 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         foreach (var name in failedChecks)
         {
             var checks = observed?[name].ToArray();
-            var check = checks is [var only] && Usable(only) && !only.Passed && !only.Advisory ? only : null;
+            var check = checks is [{ Passed: false, Advisory: false } only] ? only : null;
             foreach (var identity in (check?.FailingTestIdentities ?? []).DefaultIfEmpty("").Distinct(StringComparer.Ordinal))
             {
                 var finding = NewUnresolvedFinding(candidate ?? "", main ?? "", "",
                     attempt ?? "", proof, name, identity, check?.TestProjectPath, reason);
-                yield return check is null ? finding : BindRepairSelection(finding, check);
+                yield return check is null ? finding : BindRepairSelection(finding, check) with
+                {
+                    Reason = check.FailureClassification == AcceptanceFailureClassifications.MissingTool
+                        ? LaneEvidenceUnavailable : reason
+                };
             }
         }
     }
@@ -200,9 +207,10 @@ internal static partial class SoloAcceptanceFailureReceiptReader
 
         var check = proof!.Checks.Single(item => item.Check.Name == finding.Check);
         var baseline = proof.BaselineChecks.Single(item => item.Check.Name == (finding.ProofBaselineCheck ?? finding.BaselineCheck));
-        if (finding.Inherited && (check.Check.LaneToolResolution is not { MissingTool: null } ||
-            baseline.Check.LaneToolResolution is not { MissingTool: null }))
-            throw new InvalidDataException("The retained repair proof does not attest a healthy lane environment.");
+        if (check.Check.LaneToolResolution is not { MissingTool: null } ||
+            (baseline.Check.LaneToolResolution is not { MissingTool: null } &&
+             (finding.Inherited || baseline.Check is not { LaneToolResolution: null, BaselineSourceAbsence: not null })))
+            throw new InvalidDataException(LaneEvidenceUnavailable);
         if (finding.Inherited && !MatchesRepairProject(finding.Project, baseline.Check.TestProjectPath))
             throw new InvalidDataException(SoloHoldReasons.BaselineResultMismatch);
         if (!check.Artifacts.SequenceEqual(finding.CandidateArtifacts) ||
@@ -233,8 +241,10 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         try { candidate = ReadExactRow(candidateRows.Value[identity], identity); }
         catch (Exception ex) when (IsRepairEvidenceError(ex)) { return finding with { Reason = ex.Message }; }
         if (candidate?.Value.Outcome != "Failed") return finding with { Reason = SoloHoldReasons.FailingTestsAbsent };
-        finding = finding with { CandidateArtifacts = item.Artifacts };
-        if (!proof.Baseline.Accepted || proof.Baseline.Disposition == FindingEvidenceArmDisposition.ApparatusFailure)
+        // A check-local tool failure explains this arm disposition without invalidating its siblings.
+        if (!proof.Baseline.Accepted ||
+            (proof.Baseline.Disposition == FindingEvidenceArmDisposition.ApparatusFailure &&
+             !HasOnlyBaselineToolFaults(proof.Baseline.Checks)))
             return finding with { Reason = SoloHoldReasons.BaselineUnavailable };
         var bindings = proof.Bindings.Where(b => b.CheckName == check.Name && b.TestIdentity == identity).ToArray();
         var attributions = check.FailingTestAttributions?.Where(a => a.TestIdentity == identity).ToArray();
@@ -251,7 +261,8 @@ internal static partial class SoloAcceptanceFailureReceiptReader
 
         finding = finding with { ProofBaselineCheck = baselineName == finding.BaselineCheck ? null : baselineName,
             BaselineArtifacts = baseline.Artifacts };
-        if (baseline.Check.Advisory || baseline.Check.TestResultIsExplicitCrossAttemptReuse)
+        if (baseline.Check.Advisory || baseline.Check.TestResultIsExplicitCrossAttemptReuse ||
+            baseline.Check.LaneToolResolution?.MissingTool is not null)
             return finding with { Reason = SoloHoldReasons.BaselineApparatusOrUnknown };
         var origin = attributions[0].Origin;
         if (attributions[0].CandidateRerun is { } rerun &&
@@ -269,6 +280,8 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         else
         {
             if (!Usable(baseline.Check)) return finding with { Reason = SoloHoldReasons.BaselineApparatusOrUnknown };
+            if (baseline.Check.LaneToolResolution is not { MissingTool: null })
+                return finding with { Reason = LaneEvidenceUnavailable };
             IReadOnlyList<TrxRow> rows;
             try { rows = baselineRows[baselineName].Value; }
             catch (Exception ex) when (IsRepairEvidenceError(ex)) { return finding with { Reason = ex.Message }; }
@@ -276,9 +289,9 @@ internal static partial class SoloAcceptanceFailureReceiptReader
             if (origin == AcceptanceTestFailureOrigin.Inherited &&
                 !MatchesRepairProject(project, baseline.Check.TestProjectPath))
                 return finding with { Reason = SoloHoldReasons.BaselineResultMismatch };
-            if (origin == AcceptanceTestFailureOrigin.Inherited && finding.LaneEnvironmentVerified &&
-                baseline.Check.LaneToolResolution is { MissingTool: null } && receipt.BaselineSha == receipt.MainSha &&
-                proof.Baseline.Disposition == FindingEvidenceArmDisposition.Red && !proof.Baseline.Passed &&
+            if (origin == AcceptanceTestFailureOrigin.Inherited && receipt.BaselineSha == receipt.MainSha &&
+                proof.Baseline.Disposition is FindingEvidenceArmDisposition.Red or FindingEvidenceArmDisposition.ApparatusFailure &&
+                !proof.Baseline.Passed &&
                 !baseline.Check.Passed && exact?.Value.Outcome == "Failed")
                 return finding with { Inherited = true, Reason = null };
             if (origin != AcceptanceTestFailureOrigin.Introduced) return finding;
@@ -296,6 +309,11 @@ internal static partial class SoloAcceptanceFailureReceiptReader
 
         return finding with { Reason = null, Feedback = RepairFeedback(candidate) };
     }
+
+    private static bool HasOnlyBaselineToolFaults(IReadOnlyList<AcceptanceCheckResult> checks) =>
+        checks.Any(check => check.FailureClassification == AcceptanceFailureClassifications.MissingTool) &&
+        checks.Where(FocusedEvidenceExecution.IsFocusedEvidenceApparatusFailure)
+            .All(check => check.FailureClassification == AcceptanceFailureClassifications.MissingTool);
 
     private static string RepairFeedback(TrxRow row)
     {

@@ -68,12 +68,16 @@ internal sealed partial class ConductorDriver
         // Lazy keeps the changed-path git call at one per advance and off paths that never need it.
         var landingFileScopes = new Lazy<IReadOnlyList<string>>(() => _getLandingFileScopes(goal));
         var apparatusRedReading = _apparatusRedGate?.RecordGateCompletion(goal, acceptance, landingFileScopes);
+        if (!acceptance.Passed && acceptance is { RequiresSoloFailureReceipt: true, SoloFailureReceipt: null })
+            _soloBaselineRepair?.RetainUnresolvedCompletion(goal, acceptance);
         if (TryDisposeWithinAttemptRerunApparatus(goal, goalPrefix, policy, acceptance) is { } rerunApparatus)
         {
             return rerunApparatus;
         }
         if (IsEnvironmentalApparatusAcceptanceRun(acceptance))
         {
+            if (!acceptance.Passed && acceptance.SoloFailureReceipt is not null)
+                _soloBaselineRepair?.RetainUnresolvedCompletion(goal, acceptance);
             var failedChecks = acceptance.FailedChecks is { Count: > 0 }
                 ? acceptance.FailedChecks
                 : acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray();
@@ -92,10 +96,6 @@ internal sealed partial class ConductorDriver
 
         if (!acceptance.Passed && (acceptance.SoloFailureReceipt is not null || acceptance.RequiresSoloFailureReceipt))
         {
-            // Excluded failures and apparatus re-gates can return without recording a solo receipt.
-            if (acceptance.SoloFailureReceipt is null)
-                _soloBaselineRepair?.RetainReceiptlessCompletion(goal, acceptance);
-
             // Earlier inherited failures can make a post-repair candidate failure look
             // recurrent. Let the repair coordinator validate the new receipt first.
             var preferSoloRepair = _soloBaselineRepair is not null && acceptance.SoloFailureReceipt is not null &&

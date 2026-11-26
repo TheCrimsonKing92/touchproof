@@ -15,68 +15,39 @@ public sealed class SoloRepairWorkflowTests
     private static readonly ConductorAutonomyPolicy Policy = ConductorAutonomyPolicy.Permissive with { MaxCriterionRetries = 0 };
     private const string LandingBlocker = "fixture stops at landing mutation";
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task MatchingRedArms_RequireHealthyLaneToolsBeforeRoutingRepair(bool healthy)
+    [Fact]
+    public async Task CliAdmission_BlocksLegacyRepairObligationAfterReload()
     {
-        if (!OperatingSystem.IsWindows()) return;
-        var labeler = new PreparedGateIntegrity();
-        using var labels = AcceptanceGateIntegrityNormalizer.PushIntegrityLabelerForTests(labeler);
-        using var fixture = new SoloAttributedFailureRouteFixture { BaselineIntegrityLabeler = labeler };
+        using var fixture = new SoloAttributedFailureRouteFixture();
         fixture.Git("checkout", "main");
         var workspace = Workspace(fixture);
         var goal = NewCandidate(fixture, fixture.Kernel);
         var checkout = Worktree(fixture, goal);
-        var bin = Directory.CreateDirectory(Path.Combine(fixture.Root, "System32")).FullName;
-        var powershell = Directory.CreateDirectory(Path.Combine(bin, "WindowsPowerShell", "v1.0")).FullName;
-        foreach (var tool in new[] { "chcp.com", "cmd.exe", "git.exe", "dotnet.exe" })
-            File.WriteAllText(Path.Combine(bin, tool), "");
-        File.WriteAllText(Path.Combine(powershell, "powershell.exe"), "");
-        var environment = new Dictionary<string, string?>
-        {
-            ["PATH"] = healthy ? bin + Path.PathSeparator + powershell : bin,
-            ["PATHEXT"] = ".COM;.EXE"
-        };
-
-        await new PortfolioStore(workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
-        await fixture.Produce(baselineFails: true, attemptId: goal.Id.Value, candidateWorktree: checkout,
-            goal: goal, singleRow: true, laneEnvironment: environment);
-        var failure = fixture.Summary;
-        var check = Assert.Single(failure.RequiredUnmetCriteria);
-        Assert.Equal(First, Assert.Single(check.FailingTestIdentities!));
-        var baseline = Assert.Single(fixture.Proof().BaselineChecks).Check;
-        Assert.False(baseline.Passed);
-        Assert.Equal(First, Assert.Single(baseline.FailingTestIdentities!));
-
-        var verifier = new ControlledVerifier(fixture.Root) { NormalPass = true, NormalCheckName = check.Name };
-        var outcome = Complete(Driver(fixture.Kernel, workspace, verifier), goal, failure);
+        var main = fixture.Git("rev-parse", "main");
+        var candidate = RunGit(checkout, "rev-parse", "HEAD");
+        var original = SoloRepairReplayTests.Finding() with { Candidate = candidate, Main = main, Baseline = main };
         var path = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        new SoloBaselineRepairStore(path).Retain(goal.Id.Value, [original]);
+        SoloRepairReplayTests.ExecuteSql(path,
+            "UPDATE solo_repair_finding SET finding = json_remove(finding, '$.LaneEnvironmentVerified')");
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(fixture.Kernel);
+        var reloaded = await repository.LoadAsync();
+        goal = reloaded.GetGoal(goal.Id);
+        var verifier = new ControlledVerifier(fixture.Root) { NormalPass = true };
+        var context = CreateCliContext(reloaded, workspace, goal, verifier);
         var store = new SoloBaselineRepairStore(path);
-        var context = CreateCliContext(fixture.Kernel, workspace, goal, verifier);
-        var pair = new GateReadyCandidateRevisionPair(failure.BranchHeadSha, failure.MainHeadSha);
-        if (healthy)
-        {
-            Assert.Equal(AcceptanceTestFailureOrigin.Inherited, Assert.Single(check.FailingTestAttributions!).Origin);
-            AssertHold(outcome, SoloHoldReasons.RepairPending);
-            Assert.True(Assert.Single(store.ReadFindings(goal.Id.Value)).Inherited);
-            Assert.Equal(1, SoloRepairReplayTests.Count(path, "solo_repair_dependency"));
-            Assert.True(CliWorkspaceMerge.ReportRepairHoldBeforeVerification(context, goal, pair, checkout, false, out _, out _));
-        }
-        else
-        {
-            Assert.Equal(AcceptanceFailureClassifications.MissingTool, check.FailureClassification);
-            var cause = Assert.IsType<AcceptanceFailureCauseEvidence>(check.FailureCauseEvidence);
-            Assert.Equal(AcceptanceFailureCause.EnvironmentalApparatus, cause.Cause);
-            Assert.Contains("powershell.exe", cause.Evidence);
-            Assert.Null(check.FailingTestAttributions);
-            Assert.Empty(store.ReadFindings(goal.Id.Value));
-            Assert.Equal(0, SoloRepairReplayTests.Count(path, "solo_repair_group"));
-            Assert.Equal(0, SoloRepairReplayTests.Count(path, "solo_repair_dependency"));
-            Assert.False(CliWorkspaceMerge.ReportRepairHoldBeforeVerification(context, goal, pair, checkout, false, out _, out _));
-            Assert.True(CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(context));
-            Assert.Equal(failure.BranchHeadSha, fixture.Git("rev-parse", "main"));
-        }
+        Assert.False(Assert.Single(store.ReadFindings(goal.Id.Value)).LaneEnvironmentVerified);
+
+        var pair = new GateReadyCandidateRevisionPair(candidate, main);
+        var obligation = Assert.Single(SoloBaselineRepairCoordinator.SoloRepairFindings(store, goal, candidate, main));
+        Assert.Equal(original.Request, obligation.Request);
+        Assert.Equal(SoloAcceptanceFailureReceiptReader.LaneEvidenceUnavailable, obligation.Reason);
+        Assert.True(CliWorkspaceMerge.ReportRepairHoldBeforeVerification(context, goal, pair, checkout, false, out _, out _));
+        Assert.False(CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(context));
+        Assert.Empty(verifier.NormalRuns);
+        Assert.Equal(1, SoloRepairReplayTests.Count(path, "solo_repair_dependency"));
+        Assert.Equal(main, fixture.Git("rev-parse", "main"));
     }
 
     [Fact]
@@ -1018,15 +989,6 @@ public sealed class SoloRepairWorkflowTests
             StableSlotSelector = (_, _) => AcceptanceStableSlotTestSupport.CreateFakeStableSlotLease(workspace.OrchestratorDirectory)
         };
 
-    private sealed class PreparedGateIntegrity : IWorkerIntegrityLabeler
-    {
-        public bool SetIntegrity(string path, string level, bool recursive) => true;
-
-        public IntegrityLabelState Query(string path) =>
-            new(Exists: File.Exists(path) || Directory.Exists(path), Low: false,
-                Inheritable: Directory.Exists(path), Medium: true);
-    }
-
     private sealed class LandingCanaryRunner(PostLandingCanaryOutcome outcome) : IPostLandingCanaryRunner
     {
         internal List<PostLandingCanaryRequest> Runs { get; } = [];
@@ -1381,8 +1343,10 @@ public sealed class SoloRepairWorkflowTests
         Assert.Equal(5, SoloRepairReplayTests.Count(storePath, "solo_repair_dependency"));
     }
 
-    [Fact]
-    public async Task MixedCompletion_LinksRepairRoutesOnlyIntroducedFeedbackAndRetainsUnresolvedRow()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MixedCompletion_LinksRepairRoutesOnlyIntroducedFeedbackAndRetainsUnresolvedRow(bool toolFault)
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
         fixture.Git("checkout", "main");
@@ -1392,11 +1356,24 @@ public sealed class SoloRepairWorkflowTests
         var maintenance = await portfolio.AddEpicAsync("baseline-maintenance");
         var goal = NewCandidate(fixture, fixture.Kernel);
         await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(fixture.Kernel);
-        await fixture.Produce(mixed: true, attemptId: goal.Id.Value, candidateWorktree: Worktree(fixture, goal), goal: goal);
-        fixture.ReplaceProof(proof => proof with
+        await fixture.Produce(mixed: true, attemptId: goal.Id.Value, candidateWorktree: Worktree(fixture, goal), goal: goal,
+            baselineMissingToolFor: toolFault ? Unknown : null);
+        if (toolFault)
         {
-            Bindings = proof.Bindings.Where(binding => binding.TestIdentity != Unknown).ToArray()
-        });
+            var proof = fixture.Proof();
+            var binding = Assert.Single(proof.Bindings.Where(binding => binding.TestIdentity == Unknown));
+            var failed = Assert.Single(proof.BaselineChecks.Where(check => check.Check.Name == binding.BaselineCheckName));
+            Assert.Equal(AcceptanceFailureClassifications.MissingTool, failed.Check.FailureClassification);
+            Assert.Equal("dotnet", failed.Check.LaneToolResolution?.MissingTool);
+            Assert.Equal(FindingEvidenceArmDisposition.ApparatusFailure, proof.Baseline.Disposition);
+        }
+        else
+        {
+            fixture.ReplaceProof(proof => proof with
+            {
+                Bindings = proof.Bindings.Where(binding => binding.TestIdentity != Unknown).ToArray()
+            });
+        }
         var request = $"{Project}: FullyQualifiedName~{Unknown}";
         var verifier = new ControlledVerifier(fixture.Root) { UnresolvedAttributionRequests = [request] };
         var driver = Driver(fixture.Kernel, workspace, verifier);
@@ -1508,7 +1485,11 @@ public sealed class SoloRepairWorkflowTests
         {
             Assert.Equal(AcceptanceTestFailureOrigin.Inherited, attribution.Origin);
             Assert.NotNull(completion.SoloFailureReceipt);
-            completion = completion with { SoloFailureReceipt = null };
+            completion = completion with
+            {
+                SoloFailureReceipt = null,
+                UnmetCriteria = completion.RequiredUnmetCriteria.Select(check => check with { LaneToolResolution = null }).ToArray()
+            };
         }
         else
         {
@@ -1543,6 +1524,7 @@ public sealed class SoloRepairWorkflowTests
         var reloaded = restarted.GetGoal(goal.Id);
         var path = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
         var unresolved = Assert.Single(new SoloBaselineRepairStore(path).ReadFindings(reloaded.Id.Value));
+        if (lostInheritedEnvelope) Assert.False(unresolved.LaneEnvironmentVerified);
         Assert.Equal((candidate, main, completion.AttemptId), (unresolved.Candidate, unresolved.Main, unresolved.Attempt));
         Assert.Equal((ManifestCheckName, First + dataCase, Project, request),
             (unresolved.Check, unresolved.Identity, unresolved.Project, unresolved.Request));

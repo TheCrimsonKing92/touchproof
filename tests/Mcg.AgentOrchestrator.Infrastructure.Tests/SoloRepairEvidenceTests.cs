@@ -32,6 +32,40 @@ public sealed class SoloRepairEvidenceTests
     }
 
     [Theory]
+    [InlineData(null)]
+    [InlineData("dotnet")]
+    public async Task CandidateToolEvidenceUnavailable_RetainsObservedTheoryCase(string? missingTool)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce(baselineFails: true, singleRow: true, firstCase: FirstCase);
+        fixture.ReplaceProof(proof =>
+        {
+            var item = Assert.Single(proof.Checks);
+            return proof with
+            {
+                Checks = [item with { Check = item.Check with
+                {
+                    LaneToolResolution = missingTool is null ? null : new(missingTool),
+                    FailureClassification = missingTool is null ? item.Check.FailureClassification :
+                        AcceptanceFailureClassifications.MissingTool
+                } }]
+            };
+        });
+        fixture.Record(fixture.Summary);
+
+        var partition = Read(fixture);
+
+        var finding = Assert.Single(partition.Findings);
+        Assert.Equal(First + FirstCase, finding.Identity);
+        Assert.Equal($"{Project}: FullyQualifiedName~{First}", finding.Request);
+        Assert.Equal(fixture.Summary.SoloFailureReceipt!.Evidence, finding.Proof);
+        Assert.NotEmpty(finding.CandidateArtifacts);
+        Assert.Equal(SoloAcceptanceFailureReceiptReader.LaneEvidenceUnavailable, finding.Reason);
+        Assert.False(finding.Inherited);
+        Assert.Null(partition.Introduced);
+    }
+
+    [Theory]
     [InlineData("stale-tree")]
     [InlineData("stale-main")]
     [InlineData("foreign-attempt")]
@@ -41,12 +75,14 @@ public sealed class SoloRepairEvidenceTests
     [InlineData("unexecuted")]
     [InlineData("reused-attempt")]
     [InlineData("apparatus")]
+    [InlineData("mixed-apparatus")]
     [InlineData("sibling-case")]
     public async Task UntrustedRow_RemainsUnresolved(string defect)
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
         var firstIdentity = defect == "sibling-case" ? First + FirstCase : First;
-        await fixture.Produce(baselineFails: true, firstCase: defect == "sibling-case" ? FirstCase : null);
+        await fixture.Produce(baselineFails: true, firstCase: defect == "sibling-case" ? FirstCase : null,
+            mixed: defect == "mixed-apparatus", baselineMissingToolFor: defect == "mixed-apparatus" ? Unknown : null);
         var summary = fixture.Summary;
         var receipt = summary.SoloFailureReceipt!;
         var context = fixture.Context;
@@ -97,6 +133,23 @@ public sealed class SoloRepairEvidenceTests
                 fixture.ReplaceProof(proof => proof with
                 {
                     Baseline = proof.Baseline with { Disposition = FindingEvidenceArmDisposition.ApparatusFailure }
+                });
+                summary = fixture.Summary;
+                break;
+            case "mixed-apparatus":
+                fixture.ReplaceProof(proof =>
+                {
+                    var name = Assert.Single(proof.Bindings.Where(binding => binding.TestIdentity == Long)).BaselineCheckName;
+                    var check = Assert.Single(proof.Baseline.Checks.Where(candidate => candidate.Name == name)) with
+                    {
+                        Passed = false,
+                        FailureClassification = AcceptanceFailureClassifications.BuildPhaseTimeout
+                    };
+                    Assert.Contains(proof.Baseline.Checks,
+                        baseline => baseline.FailureClassification == AcceptanceFailureClassifications.MissingTool);
+                    var checks = proof.BaselineChecks.Select(item => item.Check.Name == name ? item with { Check = check } : item).ToArray();
+                    return proof with { Baseline = proof.Baseline with { Checks = checks.Select(item => item.Check).ToArray() },
+                        BaselineChecks = checks };
                 });
                 summary = fixture.Summary;
                 break;

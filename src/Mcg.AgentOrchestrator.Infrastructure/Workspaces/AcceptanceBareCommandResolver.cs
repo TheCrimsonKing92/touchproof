@@ -14,19 +14,6 @@ public sealed partial record AcceptanceCheckResult
 // Resolves only bare Windows command names, using the environment and directory of the child.
 internal static class AcceptanceBareCommandResolver
 {
-    internal static AcceptanceLaneToolResolution ResolveLaneTools(
-        IEnumerable<KeyValuePair<string, string?>> environment, string workingDirectory)
-    {
-        if (!OperatingSystem.IsWindows()) return new();
-        foreach (var (command, extension) in new[] {
-            ("powershell", ".exe"), ("chcp", ".com"), ("cmd", ".exe"), ("git", ""), ("dotnet", "") })
-        {
-            if (Resolve(command, environment, workingDirectory, extension) is null)
-                return new(command + extension);
-        }
-        return new();
-    }
-
     internal static string? Resolve(
         string command,
         IEnumerable<KeyValuePair<string, string?>> environment,
