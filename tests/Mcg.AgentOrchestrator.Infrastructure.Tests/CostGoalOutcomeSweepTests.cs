@@ -34,6 +34,124 @@ public sealed class CostGoalOutcomeSweepTests : IDisposable
     }
 
     [Fact]
+    public void Run_SecondRunWithUnchangedInputsLaunchesNoAncestryChecks()
+    {
+        var goal = RecordFiling();
+        var initial = store.Read(goal)!;
+        WriteGate(AdoptedAt.AddMinutes(1), Adopted, 60);
+        WriteGate(AdoptedAt.AddMinutes(2), Unrelated, 999);
+        var calls = new List<(string Ancestor, string Commit)>();
+        var countingSweep = CreateSweep((ancestor, commit) =>
+        {
+            calls.Add((ancestor, commit));
+            return ancestor == Landed && commit == Adopted;
+        });
+
+        countingSweep.Run(() => AdoptedAt.AddHours(3));
+
+        Assert.Equal([(Landed, Adopted), (Landed, Unrelated)], calls);
+        var first = Assert.Single(store.Read(goal)!.PendingResults);
+        Assert.Equal(1, first.AfterSampleSize);
+
+        store.Write(goal, initial);
+        calls.Clear();
+        countingSweep.Run(() => AdoptedAt.AddHours(3));
+
+        Assert.Empty(calls);
+        Assert.Equal(first, Assert.Single(store.Read(goal)!.PendingResults));
+        Assert.Empty(failures);
+    }
+
+    [Fact]
+    public void Run_PairFirstSeenOnLaterTickChecksOnceThenReuses()
+    {
+        const string later = "later-containing-commit";
+        var goal = RecordFiling();
+        var calls = new List<(string Ancestor, string Commit)>();
+        var countingSweep = CreateSweep((ancestor, commit) =>
+        {
+            calls.Add((ancestor, commit));
+            return ancestor == Landed && (commit == Adopted || commit == later);
+        });
+
+        WriteGate(AdoptedAt.AddMinutes(1), Adopted, 60);
+        countingSweep.Run(() => AdoptedAt.AddHours(1));
+        Assert.Equal((Landed, Adopted), Assert.Single(calls));
+
+        calls.Clear();
+        WriteGate(AdoptedAt.AddHours(2), later, 70);
+        WriteGate(AdoptedAt.AddHours(2).AddMinutes(1), later, 80);
+        countingSweep.Run(() => AdoptedAt.AddHours(2));
+        Assert.Equal((Landed, later), Assert.Single(calls));
+        Assert.Equal(2, Assert.Single(store.Read(goal)!.PendingResults).AfterSampleSize);
+
+        calls.Clear();
+        countingSweep.Run(() => AdoptedAt.AddHours(2));
+        Assert.Empty(calls);
+        Assert.Equal(2, Assert.Single(store.Read(goal)!.PendingResults).AfterSampleSize);
+        Assert.Empty(failures);
+    }
+
+    [Fact]
+    public void Run_AncestryFailureIsNotMemoizedAndRetries()
+    {
+        var goal = RecordFiling();
+        WriteGate(AdoptedAt.AddMinutes(1), Adopted, 60);
+        var calls = new List<(string Ancestor, string Commit)>();
+        var countingSweep = CreateSweep((ancestor, commit) =>
+        {
+            calls.Add((ancestor, commit));
+            if (calls.Count == 1) throw new InvalidOperationException("Git ancestry failed.");
+            return ancestor == Landed && commit == Adopted;
+        });
+
+        countingSweep.Run(() => AdoptedAt.AddHours(3));
+        Assert.Equal((Landed, Adopted), Assert.Single(calls));
+        Assert.Null(store.Read(goal)!.Adoption);
+        Assert.Equal($"COST_GOAL_OUTCOME_SWEEP_FAILED goal={goal} reason=InvalidOperationException",
+            Assert.Single(failures));
+
+        countingSweep.Run(() => AdoptedAt.AddHours(3));
+        Assert.Equal([(Landed, Adopted), (Landed, Adopted)], calls);
+        Assert.Equal(new(Landed, Adopted, AdoptedAt), store.Read(goal)!.Adoption);
+        Assert.Equal(1, Assert.Single(store.Read(goal)!.PendingResults).AfterSampleSize);
+
+        countingSweep.Run(() => AdoptedAt.AddHours(3));
+        Assert.Equal(2, calls.Count);
+        Assert.Single(failures);
+    }
+
+    [Fact]
+    public void ReadGitAncestryBatch_MatchesMergeBaseAndLeavesTagAndInvalidPairsForFallback()
+    {
+        using var repo = new InProcessGitFixture();
+        var ancestor = repo.Git("rev-parse", "HEAD");
+        var older = repo.Git("rev-parse", "HEAD^");
+        repo.Git("-c", "tag.gpgSign=false", "tag", "-a", "at-ancestor", "-m", "tag at ancestor");
+        var tag = repo.Git("rev-parse", "at-ancestor");
+        repo.Git("-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "descendant");
+        var descendant = repo.Git("rev-parse", "HEAD").ToUpperInvariant();
+        var side = repo.Git("commit-tree", $"{older}^{{tree}}", "-p", older, "-m", "side branch");
+
+        var answers = CostGoalOutcomeSweep.ReadGitAncestryBatch(repo.Worktree, ancestor, [descendant, side, older, tag]);
+
+        Assert.Equal(3, answers.Count);
+        Assert.True(answers[descendant]);
+        Assert.False(answers[side]);
+        Assert.False(answers[older]);
+        Assert.DoesNotContain(tag, answers.Keys);
+        foreach (var (commit, contains) in answers)
+            Assert.Equal(contains ? 0 : 1, GitCli.RunDirect(repo.Worktree,
+                "merge-base", "--is-ancestor", "--", ancestor, commit).ExitCode);
+
+        Assert.Equal(0, GitCli.RunDirect(repo.Worktree, "merge-base", "--is-ancestor", "--", ancestor, tag).ExitCode);
+        Assert.DoesNotContain(ancestor,
+            CostGoalOutcomeSweep.ReadGitAncestryBatch(repo.Worktree, tag, [ancestor, side, older]).Keys);
+        var missing = new string('0', ancestor.Length);
+        Assert.Empty(CostGoalOutcomeSweep.ReadGitAncestryBatch(repo.Worktree, ancestor, [descendant, side, missing]));
+    }
+
+    [Fact]
     public void Run_CountsOnlyContainingGatesStartedAfterFirstContainingAdoption()
     {
         var goal = RecordFiling();
@@ -257,8 +375,9 @@ public sealed class CostGoalOutcomeSweepTests : IDisposable
         }
     }
 
-    private CostGoalOutcomeSweep CreateSweep() => new(root, store, () => (backlog, events), landings.GetValueOrDefault,
-        () => adoptions, (ancestor, commit) => ancestor == Landed && commit == Adopted, failures.Add);
+    private CostGoalOutcomeSweep CreateSweep(Func<string, string, bool>? containsCommit = null) =>
+        new(root, store, () => (backlog, events), landings.GetValueOrDefault,
+            () => adoptions, containsCommit ?? ((ancestor, commit) => ancestor == Landed && commit == Adopted), failures.Add);
 
     private void Run() => sweep.Run(() => AdoptedAt.AddHours(3));
 
