@@ -407,9 +407,10 @@ internal sealed partial class ConductorDriver
         DotnetBuildEnvironmentLease? stableSlotLease = null;
         AcceptanceCohortReceipt? receipt = null;
         var gateExecutionComplete = false;
+        using var toolResolution = new GroupedGateToolResolutionScope(enterToolPreflight);
         try
         {
-            using var toolResolution = enterToolPreflight?.Invoke(integration.Path);
+            toolResolution.Enter(integration.Path);
             stableSlotLease = _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLeaseInRounds(
                 identity.Value, CohortStableSlotAcquisitionRounds.HolderLabel(bindings), CohortStableSlotRoundCount, cancellationToken);
             if (stableSlotLease is null) return null;

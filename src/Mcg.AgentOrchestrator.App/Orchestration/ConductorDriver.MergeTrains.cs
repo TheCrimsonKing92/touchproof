@@ -175,6 +175,7 @@ internal sealed partial class ConductorDriver
                 return Fallback("outcome=replay-miss receipt=none");
             }
             receipt ??= RunMergeTrainSourceSizePreflight(workspace.Path, identity, _mergeTrainAcceptanceStore);
+            using var toolResolution = new GroupedGateToolResolutionScope(enterToolPreflight);
             if (receipt is null)
             {
                 if (runGateInBackground)
@@ -219,7 +220,7 @@ internal sealed partial class ConductorDriver
                 DotnetBuildEnvironmentLease? stableSlotLease = null;
                 try
                 {
-                    using var toolResolution = enterToolPreflight?.Invoke(workspace.Path);
+                    toolResolution.Enter(workspace.Path);
                     stableSlotLease = _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLeaseInRounds(
                         identity.Value, $"merge-train:{trainKey}", CohortStableSlotRoundCount, cancellationToken);
                     if (stableSlotLease is null)

@@ -38,13 +38,24 @@ public sealed record GateReplayReceipt(
 {
     public int DroppedEnvironmentCount => DroppedEnvironmentNames.IsDefault ? 0 : DroppedEnvironmentNames.Length;
 
+    internal sealed record LaunchIdentity(string GoalId, string CandidateSha, string MainSha, string RunId);
+
+    internal static LaunchIdentity? ResolveFocusedLaunchIdentity(IAcceptanceRunExecutionContext? context) => context switch
+    {
+        AcceptanceRunExecutionContextView view => ResolveFocusedLaunchIdentity(view.Owner),
+        AcceptanceFocusedVerificationOwner { FocusedRunBinding.ReplayObservedMainSha: { } main } owner =>
+            new(owner.Identity.GoalId, owner.Identity.CandidateSha, main, owner.Identity.FocusedRunId),
+        _ => null
+    };
+
     internal static Launch? CaptureLaunch(
         AcceptanceProcessRequest request,
         ProcessStartInfo startInfo,
         bool directLaunch,
         string[] checkArguments)
     {
-        if (request.HeartbeatContext?.AttemptIdentity is null || request.SuppressDiagnosticCaptures || checkArguments.Length == 0)
+        if (request.HeartbeatContext is not ({ AttemptIdentity: not null } or { FocusedReplayIdentity: not null }) ||
+            request.SuppressDiagnosticCaptures || checkArguments.Length == 0)
             return null;
 
         // Windows shell dispatch can select another image. On POSIX the shell receives a
@@ -79,7 +90,10 @@ public sealed record GateReplayReceipt(
     {
         internal GateReplayReceipt? Bind(GateHeartbeatContext context, string stdoutPath, string stderrPath)
         {
-            if (context.AttemptIdentity is not { } attempt) return null;
+            var identity = context.AttemptIdentity is { } attempt
+                ? new LaunchIdentity(attempt.GoalId, attempt.VerifyingCommitSha, attempt.MainSha, attempt.AttemptId)
+                : context.FocusedReplayIdentity;
+            if (identity is null) return null;
 
             var artifacts = ImmutableArray.CreateBuilder<GateReplayArtifact>();
             artifacts.Add(new(GateReplayArtifactRole.Stdout, stdoutPath));
@@ -90,7 +104,7 @@ public sealed record GateReplayReceipt(
                 !string.IsNullOrWhiteSpace(timingPath))
                 artifacts.Add(new(GateReplayArtifactRole.Timing, timingPath));
 
-            return new GateReplayReceipt(attempt.GoalId, attempt.VerifyingCommitSha, attempt.MainSha, attempt.AttemptId,
+            return new GateReplayReceipt(identity.GoalId, identity.CandidateSha, identity.MainSha, identity.RunId,
                 context.CurrentTarget, WorkingDirectory, ExecutablePath, ExecutableSha256, Arguments,
                 artifacts.ToImmutable(), Environment.Values, context.RequiresAcceptanceLease, Environment.DroppedNames,
                 ToolResolution?.PathLength, ToolResolution?.SystemDirectoryOnPath,

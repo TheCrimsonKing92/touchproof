@@ -3565,6 +3565,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             RunClass = GateHeartbeatRunClass.Classify(_executionContext),
             RunId = GateHeartbeatRunClass.ResolveRunId(_executionContext),
             AttemptIdentity = (_executionContext as AcceptanceAttemptExecutionOwner)?.Identity,
+            FocusedReplayIdentity = GateReplayReceipt.ResolveFocusedLaunchIdentity(_executionContext),
             RequiresAcceptanceLease = requiresAcceptanceLease,
             DeclaredTestResultPaths = declaredTestResultPaths
         };

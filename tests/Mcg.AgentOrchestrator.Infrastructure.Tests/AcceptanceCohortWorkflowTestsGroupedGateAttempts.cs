@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -402,6 +403,114 @@ public sealed class AcceptanceCohortWorkflowTestsGroupedGateAttempts(CohortCandi
             }
         }
         finally { DeleteDirectory(repo); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void OwnedAttributionLaneReceiptsRetainGateToolResolution(bool train)
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Requires Windows bare command resolution.");
+        var (repo, kernel, goals) = CreateReadyMembers(train ? 3 : 2);
+        var cleanup = CreateIsolatedCleanupContext(repo);
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var environment = GateToolResolutionPreflightTests.CreateToolEnvironment(workspace.OrchestratorDirectory);
+            var failure = FailedVerification(repo, "grouped-attribution-red.trx", "combined");
+            if (train)
+            {
+                failure = failure with
+                {
+                    TestResultPaths = [MergeTrainFocusedRecheckTests.WriteTrx(repo, "train-attribution-red.trx",
+                        [(MergeTrainPrefixBisectionTests.TestName, "Failed")])]
+                };
+            }
+            var passingPartition = new AcceptanceVerificationResult(true, false, 0, null,
+                Checks: [new AcceptanceCheckResult("partition", true, 0, null)],
+                TestResultPaths: [WritePassingTrx(repo, "grouped-partition.trx")]);
+            var verifier = new AttributionReplayVerifier(failure, passingPartition,
+                Path.Combine(workspace.OrchestratorDirectory, "tools", "dotnet.exe"));
+            var driver = CreateDriver(kernel, workspace, verifier, cleanup.Hooks);
+            driver.EnableOwnedGroupedGateAttempts(Coordinator(workspace, FirstGeneration,
+                _ => new ConductorGroupedGateLaunchResult(Environment.ProcessId, null, null), _ => true));
+            var cohort = train ? null : ProjectSelection(driver, goals[0], goals[1]);
+            var trainSelection = train ? ProjectTrainSelection(driver, goals) : null;
+            Run(driver, goals, cohort, trainSelection);
+            var attempt = Assert.Single(Records(workspace));
+            var preflightCount = 0;
+
+            Assert.Equal(0, ConductorGroupedGateAttemptHost.Run(attempt.MetadataPath,
+                child => driver.RunGroupedGateAttemptBody(child, () =>
+                {
+                    preflightCount++;
+                    return new Dictionary<string, string?>(environment, StringComparer.OrdinalIgnoreCase);
+                }), (_, _) => Stream.Null));
+
+            Assert.Equal(1, preflightCount);
+            Assert.Equal(train ? 1 : 2, verifier.AttributionReceipts.Count);
+            Assert.All(verifier.AttributionReceipts, receipt =>
+            {
+                Assert.Equal(attempt.MainRevision, receipt.ObservedMainSha);
+                Assert.Equal(environment["PATH"]!.Length, receipt.PathLength);
+                Assert.True(receipt.SystemDirectoryOnPath);
+                Assert.True(receipt.WindowsPowerShellDirectoryOnPath);
+                Assert.True(receipt.GitDirectoryOnPath);
+                Assert.True(receipt.DotnetDirectoryOnPath);
+            });
+            Assert.Null(GateToolResolutionPreflight.Current);
+        }
+        finally { DeleteDirectory(repo); }
+    }
+
+    private sealed class AttributionReplayVerifier(
+        AcceptanceVerificationResult failure, AcceptanceVerificationResult passing, string executable)
+        : IGoalAcceptanceVerifier
+    {
+        private bool _ranCombined;
+
+        internal List<GateReplayReceipt> AttributionReceipts { get; } = [];
+
+        public Task<AcceptanceVerificationResult> RunOwnedAsync(string worktreePath, GoalId? goalId,
+            IReadOnlyList<string>? changedFiles, int? stableSlotIndex, DotnetBuildEnvironmentLease? stableSlotLease,
+            IAcceptanceAttemptExecutionOwner executionOwner)
+        {
+            if (!_ranCombined)
+            {
+                _ranCombined = true;
+                return Task.FromResult(failure);
+            }
+            var owner = Assert.IsType<AcceptanceAttemptExecutionOwner>(executionOwner);
+            Capture(worktreePath, GateReplayReceiptTests.CreateContext(worktreePath) with { AttemptIdentity = owner.Identity });
+            return Task.FromResult(passing);
+        }
+
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceOwnedAsync(string worktreePath, GoalId? goalId,
+            string request, IAcceptanceFocusedVerificationOwner executionOwner, int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null, bool runBaselineArm = false)
+        {
+            var owner = Assert.IsType<AcceptanceFocusedVerificationOwner>(executionOwner);
+            // The focused verifier runs checks under an arm view after entering the arm.
+            using var arm = GateToolResolutionPreflight.EnterFocusedArm(worktreePath);
+            var view = new AcceptanceRunExecutionContextView(owner, owner.ResultsPrefix + "-candidate");
+            Capture(worktreePath, GateReplayReceiptTests.CreateContext(worktreePath) with
+            {
+                AttemptIdentity = null,
+                FocusedReplayIdentity = GateReplayReceipt.ResolveFocusedLaunchIdentity(view)
+            });
+            // One prefix invocation is enough to observe its launch record.
+            return Task.FromResult(new FocusedEvidenceRunResult(request, false, false, "probe complete", []));
+        }
+
+        private void Capture(string worktreePath, GateHeartbeatContext heartbeat)
+        {
+            var startInfo = new ProcessStartInfo(executable) { WorkingDirectory = worktreePath };
+            startInfo.Environment.Clear();
+            var launch = Assert.IsType<GateReplayReceipt.Launch>(GateReplayReceipt.CaptureLaunch(
+                new AcceptanceProcessRequest { HeartbeatContext = heartbeat }, startInfo, true, [executable]));
+            AttributionReceipts.Add(Assert.IsType<GateReplayReceipt>(
+                launch.Bind(heartbeat, Path.Combine(worktreePath, "stdout"), Path.Combine(worktreePath, "stderr"))));
+        }
     }
 
     private static ConductorDriver CreateDriver(AgentOrchestratorKernel kernel,

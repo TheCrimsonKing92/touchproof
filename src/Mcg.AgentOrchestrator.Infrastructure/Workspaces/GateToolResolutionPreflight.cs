@@ -62,25 +62,23 @@ internal static class GateToolResolutionPreflight
         workingDirectory = Path.GetFullPath(workingDirectory);
         var environment = createEnvironment?.Invoke() ?? new ProcessStartInfo().Environment;
         AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(environment, workingDirectory);
-        return new AttemptScope(new(createEnvironment, workingDirectory, EnsureToolsResolve(environment, workingDirectory)));
+        return new AttemptScope(new(createEnvironment, EnsureToolsResolve(environment, workingDirectory)));
     }
 
     // A focused arm supplies its working directory once its checkout is ready.
     internal static IDisposable? BeginFocusedAttempt(Func<IDictionary<string, string?>>? createEnvironment) =>
-        OperatingSystem.IsWindows() ? new AttemptScope(new(createEnvironment, null, null)) : null;
+        OperatingSystem.IsWindows() ? new AttemptScope(new(createEnvironment, null)) : null;
 
     internal static IDisposable? EnterFocusedArm(string workingDirectory)
     {
-        if (Attempt.Value is not { } attempt) return null;
-        if (string.Equals(attempt.WorkingDirectory, Path.GetFullPath(workingDirectory), StringComparison.OrdinalIgnoreCase))
-            return null;
+        if (Attempt.Value is not { Result: null } attempt) return null;
         return EnterHermeticAttempt(workingDirectory, attempt.CreateEnvironment);
     }
 
     internal static bool IsMissingToolsFailure(Exception exception) =>
         exception is AcceptanceInfrastructureDeferredException { ReasonCode: MissingToolsReasonCode };
 
-    internal static IDisposable EnterAttempt(GateToolResolutionResult? result) => new AttemptScope(new(null, null, result));
+    internal static IDisposable EnterAttempt(GateToolResolutionResult? result) => new AttemptScope(new(null, result));
 
     private static string? ReadVariable(IEnumerable<KeyValuePair<string, string?>> environment, string name) =>
         environment.LastOrDefault(pair => pair.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Value;
@@ -95,7 +93,6 @@ internal static class GateToolResolutionPreflight
 
     private sealed record AttemptContext(
         Func<IDictionary<string, string?>>? CreateEnvironment,
-        string? WorkingDirectory,
         GateToolResolutionResult? Result);
 
     private sealed class AttemptScope : IDisposable
