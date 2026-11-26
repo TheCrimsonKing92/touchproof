@@ -69,6 +69,18 @@ public sealed class PreReviewEvidenceCoverageTests
     }
 
     [Xunit.Fact]
+    public void MissingSelectedClassNamesItemAndClass()
+    {
+        const string selection = "Infrastructure.Tests: FullyQualifiedName~RanTests|FullyQualifiedName~MissingTests";
+        var context = Context(selection);
+        var evidence = Evidence(context, Check("reviewer focused evidence: Infrastructure.Tests FullyQualifiedName~RanTests"));
+
+        Assert.False(PreReviewEvidenceReceipts.ValidateCoverage(context, evidence, out var failure));
+        Assert.Contains(selection, failure, StringComparison.Ordinal);
+        Assert.Contains("MissingTests", failure, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void MissingSelectedClassNamesItemAndClassDespiteUnrelatedTraitDrop()
     {
         const string selection = "Infrastructure.Tests: FullyQualifiedName~RanTests|FullyQualifiedName~MissingTests";
