@@ -184,7 +184,7 @@ public sealed class GateObligationSelectorSoloAdmissionTests(ITestOutputHelper o
 
     private sealed class AdmissionFixture : IDisposable
     {
-        private const string LandingPath = "src/Mcg.AgentOrchestrator.App/Orchestration/Fixture.cs";
+        private const string LandingPath = "src/Mcg.AgentOrchestrator.Core/Application/Fixture.cs";
         private readonly string _root = CreateTempDirectory("mcg-solo-selector");
         private readonly GoalId _goalId;
         private readonly ConductorDriver _driver;
@@ -257,6 +257,10 @@ public sealed class GateObligationSelectorSoloAdmissionTests(ITestOutputHelper o
                 resolveAcceptanceHeads: _ => (Candidate, Main),
                 parallelAcceptanceAttemptCoordinator: coordinator,
                 runMergeTrain: (_, _, _) => throw new InvalidOperationException("A single goal cannot form a merge train."));
+
+            // A ready projection requires a landing scope with a reservation key.
+            var ready = Assert.IsType<GateReadyCandidateProjectionResult.Ready>(Project());
+            Assert.Equal(Candidate, ready.Projection.CandidateRevision);
         }
 
         internal void SeedSelectors(params string[] selectors) =>
