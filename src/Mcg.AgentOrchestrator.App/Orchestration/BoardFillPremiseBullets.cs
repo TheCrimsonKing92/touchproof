@@ -20,7 +20,7 @@ internal static class BoardFillPremiseBullets
         @"|^(?<continuationIndent>[ \t]*)(?:>|(?:\+|[0-9]{1,9}[.)])[ \t]+(?=\S)" +
         @"|(?:-(?:[ \t]*-){2,}|\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,})[ \t]*$" +
         @"|#{1,6}(?=[ \t]|$)|`{3,}[^`\n]*$|~{3,}|" + HtmlBlockStart + ")" +
-        @"|^(?<continuationIndent>[ \t]*)(?<plainText>(?<setextEquals>=+[ \t]*$)|\S)",
+        @"|^(?<continuationIndent>[ \t]*)(?<plainText>(?<setextUnderline>(?:=+|-+)[ \t]*$)|\S)",
         RegexOptions.Multiline | RegexOptions.CultureInvariant);
     private static readonly Regex EvidencePath = new("""(?:^|\s)\S*[/\\][^\s/\\]*\.[\p{L}\p{N}]+(?=[\x60'"\])>.,;:!?]*(?:\s|$))""");
     private static readonly Regex NoteCitation = new("""\bnote\s+[0-9a-fA-F]+(?=[*\x60'"\p{Pf}\])>.,;:!?]*(?:\s|$))""");
@@ -94,8 +94,8 @@ internal static class BoardFillPremiseBullets
             var isPlainText = line.Groups["plainText"].Success;
             if (MarkdownColumnWidth(indent.ValueSpan) >= contentColumn)
             {
-                // Indented prose can continue the opening paragraph. A block or paragraph break ends it.
-                inOpeningParagraph &= isPlainText && !line.Groups["setextEquals"].Success;
+                // Indented prose can continue the opening paragraph. A block, Setext heading or paragraph break ends it.
+                inOpeningParagraph &= isPlainText && !line.Groups["setextUnderline"].Success;
             }
             else if (!inOpeningParagraph || !isPlainText)
             {

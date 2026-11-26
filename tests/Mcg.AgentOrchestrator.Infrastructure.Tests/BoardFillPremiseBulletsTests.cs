@@ -18,6 +18,7 @@ public sealed class BoardFillPremiseBulletsTests
     [InlineData("the following line.\n###Evidence cites note B7.")]
     [InlineData("the following line.\n```inline``` cites note B7.")]
     [InlineData("the following line.\n<div-like>See note B7. </div-like>")]
+    [InlineData("the following line.\n--\nSee note B7.")]
     public void BulletCount_RuntimeObservationWithEvidencePathOrNoteId_CountsOnlySourceClaims(string citation)
     {
         var premise = WithSourceClaims($"runtime-observation: Results are recorded in {citation}");
@@ -143,6 +144,8 @@ public sealed class BoardFillPremiseBulletsTests
     [InlineData("  ```text\n  ```", "  ```text\n  See note B7.\n  ```")]
     [InlineData("  ```text", "  ```text\n  See note B7.")]
     [InlineData("  ~~~text\n  ~~~", "  ~~~text\n  See note B7.\n  ~~~")]
+    [InlineData("  -", "  -\n  See note B7.")]
+    [InlineData("  --", "  --\n  See note B7.")]
     [InlineData("  ---", "  ---\n  See note B7.")]
     [InlineData("  ===", "  ===\n  See note B7.")]
     [InlineData("  <div>", "  <div>\n  See note B7.")]
