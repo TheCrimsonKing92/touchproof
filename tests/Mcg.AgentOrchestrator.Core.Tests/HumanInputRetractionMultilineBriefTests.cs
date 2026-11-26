@@ -71,6 +71,62 @@ public sealed class HumanInputRetractionMultilineBriefTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SupersedingAnswerPreservesConvergencePathCoordinatesAfterMultilineFinding(bool retractAfterPaths)
+    {
+        const string staleAnswer = "obsolete finding detail";
+        const string retainedDetail = "Retain the finding continuation.";
+        var paths = new[] { "src/A.cs", "src/B.cs" };
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review convergence", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Review changed paths", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var request = kernel.RequestHumanInput(goal.Id, reviewer.Id, "Which detail should govern?");
+        kernel.SubmitHumanInput(request.Id, staleAnswer);
+
+        var description = $"{staleAnswer}\n{retainedDetail}";
+        kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review", "C:\\fixture", 1,
+            $$"""
+            WORKER_RESULT:
+            findings: [{"stable_id":"scope","state":"open","severity":"blocking","location":{"file":"src/A.cs","region":"A.Run"},"description":"{{staleAnswer}}\n{{retainedDetail}}"}]
+            touched_anchors: []
+            END_WORKER_RESULT
+            """, string.Empty, clock.UtcNow,
+            MergedReviewFindings: [new ReviewFinding("scope", ReviewFindingState.Open,
+                new ReviewFindingLocation("src/A.cs", "A.Run"), description)], WorkerResultPresent: true));
+
+        TaskBriefSegment BuildConvergence() => Assert.Single(kernel.BuildTaskBriefSource(
+            goal.Id, reviewer.Id, reviewerScopeChangedFiles: paths).Segments,
+            segment => segment.ConvergenceChangedFiles is not null);
+
+        var before = BuildConvergence();
+        Assert.Contains(before.Lines, line => line.EndsWith(description, StringComparison.Ordinal));
+
+        clock.Advance();
+        kernel.SupersedeHumanInput(goal.Id, request.Id, "Current finding detail", HumanInputAnswerOrigin.Operator);
+        if (retractAfterPaths)
+        {
+            var beforePaths = before.ConvergenceChangedFiles!;
+            var trailingLines = before.Lines.Skip(beforePaths.FirstListLineIndex + beforePaths.ListLineCount).Take(2).ToArray();
+            Assert.Equal(2, trailingLines.Length);
+            var trailingRequest = kernel.RequestHumanInput(goal.Id, reviewer.Id, "Which closing guidance should govern?");
+            kernel.SubmitHumanInput(trailingRequest.Id, string.Join('\n', trailingLines));
+            clock.Advance();
+            kernel.SupersedeHumanInput(goal.Id, trailingRequest.Id, "Current closing guidance", HumanInputAnswerOrigin.Operator);
+        }
+
+        var after = BuildConvergence();
+        var pathList = after.ConvergenceChangedFiles!;
+        Assert.Equal(paths.Select(path => $"- {path}"),
+            after.Lines.Skip(pathList.FirstListLineIndex).Take(pathList.ListLineCount));
+        Assert.DoesNotContain(after.Lines, line => line.Contains(staleAnswer, StringComparison.Ordinal));
+        Assert.Contains(after.Lines, line => line.EndsWith("\n" + retainedDetail, StringComparison.Ordinal));
+    }
+
     private static void AssertAdjacentLines(IReadOnlyList<string> lines, string first, string second)
     {
         Assert.Contains(lines.Zip(lines.Skip(1)), pair => pair.First == first && pair.Second == second);
