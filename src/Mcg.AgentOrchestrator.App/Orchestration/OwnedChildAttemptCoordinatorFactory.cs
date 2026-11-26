@@ -41,4 +41,8 @@ internal static class OwnedChildAttemptCoordinatorFactory
             projectName: OwnedChildWorkspaceResolver.RecordedProjectName(workspace),
             hostBootTime: LegacyAcceptanceHolderSettlement.CurrentHostBootTime,
             readPreReviewEvidenceCapacity: PreReviewEvidenceLaunchCapacity.CreateHostReader(buildStorageRoot));
+
+    internal static SoloRepairCheckAttemptCoordinator CreateSoloRepairCheck(
+        OrchestratorWorkspace workspace, DotnetBuildStorageRoot? buildStorageRoot) =>
+        new(workspace, buildStorageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot());
 }
