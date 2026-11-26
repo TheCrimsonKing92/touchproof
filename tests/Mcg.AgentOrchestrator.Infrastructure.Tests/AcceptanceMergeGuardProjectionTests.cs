@@ -26,4 +26,17 @@ public sealed class AcceptanceMergeGuardProjectionTests
             baseline,
             baseline with { Tasks = [new("task-one", AgentRole.Developer, WorkTaskStatus.Running)] })!.Field);
     }
+
+    [Xunit.Fact]
+    public void AcceptanceMergeGuardRejectsNewSoloFailureEvidenceWithUnchangedTaskState()
+    {
+        var baseline = new AcceptanceMergeGuardSnapshot(GoalStatus.Verified, []);
+        var failure = new SoloAcceptanceFailureReceipt(1, GoalId.New().Value, "attempt", "candidate",
+            "tree", "main", "main", "results", new("proof.json", "digest"));
+        var mismatch = AcceptanceMergeGuard.Compare(baseline, baseline with { SoloFailureReceipt = failure });
+
+        Xunit.Assert.Equal(AcceptanceMergeGuardMismatchKind.BaselineRepair, mismatch?.Kind);
+        Xunit.Assert.Equal("absent", mismatch?.Expected);
+        Xunit.Assert.Contains("digest", mismatch?.Actual);
+    }
 }

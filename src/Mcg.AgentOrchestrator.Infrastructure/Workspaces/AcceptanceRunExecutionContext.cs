@@ -86,6 +86,7 @@ public sealed record AcceptanceRunExecutionOptions(
     string? PinnedMainCommit = null)
 {
     internal Action<AcceptanceSelectedExecutionRecord?>? GateOutcomeSelectionSink { get; init; }
+    internal bool RetainFocusedBaselineArtifacts { get; init; }
 }
 
 public sealed record AcceptanceOwnerProtectedCohortMember(GoalId GoalId, string CandidateSha);
@@ -526,9 +527,11 @@ internal sealed class AcceptanceFocusedVerificationOwner : AcceptanceRunExecutio
         : base(identity.FocusedRunId, identity.ResultsPrefix, settings, cancellationToken, options)
     {
         Identity = identity;
+        RetainBaselineArtifacts = options?.RetainFocusedBaselineArtifacts == true;
     }
 
     internal AcceptanceFocusedVerificationIdentity Identity { get; }
+    internal bool RetainBaselineArtifacts { get; }
     public override string? TreeRevision => Identity.TreeRevision;
 
     internal async Task<FocusedEvidenceRunResult> ExecuteAsync(

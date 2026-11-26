@@ -46,6 +46,7 @@ internal static class AcceptanceMissingToolClassifier
             $"; signature={matched.Signature}; source={matched.Source}; tool={matched.Tool ?? "unknown"}";
         return check with
         {
+            LaneToolResolution = check.LaneToolResolution is null ? null : new(matched.Tool ?? "unknown"),
             FailureClassification = classification,
             FailureCauseEvidence = new AcceptanceFailureCauseEvidence(
                 AcceptanceFailureCause.EnvironmentalApparatus, evidence, check.Name, classification)

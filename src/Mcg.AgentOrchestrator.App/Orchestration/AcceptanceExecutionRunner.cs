@@ -50,7 +50,9 @@ internal static class AcceptanceExecutionRunner
         FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null, IReadOnlyList<string>? declaredPaths = null,
         string? projectHomeDirectory = null, Action<AcceptanceGateProgress>? progressSink = null,
         SourceRevertedEvidenceContinuation? continuation = null,
-        AcceptanceFocusedRunBinding? focusedRunBinding = null)
+        AcceptanceFocusedRunBinding? focusedRunBinding = null,
+        bool retainFocusedBaselineArtifacts = false,
+        Action<FocusedEvidenceRunResult>? observeFocusedResult = null)
     {
         ArgumentNullException.ThrowIfNull(verifier);
         var executionOwner = AcceptanceExecutionOwners.CreateFocusedVerification(
@@ -59,22 +61,22 @@ internal static class AcceptanceExecutionRunner
             stableSlotIndex,
             cancellationToken,
             new AcceptanceRunExecutionOptions(ProjectHomeDirectory: projectHomeDirectory, IntegrationBranch: integrationBranch,
-                ProgressSink: progressSink, FocusedRunBinding: focusedRunBinding));
+                ProgressSink: progressSink, FocusedRunBinding: focusedRunBinding)
+            { RetainFocusedBaselineArtifacts = retainFocusedBaselineArtifacts });
         if (continuation is not null && verifier is GoalAcceptanceVerifier concrete &&
             executionOwner is IAcceptanceRunExecutionContext context)
             verifier = new GoalAcceptanceVerifier(concrete, context) { SourceRevertedContinuation = continuation };
         return AcceptanceExecutionOwnerLifetime.Run(
             executionOwner,
-            () => (negativeControl is { } mode
-                ? verifier.RunNegativeControlFocusedEvidenceOwnedAsync(worktreePath, goalId, request,
-                    executionOwner, mode, stableSlotIndex, stableSlotLease, runBaselineArm, revertPaths, mutation, declaredPaths)
-                : verifier.RunFocusedEvidenceOwnedAsync(
-                worktreePath,
-                goalId,
-                request,
-                executionOwner,
-                stableSlotIndex,
-                stableSlotLease,
-                runBaselineArm)).GetAwaiter().GetResult());
+            () =>
+            {
+                var result = (negativeControl is { } mode
+                    ? verifier.RunNegativeControlFocusedEvidenceOwnedAsync(worktreePath, goalId, request,
+                        executionOwner, mode, stableSlotIndex, stableSlotLease, runBaselineArm, revertPaths, mutation, declaredPaths)
+                    : verifier.RunFocusedEvidenceOwnedAsync(worktreePath, goalId, request, executionOwner,
+                        stableSlotIndex, stableSlotLease, runBaselineArm)).GetAwaiter().GetResult();
+                observeFocusedResult?.Invoke(result);
+                return result;
+            });
     }
 }

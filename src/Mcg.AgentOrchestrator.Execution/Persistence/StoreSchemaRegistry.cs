@@ -105,6 +105,7 @@ public static class StoreSchemaRegistry
         CohortAcceptance,
         CohortAttributionRetractions,
         CohortSoloInheritedReceipts,
+        new("solo-baseline-repair", Persistence + "SoloBaselineRepairStore.cs", SoloBaselineRepairStore.FileName, "landing", null),
         MergeTrainAcceptance,
         MultiRepositoryLandings,
         CollaborationItems,

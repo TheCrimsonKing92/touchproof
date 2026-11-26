@@ -544,10 +544,8 @@ public sealed class LandingExecutorTests : Xunit.IClassFixture<IsolatedDotnetRoo
         try
         {
             var (workspace, kernel, goal) = CreateAcceptedCandidate(repo, "src/interrupted.txt");
-            using (LandingExecutor.UseGitRunner((workingDirectory, args) =>
-                args is ["update-ref", "refs/heads/main", _, _]
-                    ? throw new InvalidOperationException("simulated process interruption during main publication")
-                    : GitCli.Run(workingDirectory, args)))
+            using (LandingExecutor.UseGitRunner(GitCli.Run, (_, _, _) =>
+                throw new InvalidOperationException("simulated process interruption during main publication")))
             {
                 _ = Assert.Throws<InvalidOperationException>(() => LandingExecutor.Execute(kernel, goal, workspace));
                 Assert.True(GitCli.Run(repo, "rev-parse", "--verify", "--quiet", "refs/heads/integration").Succeeded);
@@ -964,10 +962,8 @@ public sealed class LandingExecutorTests : Xunit.IClassFixture<IsolatedDotnetRoo
             var (kernel, goal) = CreateVerifiedGoal(repo);
             var goalBranch = GoalWorktrees.BranchName(goal.Id);
             AddGoalBranchCommit(repo, goalBranch, "src/main-merge-fails.txt", "goal work");
-            using var gitRunnerScope = LandingExecutor.UseGitRunner((workingDirectory, args) =>
-                args is ["update-ref", "refs/heads/main", _, _]
-                    ? new GitCli.GitResult(1, string.Empty, "simulated main merge failure")
-                    : GitCli.Run(workingDirectory, args));
+            using var gitRunnerScope = LandingExecutor.UseGitRunner(GitCli.Run, (_, _, _) =>
+                new GitCli.GitResult(1, string.Empty, "simulated main merge failure"));
 
             var result = LandingExecutor.Execute(kernel, goal, workspace);
 

@@ -9,11 +9,12 @@ internal sealed partial class ConductorDriver
 {
     private void TryRecordSoloMainSuspect(Goal goal, string goalPrefix,
         AcceptanceVerificationSummary acceptance, IReadOnlyList<ExcludedAcceptanceFailure> excluded,
-        string? candidateSha, string? mainSha, IReadOnlyList<string>? changedPaths)
+        string? candidateSha, string? mainSha, IReadOnlyList<string>? changedPaths, bool repairRouting = false)
     {
         if (_cohortWorkspace is not { } workspace || _cohortAcceptanceStore is not { } store ||
             excluded.Count == 0 || excluded.Any(failure => failure.Kind != AcceptanceRetryExclusionKind.Inherited) ||
-            string.IsNullOrWhiteSpace(candidateSha) || string.IsNullOrWhiteSpace(mainSha) || changedPaths is null)
+            string.IsNullOrWhiteSpace(candidateSha) || string.IsNullOrWhiteSpace(mainSha) || changedPaths is null ||
+            acceptance.RequiredUnmetCriteria.Any(check => check.LaneToolResolution is not { MissingTool: null }))
             return;
 
         ConductEventLogWriter? writer = null;
@@ -25,6 +26,10 @@ internal sealed partial class ConductorDriver
             const string prefix = "same focused identity failed at merge-base ";
             var identities = excluded.Select(failure => failure.Identity)
                 .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            if ((acceptance.SoloFailureReceipt is not null || acceptance.RequiresSoloFailureReceipt) &&
+                !SoloAcceptanceFailureHandler.HasVerifiedSoloCorroboration(goal, acceptance, workspace.ExecutionDirectory,
+                    _integrationBranch, ReadSoloAcceptanceContext, ReadCurrentCohortAttributionRevisions))
+                return;
             var attributions = acceptance.RequiredUnmetCriteria
                 .SelectMany(check => check.FailingTestAttributions ?? []).ToArray();
             foreach (var identity in identities)
@@ -38,6 +43,8 @@ internal sealed partial class ConductorDriver
             }
 
             store.RecordSoloInheritedReceipt(new(goal.Id, candidateSha, mainSha, mainSha, identities, changedPaths));
+            // The canonical repair itself needs the normal acceptance engine to land.
+            if (repairRouting) return;
             foreach (var earlier in store.ReadSoloInheritedReceipts(mainSha, goal.Id, candidateSha))
             {
                 var shared = ConductorAcceptanceCohortMainSuspect.KeepUntouched(
