@@ -178,7 +178,7 @@ public sealed class ConductorContinuitySupervisorReadinessTests
     }
 
     [Xunit.Fact]
-    public void PreLoopStartup_HeldLeaseEmitsReadyBeforeSweep()
+    public void PreLoopStartup_EmitsReadyForKernelReturnedBySweep()
     {
         var observed = new List<string>();
 
@@ -203,7 +203,7 @@ public sealed class ConductorContinuitySupervisorReadinessTests
 
         Assert.Equal("loaded-state-swept", result);
         Assert.Equal(
-            ["lease-held", "state-loaded", "LOOP_READY loaded-state", "startup-sweep"],
+            ["lease-held", "state-loaded", "startup-sweep", "LOOP_READY loaded-state-swept"],
             observed);
 
         var unsafeObserved = new List<string>();

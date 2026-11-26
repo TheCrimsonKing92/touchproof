@@ -210,13 +210,19 @@ internal static class PreReviewEvidenceReceipts
         }
 
         var itemClasses = context.SelectedFocusedTests.Select(ExtractClassTokens).ToArray();
-        var checkClasses = evidence.Checks.Select(check => ExtractClassTokens(check.Name)).ToArray();
         if (itemClasses.All(classes => classes.Count > 0))
         {
+            var traitExcludedClasses = (evidence.Coverage?.DroppedSelections ?? [])
+                .Where(drop => drop.Reasons.Any(reason =>
+                    reason.StartsWith("excluded-by-trait:", StringComparison.Ordinal)))
+                .SelectMany(drop => ExtractClassTokens($"FullyQualifiedName~{drop.Selection}"));
+            var coveredClasses = evidence.Checks.SelectMany(check => ExtractClassTokens(check.Name))
+                .Concat(traitExcludedClasses)
+                .ToHashSet(StringComparer.Ordinal);
             var missing = context.SelectedFocusedTests.Select((item, index) =>
             {
                 var uncovered = itemClasses[index].Where(className =>
-                    !checkClasses.Any(classes => classes.Contains(className))).ToArray();
+                    !coveredClasses.Contains(className)).ToArray();
                 return uncovered.Length == 0
                     ? null
                     : $"item '{item}' uncovered {string.Join(", ", uncovered)}";

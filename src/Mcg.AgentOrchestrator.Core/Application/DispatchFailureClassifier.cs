@@ -50,6 +50,7 @@ public sealed record ProviderSubscriptionCooldown(
     DateTimeOffset RetryAfter)
 {
     public string BindingKey { get; init; } = "";
+    internal SubscriptionLimitEvidence.ProviderBindingKey? BindingIdentity { get; init; }
     public string EvidenceReceipt { get; init; } = "";
     public DateTimeOffset DispatchStartedAt { get; init; }
     // Null retains provider-wide authority, including historical records without a model.
@@ -76,7 +77,16 @@ public sealed record ProviderBudgetExhaustionHold(
     GoalId SourceGoalId,
     TaskId SourceTaskId,
     DateTimeOffset PlacedAt,
-    string EvidenceReceipt);
+    string EvidenceReceipt)
+{
+    internal SubscriptionLimitEvidence.ProviderBindingKey BindingIdentity =>
+        ProviderHoldBinding.Identity(BindingKey, BindingScope, ModelName);
+
+    public ProviderFailureKind Reason { get; init; } = ProviderFailureKind.BudgetExhausted;
+    public string? ModelName { get; init; }
+    public DateTimeOffset? ProviderResetAt { get; init; }
+    internal bool HasUsageLimitDiagnostic { get; init; }
+}
 
 public enum DispatchRoleOutputCapability
 {
@@ -430,6 +440,9 @@ public static class DispatchFailureClassifier
         var terminalContract = assessTerminalContract(task, verification);
         if (!terminalContract.AllowsCompletion)
         {
+            if (IsRecoverableDirtyDispatch(task.RequiredRole, verification))
+                return BuildDirtyWorktreeOutcome();
+
             // Preserve positively identified provider faults before diagnosing absent reporting.
             if (providerFailureKind != ProviderFailureKind.Unknown ||
                 IsRecoverableSubscriptionLimitFailure(verification) ||
@@ -764,23 +777,8 @@ public static class DispatchFailureClassifier
                 DispatchEvidenceSummaries.BuildEvidenceSummary(verification)));
         }
 
-        if (TryBuildDirtyDispatchRecovery(task, out _))
-        {
-            return BuildOutcome(
-                TaskOutcomeRules.DirtyDispatchRecovery,
-                task,
-                verification,
-                workerResultPresent,
-                hasCommittedChanges,
-                new DispatchOutcome(
-                DispatchOutcomeKind.DirtyWorktreeRecoverable,
-                exitCode,
-                hasZeroByteOutput,
-                null,
-                null,
-                RecoveryRecommendation.OperatorNeeded,
-                DispatchEvidenceSummaries.BuildEvidenceSummary(verification)));
-        }
+        if (IsRecoverableDirtyDispatch(task.RequiredRole, verification))
+            return BuildDirtyWorktreeOutcome();
 
         if (providerFailureKind == ProviderFailureKind.Sandbox1312)
         {
@@ -1086,6 +1084,21 @@ public static class DispatchFailureClassifier
             null,
             RecoveryRecommendation.OperatorNeeded,
             DispatchEvidenceSummaries.BuildUnknownFailureEvidenceSummary(verification)));
+
+        DispatchOutcome BuildDirtyWorktreeOutcome() => BuildOutcome(
+            TaskOutcomeRules.DirtyDispatchRecovery,
+            task,
+            verification,
+            workerResultPresent,
+            hasCommittedChanges,
+            new DispatchOutcome(
+                DispatchOutcomeKind.DirtyWorktreeRecoverable,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.OperatorNeeded,
+                DispatchEvidenceSummaries.BuildEvidenceSummary(verification)));
     }
 
     internal static bool TryGetOrchestratorAuthoredFailure(

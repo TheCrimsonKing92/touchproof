@@ -13,6 +13,9 @@ public sealed class FailedLaneSelectedClassesTests
     private const string CoreLane = "Core tests";
     private const string UnrelatedLane = "Unrelated";
     private const string FailedIdentity = "Example.FailedTests.First";
+    private const string InfrastructureRoot = RepositoryProjectOwnership.InfrastructureTestsRoot;
+    private const string FixtureRoot = InfrastructureRoot + "Fixtures/RealProcessShardProbe/";
+    private const string FixtureProject = FixtureRoot + "Mcg.AgentOrchestrator.RealProcessShardProbe.csproj";
     private const string FailedLaneFeedback =
         "Failed lane 'Integration' selected classes: Infrastructure.Tests/AlphaSiblingTests, " +
         "Infrastructure.Tests/FailedTests, Infrastructure.Tests/ZuluSiblingTests";
@@ -79,6 +82,46 @@ public sealed class FailedLaneSelectedClassesTests
         Assert.Equal(0, harness.GateRuns);
     }
 
+    [Fact]
+    public void PreReview_FixtureProjectFailureAloneDoesNotRequestParentTests()
+    {
+        using var harness = new DriverHarness();
+        harness.WriteWorktreeFile(FixtureProject, "<Project />");
+        // The retained check still identifies the fixture project after its failing source is removed.
+        harness.RecordRetainedFailure(new("shard probe", false, 1, "failed", TestProjectPath: FixtureProject,
+            FailingTestIdentities: ["Example.ShardProbeAlphaTests.First"]));
+
+        harness.Driver().AdvanceOnce(harness.Goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Empty(harness.Requests);
+        Assert.Equal(PreReviewEvidenceDisposition.NoApplicableTests, harness.Reviewer.PreReviewEvidenceReceipt?.Disposition);
+        Assert.Equal([harness.Reviewer.Id], harness.DispatchedTasks);
+    }
+
+    [Fact]
+    public void PreReview_FailedLaneKeepsParentAndExtractedClassesAndSkipsFixtureClasses()
+    {
+        using var harness = new DriverHarness();
+        harness.WriteWorktreeFile(AcceptancePolicyShardPlanner.InfrastructureTestsProject, "<Project />");
+        harness.WriteWorktreeFile(InfrastructureRoot + "Deep/AlphaSiblingTests.cs", "public class AlphaSiblingTests { }");
+        harness.WriteWorktreeFile(AcceptancePolicyShardPlanner.ProviderEnvironmentTestsProject, "<Project />");
+        harness.WriteWorktreeFile(InfrastructureRoot + "ProviderEnvironment/ProviderOwnedTests.cs", "public class ProviderOwnedTests { }");
+        harness.WriteWorktreeFile(FixtureProject, "<Project />");
+        harness.WriteWorktreeFile(FixtureRoot + "ShardProbeTests.cs", "public class ShardProbeAlphaTests { }");
+        harness.RecordRetainedFailure();
+        WritePlan(harness.Attempt, "valid", "Example.ShardProbeAlphaTests", "Example.ProviderOwnedTests");
+
+        harness.Driver().AdvanceOnce(harness.Goal, ConductorAutonomyPolicy.Permissive);
+
+        const string expectedRequest = "Infrastructure.Tests: FullyQualifiedName~AlphaSiblingTests|" +
+            "FullyQualifiedName~FailedTests|FullyQualifiedName~ProviderOwnedTests|FullyQualifiedName~ZuluSiblingTests";
+        Assert.Equal([expectedRequest], harness.Requests);
+        var receipt = Assert.IsType<PreReviewEvidenceReceipt>(harness.Reviewer.PreReviewEvidenceReceipt);
+        Assert.Equal([expectedRequest], receipt.SelectedFocusedTests);
+        Assert.Equal(PreReviewEvidenceDisposition.Green, receipt.Disposition);
+        Assert.Equal([harness.Reviewer.Id], harness.DispatchedTasks);
+    }
+
     [Theory]
     [InlineData("valid")]
     [InlineData("missing")]
@@ -113,7 +156,7 @@ public sealed class FailedLaneSelectedClassesTests
     private static AcceptanceCheckResult FailedCheck() => new("infrastructure tests: Integration: shard", false, 1,
         "failed", TestProjectPath: "Infrastructure.Tests", FailingTestIdentities: [FailedIdentity]);
 
-    private static void WritePlan(ConductorParallelAcceptanceAttempt attempt, string scenario)
+    private static void WritePlan(ConductorParallelAcceptanceAttempt attempt, string scenario, params string[] additionalIntegrationClasses)
     {
         if (scenario == "missing") return;
         var path = Path.Combine(Path.GetDirectoryName(attempt.ResultPath)!, attempt.AttemptId + AcceptanceGateLanePlan.ArtifactSuffix);
@@ -126,7 +169,7 @@ public sealed class FailedLaneSelectedClassesTests
                 Lanes =
                 [
                     new(IntegrationLane, "narrowed", ["Example.ZuluSiblingTests", "Example.AlphaSiblingTests",
-                        "Example.FailedTests", "Example.AlphaSiblingTests+Nested"], [], null),
+                        "Example.FailedTests", "Example.AlphaSiblingTests+Nested", .. additionalIntegrationClasses], [], null),
                     new(CoreLane, "narrowed", ["Mcg.AgentOrchestrator.Core.Tests.CoreSiblingTests"], [], null),
                     new(UnrelatedLane, "narrowed", ["Mcg.AgentOrchestrator.Infrastructure.Tests.UnrelatedTests"], [], null)
                 ]
@@ -167,9 +210,18 @@ public sealed class FailedLaneSelectedClassesTests
             File.WriteAllBytes(Attempt.MetadataPath, JsonSerializer.SerializeToUtf8Bytes(Attempt, ArtifactOptions));
         }
 
-        internal void RecordRetainedFailure()
+        internal void WriteWorktreeFile(string relativePath, string contents)
         {
-            var check = FailedCheck();
+            var worktree = GoalWorktrees.WorktreePath(_root, Goal.Id);
+            var path = Path.Combine(worktree, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(Path.Combine(worktree, ".git"), "gitdir: fixture");
+            File.WriteAllText(path, contents);
+        }
+
+        internal void RecordRetainedFailure(AcceptanceCheckResult? check = null)
+        {
+            check ??= FailedCheck();
             SaveGateResult(check);
             _kernel.RecordAcceptanceFailure(Goal.Id, [check.Name], Attempt.BranchHeadSha, Attempt.MainHeadSha,
                 attemptId: Attempt.AttemptId);
@@ -212,6 +264,7 @@ public sealed class FailedLaneSelectedClassesTests
             writeEscalation: (_, _, reason) => throw new InvalidOperationException(reason), classifyChangeRisk: _ => null,
             parallelAcceptanceAttemptCoordinator: Coordinator("gate"), focusedEvidenceAttemptCoordinator: Coordinator("focused"),
             getPreReviewEvidenceContext: _ => NoPreReviewContext("corrected-candidate"),
+            executionDirectory: _root,
             recordPreReviewEvidence: (goal, task, receipt) => _kernel.RecordPreReviewEvidence(goal, task, receipt),
             runFocusedEvidence: (_, request) =>
             {

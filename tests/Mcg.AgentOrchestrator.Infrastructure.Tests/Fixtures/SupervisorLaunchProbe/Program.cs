@@ -9,6 +9,7 @@ if (args[0] == "completion-build-gate") return CompletionBuildOperatorProbe.Gate
 if (args[0] == "conductor-start-caller") return ConductorStartCallerProbe.Run(args[1], args[2]);
 if (args[0] == "fake-conductor") return FakeConductorProbe.Run(args[1], args[2], args[3]);
 if (args[0] == "acceptance-claim") return AcceptanceCustodyProbe.Run(args[1], args[2]);
+if (args[0] == "shadow-reopen-wal") return ShadowStartWalProbe.Run(args[1..]);
 var root = args[1];
 var token = args[2];
 if (args[0] == "supervisor") return await RealSupervisorProbe.RunAsync(root, token,

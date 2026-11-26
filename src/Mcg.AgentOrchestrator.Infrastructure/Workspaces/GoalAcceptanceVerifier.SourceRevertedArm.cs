@@ -174,7 +174,8 @@ public sealed partial class GoalAcceptanceVerifier
                 executionOwner.CancellationToken, executionOwner: executionOwner).ConfigureAwait(false);
             return NegativeControlRevertPaths.WithSourceRevertedPathReceipt(arm, restoredPaths, droppedPaths);
         }
-        catch (Exception ex) when (ex is not (DotnetBuildSlotsBusyException or BuildLockBlockedException or OperationCanceledException))
+        catch (Exception ex) when (ex is not (DotnetBuildSlotsBusyException or BuildLockBlockedException or OperationCanceledException) &&
+            !GateToolResolutionPreflight.IsMissingToolsFailure(ex))
         {
             return NegativeControlRevertPaths.WithSourceRevertedPathReceipt(InconclusiveSourceReverted(candidateSha,
                 $"source-reverted apparatus failure: {TrimForReceipt(ex.Message)}"), restoredPaths, droppedPaths);

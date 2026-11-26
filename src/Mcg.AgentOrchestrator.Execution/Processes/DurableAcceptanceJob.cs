@@ -11,8 +11,12 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal sealed class DurableAcceptanceJob : IDisposable
 {
     internal SpawnProcessIdentity CustodianIdentity { get; }
-    private DurableAcceptanceJob(SpawnProcessIdentity custodianIdentity)
-    { CustodianIdentity = custodianIdentity; }
+    internal Task CustodianCompletion { get; }
+    private DurableAcceptanceJob(SpawnProcessIdentity custodianIdentity, Task custodianCompletion)
+    {
+        CustodianIdentity = custodianIdentity;
+        CustodianCompletion = custodianCompletion;
+    }
 
     internal static DurableAcceptanceJob AttachCurrent(string name,
         AcceptanceJobCustodianLaunchSpecification launch, string? settlementPath = null)
@@ -23,7 +27,17 @@ internal sealed class DurableAcceptanceJob : IDisposable
 
     internal static DurableAcceptanceJob Attach(Process holder, string name,
         AcceptanceJobCustodianLaunchSpecification launch, string? settlementPath = null,
-        AcceptanceJobCustodianBounds? bounds = null)
+        AcceptanceJobCustodianBounds? bounds = null) =>
+        Attach(holder, () => SpawnProcessIdentityReader.ReadForRegistration(holder).Identity
+            ?? throw new InvalidOperationException("Acceptance holder identity is unavailable."),
+            name, launch, settlementPath, bounds);
+
+    internal static DurableAcceptanceJob Attach(OwnedProcessGroup.SuspendedRedirectedProcessStart holder, string name,
+        AcceptanceJobCustodianLaunchSpecification launch, string? settlementPath = null) =>
+        Attach(holder.Process, holder.ReadSuspendedIdentity, name, launch, settlementPath, bounds: null);
+
+    private static DurableAcceptanceJob Attach(Process holder, Func<SpawnProcessIdentity> readIdentity, string name,
+        AcceptanceJobCustodianLaunchSpecification launch, string? settlementPath, AcceptanceJobCustodianBounds? bounds)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("Durable acceptance containment requires Windows.");
@@ -31,8 +45,7 @@ internal sealed class DurableAcceptanceJob : IDisposable
         AcceptanceJobCustodian? custodian = null;
         try
         {
-            var identity = SpawnProcessIdentityReader.ReadForRegistration(holder).Identity
-                ?? throw new InvalidOperationException("Acceptance holder identity is unavailable.");
+            var identity = readIdentity();
             // Start before assignment: the custodian must not be a member of the job it owns.
             // Its final handle retains kill-on-close, so custody loss terminates that exact job.
             custodian = AcceptanceJobCustodian.Start(launch, name, identity, settlementPath, bounds);
@@ -42,8 +55,7 @@ internal sealed class DurableAcceptanceJob : IDisposable
             custodian.Attached();
             // Transfer sole handle custody only after the child verified actual membership.
             handle.Dispose();
-            custodian.Release();
-            return new DurableAcceptanceJob(custodianIdentity);
+            return new DurableAcceptanceJob(custodianIdentity, custodian.Release());
         }
         catch
         {
@@ -97,17 +109,20 @@ internal sealed class DurableAcceptanceJob : IDisposable
     // The independent owner survives the holder and conductor. Cancellation uses exact-job Observe.
     public void Dispose() { }
 
-    private static bool HasSettlementReceipt(string? path, string name, SpawnProcessIdentity holder)
+    internal static bool HasSettlementReceipt(string? path, string name, SpawnProcessIdentity holder)
+        => ReadSettlementReceipt(path, name, holder) is not null;
+
+    internal static AcceptanceJobSettlement? ReadSettlementReceipt(string? path, string name, SpawnProcessIdentity holder)
     {
-        if (path is null) return false;
+        if (path is null) return null;
         try
         {
             var receipt = JsonSerializer.Deserialize<AcceptanceJobSettlement>(File.ReadAllText(path));
             return receipt is { Settled: true, Holder: not null } && receipt.JobName == name &&
-                ProcessImageResolution.SameProcess(receipt.Holder, holder);
+                ProcessImageResolution.SameProcess(receipt.Holder, holder) ? receipt : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
-        { return false; }
+        { return null; }
     }
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]

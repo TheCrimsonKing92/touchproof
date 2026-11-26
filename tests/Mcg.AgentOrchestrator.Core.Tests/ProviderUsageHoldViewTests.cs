@@ -67,7 +67,7 @@ public sealed class ProviderUsageHoldViewTests
         Assert.Throws<InvalidOperationException>(() => ProviderBudgetHoldSchedules.Evaluate(orphan.Kernel.Goals, hold, Start));
         var row = Assert.Single(ProviderUsageHoldView.Read(fixture.Kernel.Goals, orphan.Kernel.Goals, Start));
         Assert.Null(row.Schedule);
-        Assert.Equal($"  xai::<provider-default> | schedule=unavailable | source={hold.SourceGoalId.Value[..8]}/{hold.SourceTaskId.Value[..8]}",
+        Assert.Equal($"  xai::<provider-default> | schedule=unavailable | source={hold.SourceGoalId.Value[..8]}/{hold.SourceTaskId.Value[..8]} | provider_reset=unknown",
             ProviderUsageHoldView.FormatStatusLine(row));
     }
 
@@ -85,7 +85,7 @@ public sealed class ProviderUsageHoldViewTests
             Attempt = 2, ResetSource = source, LastProbeOutcome = "exhausted",
             NextProbeAt = DateTimeOffset.Parse("2026-10-20T21:03:00-05:00")
         };
-        Assert.Equal($"  xai::<provider-default> | attempt=2 | next_probe=2026-10-21T02:03:00.0000000+00:00 | reset_source={source} | last_probe=exhausted | source={row.Hold.SourceGoalId.Value[..8]}/{row.Hold.SourceTaskId.Value[..8]}",
+        Assert.Equal($"  xai::<provider-default> | attempt=2 | next_probe=2026-10-21T02:03:00.0000000+00:00 | reset_source={source} | last_probe=exhausted | source={row.Hold.SourceGoalId.Value[..8]}/{row.Hold.SourceTaskId.Value[..8]} | provider_reset=unknown",
             ProviderUsageHoldView.FormatStatusLine(row with { Schedule = schedule }));
     }
 

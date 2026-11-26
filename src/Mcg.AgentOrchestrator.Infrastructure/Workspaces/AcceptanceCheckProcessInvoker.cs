@@ -338,7 +338,10 @@ internal static class AcceptanceCheckProcessInvoker
                 captureLimited ? engineSettings.OutputCaptureLimitBytes : null,
                 LaneStallSilence: timedOut && laneStall is { Stopped: true } ? laneStall.Silent : null,
                 LaneStallLimit: timedOut && laneStall is { Stopped: true } ? laneStall.Limit : null, LaneScheduling: sampler?.Summary())
-            { StandardOutput = stdout, ResolvedCommandPath = resolvedCommandPath };
+            {
+                StandardOutput = stdout, ResolvedCommandPath = resolvedCommandPath,
+                LaneToolResolution = heartbeatContext?.RequiresAcceptanceLease == true ? new() : null
+            };
         }
         catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
         {

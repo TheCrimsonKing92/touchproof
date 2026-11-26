@@ -17,7 +17,10 @@ public sealed class ProviderHoldSeedEvidenceReaderTests
             {"Id":"aaaaaaaa000000000000000000000000","Status":"Completed",
              "RefinedSpec":42,"DependsOn":42,"Tasks":[{
                "Id":"task","RequiredRole":"Tester","Status":"Failed","AssignedAgentId":"tester",
-               "LastExecution":42,"LastProcess":42,"CriterionRetryFeedback":42,
+               "LastExecution":42,"CriterionRetryFeedback":42,
+               "LastProcess":{"ProcessId":1234,"Command":"fixture","WorkingDirectory":"C:\\fixture",
+                 "StandardOutputPath":"stdout","StandardErrorPath":"stderr","ExitCodePath":"exit",
+                 "StartedAt":"2026-10-17T11:07:00Z","CompletedAt":null,"ExitCode":null},
                "LastDispatch":{"WorkerName":"fixture","Command":"fixture","WorkingDirectory":"C:\\fixture",
                  "DispatchedAt":"2026-10-17T11:07:00Z","ProviderName":"xAI",
                  "ClaudeCredentialSourceDirectory":"C:\\login","BriefSnapshot":{"invalid":true}},
@@ -30,6 +33,8 @@ public sealed class ProviderHoldSeedEvidenceReaderTests
         var row = await ProviderHoldSeedEvidenceReader.ProjectAsync(id,
             compressed ? GoalSnapshotArchiveCodec.Encode(json) : (object)json, options);
         var task = Assert.Single(row.Tasks);
+        Assert.Equal(new TaskProcessSnapshot(1234, "fixture", @"C:\fixture", "stdout", "stderr", "exit",
+            DateTimeOffset.Parse("2026-10-17T11:07:00Z"), CompletedAt: null, ExitCode: null), task.LastProcess);
         Assert.Equal(@"C:\login", task.LastDispatch!.ClaudeCredentialSourceDirectory);
         Assert.Equal(ProviderFailureKind.BudgetExhausted, task.LastVerification!.ProviderFailureKind);
         Assert.Equal(new[] { id }, ProviderHoldSeedPruning.RequiredGoals([id], [row], new(), []));

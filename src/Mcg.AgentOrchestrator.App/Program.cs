@@ -3,6 +3,11 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+if (args.Length > 0 && args[0] == PreTesterResolverReplayCommand.Name)
+{
+    return PreTesterResolverReplayCommand.Run(args, Console.Error);
+}
+
 if (args.Length > 0 && args[0].Equals(DecisionSnapshotCommand.Name, StringComparison.OrdinalIgnoreCase))
 {
     return await DecisionSnapshotCommand.RunAsync(args, Console.Out, Console.Error);
@@ -141,7 +146,7 @@ try
         return 0;
     }
     if (CliShadowStartCommand.IsCommand(startupArgs))
-        return CliShadowStartCommand.Run(startupArgs, Console.Out, Console.Error);
+        return CliShadowStartCommand.RunFromConsole(startupArgs);
     if (CliArgumentParser.IsAskGoal(startupArgs))
         _ = CliArgumentParser.ParseAskGoalArgs(startupArgs);
 }
@@ -248,6 +253,8 @@ try
 {
     workspace = ResolveSelectedWorkspace(activeProject);
     invocationBinding.Verify(workspace);
+    if (invocationBinding.DisposableFixture && startupArgs.Count > 0 && startupArgs[0] == "conduct")
+        ShadowStartSidecarTracking.InstallForCandidate(workspace.OrchestratorDirectory);
     PlannerCommandSelectorValidation.InstallDefaultSource(DeclaredGateCheckSource.For(workspace.ProjectHomeDirectoryOrNull));
     PlannerTestIdentityListing.InstallDefaultSource(CargoNextestTestIdentityListing.For(workspace.ProjectHomeDirectoryOrNull));
     CliAskGoalCommand.ValidateStartupArguments(startupArgs, workspace);

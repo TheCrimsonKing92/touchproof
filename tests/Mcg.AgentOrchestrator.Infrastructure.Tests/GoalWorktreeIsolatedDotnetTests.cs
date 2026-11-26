@@ -281,13 +281,13 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
         {
             shimLines.Add($">> \"%DOTNET_SHIM_LOG%\" echo delaySeconds={shimDelay.Value.TotalSeconds:0}");
             shimLines.Add(
-                $"powershell.exe -NoProfile -NonInteractive -Command \"Set-Content -LiteralPath $env:DOTNET_SHIM_CHILD_PID -Value $PID; " +
+                $"\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -Command \"Set-Content -LiteralPath $env:DOTNET_SHIM_CHILD_PID -Value $PID; " +
                 $"Set-Content -LiteralPath $env:DOTNET_SHIM_READY_PATH -Value ready; Start-Sleep -Seconds {shimDelay.Value.TotalSeconds:0}\"");
         }
         else if (shimNeverExits)
         {
             shimLines.Add(
-                "powershell.exe -NoProfile -NonInteractive -Command \"Set-Content -LiteralPath $env:DOTNET_SHIM_CHILD_PID -Value $PID; " +
+                "\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -Command \"Set-Content -LiteralPath $env:DOTNET_SHIM_CHILD_PID -Value $PID; " +
                 "Set-Content -LiteralPath $env:DOTNET_SHIM_READY_PATH -Value ready; while ($true) { Start-Sleep -Seconds 60 }\"");
         }
         if (shimDelay.HasValue || shimNeverExits)
@@ -296,8 +296,7 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
         }
         else
         {
-            shimLines.Add("set \"PATH=%DOTNET_REAL_PATH%\"");
-            shimLines.Add("dotnet.exe %*");
+            shimLines.Add("\"%DOTNET_SHIM_HOST%\" %*");
             shimLines.Add("exit /b %ERRORLEVEL%");
         }
         File.WriteAllLines(Path.Combine(shimDirectory, "dotnet.cmd"), shimLines);
@@ -354,9 +353,10 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
         startInfo.ArgumentList.Add("minimal");
         startInfo.ArgumentList.Add("--filter");
         startInfo.ArgumentList.Add("FullyQualifiedName~IsolatedDotnetProbe");
-        var realDotnetPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-        startInfo.Environment["PATH"] = fixture.ShimDirectory + Path.PathSeparator + realDotnetPath;
-        startInfo.Environment["DOTNET_REAL_PATH"] = realDotnetPath;
+        var inheritedPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        startInfo.Environment["PATH"] = fixture.ShimDirectory + Path.PathSeparator + inheritedPath;
+        // cmd.exe can drop an inherited PATH that exceeds its expansion limit.
+        startInfo.Environment["DOTNET_SHIM_HOST"] = InfrastructureTestSupport.ResolveDotnetHostPath();
         startInfo.Environment["DOTNET_SHIM_LOG"] = fixture.DotnetLogPath;
         startInfo.Environment["DOTNET_SHIM_READY_PATH"] = fixture.ShimReadyPath;
         startInfo.Environment["DOTNET_SHIM_CHILD_PID"] = fixture.ShimChildPidPath;

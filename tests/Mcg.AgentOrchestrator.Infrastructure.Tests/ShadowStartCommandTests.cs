@@ -1,5 +1,6 @@
 using System.Text;
 using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.Infrastructure.Tests;
 using Microsoft.Data.Sqlite;
 
 // Parallel-safe. Each test owns its temporary tree and the supervised candidate process.
@@ -40,8 +41,8 @@ public sealed class ShadowStartCommandTests
     public void LateFirstTick_FailsStartupCeilingWhileNormalStartupPasses()
     {
         using var fixture = new Fixture();
-        var failure = fixture.Run("slow", "late", startupSeconds: "8");
-        var success = fixture.Run("normal", "normal", startupSeconds: "8");
+        var failure = fixture.Run("withhold-first-tick", "late", startupSeconds: "8");
+        var success = fixture.Run("normal", "normal");
 
         Assert.NotEqual(0, failure.Exit);
         Assert.Contains("assertion=startup-ceiling", failure.Error);
@@ -69,6 +70,9 @@ public sealed class ShadowStartCommandTests
         private readonly string _root = Directory.CreateTempSubdirectory("shadow-start-").FullName;
         private readonly string _script;
         internal string Source { get; }
+        internal string Registry => Scratch("registry");
+        internal string Staging => Scratch("staging");
+        internal ShadowStartHooks Hooks => new(Registry, Staging, AvailableBytes: _ => long.MaxValue);
 
         internal Fixture()
         {
@@ -94,19 +98,30 @@ public sealed class ShadowStartCommandTests
             create.ExecuteNonQuery();
         }
 
-        internal (int Exit, string Output, string Error) Run(string mode, string scratch, string startupSeconds = "20")
+        internal (int Exit, string Output, string Error) Run(string mode, string scratch, string startupSeconds = "20",
+            string[]? extra = null, ShadowStartHooks? hooks = null, string? marker = null,
+            CancellationToken cancellationToken = default)
         {
             using var output = new StringWriter();
             using var error = new StringWriter();
+            var candidate = mode == "reopen-wal" ? "dotnet" : OperatingSystem.IsWindows() ? "powershell.exe" : "pwsh";
+            string[] candidateArgs = mode == "reopen-wal" ? ReopenWalCandidateArguments(marker) :
+                ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", _script, mode, marker ?? "no-marker"];
             var exit = CliShadowStartCommand.Run(
                 ["shadow-start", "--source", Source, "--scratch", Scratch(scratch),
-                 "--candidate", OperatingSystem.IsWindows() ? "powershell.exe" : "pwsh",
-                 "--candidate-arg=-NoProfile", "--candidate-arg=-NonInteractive",
-                 "--candidate-arg=-ExecutionPolicy", "--candidate-arg=Bypass",
-                 "--candidate-arg=-File", $"--candidate-arg={_script}", $"--candidate-arg={mode}",
-                 "--startup-ceiling-seconds", startupSeconds, "--budget-seconds", "60"],
-                output, error);
+                 "--candidate", candidate, .. candidateArgs.Select(arg => $"--candidate-arg={arg}"),
+                 "--startup-ceiling-seconds", startupSeconds, "--budget-seconds", "60", .. (extra ?? [])],
+                output, error, hooks ?? Hooks, cancellationToken);
             return (exit, output.ToString(), error.ToString());
+        }
+
+        internal static string[] ReopenWalCandidateArguments(string? marker)
+        {
+            var location = DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(typeof(Fixture));
+            Assert.True(location.Directory is not null,
+                $"Supervisor launch probe is missing. Tried: {string.Join(", ", location.TriedPaths)}");
+            return [Path.Combine(location.Directory!, "Mcg.AgentOrchestrator.SupervisorLaunchProbe.dll"),
+                "shadow-reopen-wal", marker ?? "no-marker"];
         }
 
         public void Dispose() => Directory.Delete(_root, recursive: true);
@@ -127,6 +142,7 @@ public sealed class ShadowStartCommandTests
             $rootIndex -lt 0 -or $args[$rootIndex + 1] -ne $root -or
             $stateIndex -lt 0 -or $args[$stateIndex + 1] -ne $state -or
             $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT -ne $root) { exit 3 }
+        if ($args[1] -ne 'no-marker') { [IO.File]::WriteAllText($args[1], 'started') }
         [IO.File]::WriteAllLines((Join-Path $root 'received.txt'), [string[]]($args + @(
             $root, $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT,
             "project=$env:MCG_ORCHESTRATOR_PROJECT", "tenant=$env:MCG_ORCHESTRATOR_TENANT")))
@@ -146,7 +162,10 @@ public sealed class ShadowStartCommandTests
                 throw "Legacy grouped attempt has no lease in $root"
             }
         }
-        if ($mode -eq 'slow') { Start-Sleep -Seconds 30 }
+        if ($mode -eq 'withhold-first-tick') {
+            $release = Join-Path $root '.first-tick-release'
+            while (-not (Test-Path -LiteralPath $release -PathType Leaf)) { Start-Sleep -Milliseconds 25 }
+        }
         Write-Event 'startup-first-tick' 'STARTUP_FIRST_TICK'
         Write-Event 'tick' 'TICK tick=1'
         if ($mode -eq 'stdout-tick') {

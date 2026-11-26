@@ -88,7 +88,7 @@ public sealed partial class GoalAcceptanceVerifier
         var attributionOffset = 0;
         foreach (var item in prepared)
         {
-            var attributionCount = results[item.Index].FailingTestAttributions!.Count;
+            if (results[item.Index].FailingTestAttributions is not { Count: var attributionCount }) continue;
             results[item.Index] = results[item.Index] with
             {
                 FailingTestAttributions = rerunAttributions
