@@ -1096,7 +1096,6 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
 
     private static PreparedAppOutput PrepareRepoProcessAppOutput(string repositoryRoot, bool isolateRuntimeCache = false)
     {
-        var sourceRoot = FindCurrentSourceRoot();
         // The staged closure adds a digest and nested runtime paths. Keep it under a short
         // private temp directory so Windows PowerShell can copy it from a nested worktree.
         var tempDirectory = Directory.CreateTempSubdirectory().FullName;
@@ -1105,18 +1104,10 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
         {
             CopyAppOutput(AppContext.BaseDirectory, appOutput);
             var appDll = Path.Combine(appOutput, "Mcg.AgentOrchestrator.App.dll");
-            var markerPath = appDll + ".git-head";
             Assert.True(File.Exists(appDll), $"Test output does not contain the referenced App assembly: {appDll}");
 
-            var startInfo = CreateRepoScriptStartInfo(sourceRoot, "scripts\\Update-AppDllGitHeadMarker.ps1");
-            startInfo.ArgumentList.Add("-RepositoryRoot");
-            startInfo.ArgumentList.Add(repositoryRoot);
-            startInfo.ArgumentList.Add("-MarkerPath");
-            startInfo.ArgumentList.Add(markerPath);
-            var result = RunRedirectedProcess(startInfo, "Update-AppDllGitHeadMarker.ps1", timeoutMs: 10000);
-
-            Assert.Equal(0, result.ExitCode);
-            Assert.True(File.Exists(markerPath), $"App marker was not prepared before the bounded helper call: {markerPath}");
+            var repositoryHead = RunGitOutput(repositoryRoot, "rev-parse", "--verify", "HEAD");
+            File.WriteAllText(appDll + ".git-head", repositoryHead, Encoding.ASCII);
 
             var resolverStartInfo = CreateRepoScriptStartInfo(repositoryRoot, "scripts\\Resolve-RepoProcessAppDll.ps1");
             resolverStartInfo.ArgumentList.Add("-RepositoryRoot");
