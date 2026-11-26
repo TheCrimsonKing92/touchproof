@@ -284,7 +284,7 @@ if (startupArgs.Count > 0 && startupArgs[0] == AcceptanceJobCustodianHost.Subcom
         Console.Error.WriteLine("Acceptance custody requires explicit workspace binding.");
         return 1;
     }
-    return AcceptanceJobCustodianHost.Run(startupArgs);
+    return AcceptanceJobCustodianHost.Run(startupArgs, workspace.OrchestratorDirectory);
 }
 OrchestratorHome.ExportForDescendants(OrchestratorHome.ResolveForLaunch(repoRoot));
 OrchestratorDataRoot.ExportForDescendants();

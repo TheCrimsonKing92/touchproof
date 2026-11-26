@@ -9,7 +9,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class AcceptanceJobCustodianNative
 {
     // Runs only in App's internal process function, outside the job being held.
-    internal static int Run(TextReader input, TextWriter output, TextWriter error)
+    internal static int Run(TextReader input, TextWriter output, TextWriter error,
+        Func<string, string, SpawnProcessIdentity, JsonElement?>? captureSettlementEvidence = null)
     {
         try
         {
@@ -60,13 +61,14 @@ internal static class AcceptanceJobCustodianNative
             }
             if (request.SettlementPath is { } path)
             {
+                var evidence = captureSettlementEvidence?.Invoke(path, request.JobName, holder);
                 var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 try
                 {
                     using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                         4096, FileOptions.WriteThrough))
                     {
-                        JsonSerializer.Serialize(stream, new AcceptanceJobSettlement(request.JobName, holder, true));
+                        JsonSerializer.Serialize(stream, new AcceptanceJobSettlement(request.JobName, holder, true, evidence));
                         stream.Flush(flushToDisk: true);
                     }
                     File.Move(temporary, path);

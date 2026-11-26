@@ -110,16 +110,19 @@ internal sealed class DurableAcceptanceJob : IDisposable
     public void Dispose() { }
 
     internal static bool HasSettlementReceipt(string? path, string name, SpawnProcessIdentity holder)
+        => ReadSettlementReceipt(path, name, holder) is not null;
+
+    internal static AcceptanceJobSettlement? ReadSettlementReceipt(string? path, string name, SpawnProcessIdentity holder)
     {
-        if (path is null) return false;
+        if (path is null) return null;
         try
         {
             var receipt = JsonSerializer.Deserialize<AcceptanceJobSettlement>(File.ReadAllText(path));
             return receipt is { Settled: true, Holder: not null } && receipt.JobName == name &&
-                ProcessImageResolution.SameProcess(receipt.Holder, holder);
+                ProcessImageResolution.SameProcess(receipt.Holder, holder) ? receipt : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
-        { return false; }
+        { return null; }
     }
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -131,4 +134,6 @@ internal sealed class DurableAcceptanceJob : IDisposable
 }
 
 internal sealed record AcceptanceJobObservation(bool HolderMatches, bool Settled, string Detail);
-internal sealed record AcceptanceJobSettlement(string JobName, SpawnProcessIdentity Holder, bool Settled);
+internal sealed record AcceptanceJobSettlement(string JobName, SpawnProcessIdentity Holder, bool Settled,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    JsonElement? Evidence = null);

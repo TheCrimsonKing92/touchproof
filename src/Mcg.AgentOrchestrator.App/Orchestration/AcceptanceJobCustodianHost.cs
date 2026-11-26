@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -6,6 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class AcceptanceJobCustodianHost
 {
     internal const string Subcommand = "__acceptance-custodian";
+    private const string CaptureShadowSidecars = "--capture-shadow-sidecars";
 
     internal static AcceptanceJobCustodianLaunchSpecification Bind(OrchestratorWorkspace workspace) =>
         Bind(Environment.ProcessPath, typeof(AcceptanceJobCustodianHost).Assembly.Location,
@@ -50,7 +52,7 @@ internal static class AcceptanceJobCustodianHost
         return new(host,
             [application, "--repository-root", scratch, "--expected-state-directory", state,
              "--project", OrchestratorWorkspace.DefaultProjectName, "--tenant", OrchestratorWorkspace.DefaultTenantName,
-             Subcommand], scratch, new Dictionary<string, string>
+             Subcommand, CaptureShadowSidecars], scratch, new Dictionary<string, string>
             {
                 [OrchestratorWorkspace.RepoRootEnvironmentVariable] = scratch,
                 [OrchestratorDataRoot.EnvironmentVariable] = Path.Combine(scratch, "data"),
@@ -76,9 +78,12 @@ internal static class AcceptanceJobCustodianHost
         return host;
     }
 
-    internal static int Run(IReadOnlyList<string> args)
+    internal static int Run(IReadOnlyList<string> args, string state)
     {
-        if (args.Count != 1 || args[0] != Subcommand)
+        if (args is [Subcommand, CaptureShadowSidecars])
+            return AcceptanceJobCustodianNative.Run(Console.In, Console.Out, Console.Error,
+                (path, job, holder) => ShadowStartRunRegistry.CaptureSettlementSidecars(path, job, holder, state));
+        if (args is not [Subcommand])
         {
             Console.Error.WriteLine("Invalid acceptance custody command.");
             return 1;

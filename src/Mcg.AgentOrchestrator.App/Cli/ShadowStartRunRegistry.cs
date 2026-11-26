@@ -31,6 +31,7 @@ internal sealed record ShadowStartCleanup(string Status, string? Reason, long Mi
 
 internal sealed class ShadowStartRunRegistry : IDisposable
 {
+    private const string SettlementSuffix = ".settlement.json";
     private readonly string _directory;
     private readonly FileStream _lease;
 
@@ -43,8 +44,30 @@ internal sealed class ShadowStartRunRegistry : IDisposable
 
     internal string RecordPath(Guid id) => Path.Combine(_directory, $"{id:N}.run.json");
     internal string ReceiptPath(Guid id) => Path.Combine(_directory, $"{id:N}.receipt.json");
-    internal string SettlementPath(Guid id) => Path.Combine(_directory, $"{id:N}.settlement.json");
+    internal string SettlementPath(Guid id) => Path.Combine(_directory, $"{id:N}{SettlementSuffix}");
     internal void Save(ShadowStartRun run) => WriteJson(RecordPath(run.Id), run);
+
+    internal static JsonElement? CaptureSettlementSidecars(string path, string jobName, SpawnProcessIdentity holder,
+        string state)
+    {
+        if (!path.EndsWith(SettlementSuffix, StringComparison.Ordinal)) return null;
+        try
+        {
+            var run = JsonSerializer.Deserialize<ShadowStartRun>(File.ReadAllText(path[..^SettlementSuffix.Length] + ".run.json"));
+            if (run is not { Phase: ShadowStartPhase.Running, CandidateMayCreateSidecars: true } ||
+                !IsValid(run, Path.GetDirectoryName(path)!) || !PathsEqual(run.State, state) ||
+                Path.GetFileName(path) != $"{run.Id:N}{SettlementSuffix}" || run.JobName != jobName ||
+                ReadCandidateIdentity(run) is not { } candidate || !ProcessImageResolution.SameProcess(candidate, holder))
+                return null;
+
+            return JsonSerializer.SerializeToElement(ShadowStartReclaimer.CaptureCandidateSidecars(run));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception or JsonException)
+        {
+            // A settlement without file evidence can still establish release. Cleanup verifies file identities separately.
+            return null;
+        }
+    }
 
     internal void Recover(string protectedSource, TextWriter diagnostics)
     {
@@ -53,7 +76,7 @@ internal sealed class ShadowStartRunRegistry : IDisposable
             try
             {
                 var run = JsonSerializer.Deserialize<ShadowStartRun>(File.ReadAllText(path));
-                if (run is null || !PathsEqual(RecordPath(run.Id), path) || !IsValid(run))
+                if (run is null || !PathsEqual(RecordPath(run.Id), path) || !IsValid(run, _directory))
                     throw new IOException("Invalid disposable ownership record.");
                 if (run.Phase == ShadowStartPhase.Reclaimed) continue;
 
@@ -82,9 +105,11 @@ internal sealed class ShadowStartRunRegistry : IDisposable
     }
 
     private bool HasCandidateSettlement(ShadowStartRun run) =>
-        ReadCandidateIdentity(run) is { } identity &&
-        DurableAcceptanceJob.HasSettlementReceipt(SettlementPath(run.Id), run.JobName,
-            identity);
+        ReadCandidateSettlement(run) is not null;
+
+    private AcceptanceJobSettlement? ReadCandidateSettlement(ShadowStartRun run) =>
+        ReadCandidateIdentity(run) is { } identity
+            ? DurableAcceptanceJob.ReadSettlementReceipt(SettlementPath(run.Id), run.JobName, identity) : null;
 
     private static SpawnProcessIdentity? ReadCandidateIdentity(ShadowStartRun run) =>
         run is { CandidatePid: { } pid, CandidateStarted: { } started, CandidateImagePath: { } image } &&
@@ -99,7 +124,7 @@ internal sealed class ShadowStartRunRegistry : IDisposable
         JsonObject? document = null;
         try
         {
-            if (reason is null && !IsValid(run))
+            if (reason is null && !IsValid(run, _directory))
                 reason = "containment";
             if (measurement is not null || !File.Exists(receipt))
             {
@@ -127,10 +152,13 @@ internal sealed class ShadowStartRunRegistry : IDisposable
                     reason = "release-unverifiable-platform";
                 else
                 {
+                    var candidateSidecars = run.CandidateMayCreateSidecars
+                        ? ReadCandidateSettlement(run)?.Evidence?.Deserialize<Dictionary<string, ShadowFileIdentity>>()
+                        : null;
                     // Save the proof first so a crash during deletion can retry without a vanished job handle.
                     run = run with { Phase = ShadowStartPhase.Released };
                     Save(run);
-                    ShadowStartReclaimer.DeleteStores(run);
+                    ShadowStartReclaimer.DeleteStores(run, candidateSidecars);
                     run = run with { Phase = ShadowStartPhase.Reclaimed };
                 }
             }
@@ -185,7 +213,7 @@ internal sealed class ShadowStartRunRegistry : IDisposable
         return journal;
     }
 
-    private bool IsValid(ShadowStartRun run) =>
+    private static bool IsValid(ShadowStartRun run, string registryDirectory) =>
         run.Id != Guid.Empty && run is { Intent: ShadowScratchRetention.Disposable, OwnerPid: > 0 } &&
         run.OwnerStarted != default &&
         run.Phase is >= ShadowStartPhase.Copying and <= ShadowStartPhase.Reclaimed &&
@@ -195,8 +223,8 @@ internal sealed class ShadowStartRunRegistry : IDisposable
         PathsEqual(run.State, Path.Combine(run.Scratch, ".orchestrator")) &&
         PathsEqual(Path.GetFileName(run.Staging), run.Id.ToString("N")) &&
         !Overlaps(run.Source, run.Scratch) && !Overlaps(run.Source, run.Staging) &&
-        !Overlaps(run.Scratch, run.Staging) && !Overlaps(_directory, run.Scratch) &&
-        !Overlaps(_directory, run.Staging) && !Overlaps(_directory, run.Source) &&
+        !Overlaps(run.Scratch, run.Staging) && !Overlaps(registryDirectory, run.Scratch) &&
+        !Overlaps(registryDirectory, run.Staging) && !Overlaps(registryDirectory, run.Source) &&
         run.Databases is not null && run.Databases.Distinct(StringComparer.OrdinalIgnoreCase).Count() == run.Databases.Length &&
         run.Databases.All(name => ShadowStartCopyPlan.DatabaseNames.Contains(name, StringComparer.Ordinal));
 

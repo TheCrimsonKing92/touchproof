@@ -61,8 +61,12 @@ public sealed class ShadowStartCrashRecoveryTests
             JsonSerializer.Deserialize<ShadowStartRun>(File.ReadAllText(registry.RecordPath(released.Id)))!.Phase);
     }
 
-    [Fact]
-    public async Task RecoveryUsesSettlementAfterTheOuterJobClosesAndCustodianExits()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("-journal")]
+    [InlineData("-wal")]
+    [InlineData("-shm")]
+    public async Task RecoveryUsesSettlementAfterTheOuterJobClosesAndCustodianExits(string? foreignSuffix)
     {
         if (!OperatingSystem.IsWindows()) return;
         using var fixture = new ShadowStartCommandTests.Fixture();
@@ -119,6 +123,28 @@ public sealed class ShadowStartCrashRecoveryTests
             Assert.Contains("cleanup_reason=sharing-violation", locked.ToString());
             Assert.True(File.Exists(database));
             Assert.True(Directory.Exists(run.Staging));
+        }
+
+        if (foreignSuffix is not null)
+        {
+            var foreign = database + foreignSuffix;
+            var displaced = foreign + ".settled";
+            if (File.Exists(foreign)) File.Move(foreign, displaced);
+            File.WriteAllText(foreign, "foreign sidecar after settlement");
+
+            // The release proof is already durable. Retries must not adopt identities from scratch.
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                var deferred = new StringWriter();
+                registry.Recover(fixture.Source, deferred);
+                Assert.Equal("foreign sidecar after settlement", File.ReadAllText(foreign));
+                Assert.Contains($"Store file identity mismatch: {foreign}", deferred.ToString());
+                Assert.True(File.Exists(database));
+                Assert.True(File.Exists(Path.Combine(run.Staging, "state.db")));
+            }
+
+            File.Delete(foreign);
+            if (File.Exists(displaced)) File.Move(displaced, foreign);
         }
 
         var diagnostics = new StringWriter();
