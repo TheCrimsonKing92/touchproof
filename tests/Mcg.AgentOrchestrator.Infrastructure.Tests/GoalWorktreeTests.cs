@@ -312,9 +312,9 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
         CreateSeededGitRepository();
 
     private protected static string CreateReducedAcceptanceCohortRepository(
-        bool renameInitialBranchToMain = true)
+        bool renameInitialBranchToMain = true, string? containerParent = null)
     {
-        var repo = CreateSeededGitRepository(renameInitialBranchToMain);
+        var repo = CreateSeededGitRepository(renameInitialBranchToMain, containerParent);
         var statePath = OrchestratorWorkspace.ForDirectory(repo).SqliteStatePath;
         Directory.CreateDirectory(Path.GetDirectoryName(statePath)!);
         File.WriteAllBytes(statePath, MigratedStateTemplate.Value.ToArray());
