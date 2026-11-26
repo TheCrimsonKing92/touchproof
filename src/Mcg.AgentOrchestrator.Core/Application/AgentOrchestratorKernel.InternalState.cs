@@ -80,7 +80,9 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         if (task.LastVerification is { } contractRecord &&
-            !WorkerResultBlockers.AssessSubscriptionVerification(task, contractRecord).AllowsCompletion)
+            !WorkerResultBlockers.AssessSubscriptionVerification(task, contractRecord).AllowsCompletion &&
+            (contractRecord.CompletionVerdictVerifiedSuccess ||
+                !DirtyDispatchEvidence.IsRecoverableDirtyDispatch(task.RequiredRole, contractRecord)))
             return new TaskVerificationGate(task.Id, task.RequiredRole, task.Description, task.Status,
                 VerificationGateStatus.FailedVerification, "Subscription verification terminal contract is incomplete; retry the same role.",
                 VerificationGateReason.VerificationFailed);

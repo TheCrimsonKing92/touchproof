@@ -28,26 +28,31 @@ internal static class CliProviderResetCommand
         var target = parts[1];
         var agent = context.Agents.FirstOrDefault(item => item.Id.Value.Equals(target, StringComparison.OrdinalIgnoreCase));
         if (agent is not null) target = agent.Model.ProviderName;
-        var holds = new Dictionary<string, ProviderBudgetExhaustionHold>(StringComparer.OrdinalIgnoreCase);
+        var holds = new Dictionary<SubscriptionLimitEvidence.ProviderBindingKey, ProviderBudgetExhaustionHold>();
         holdMemo ??= new ProviderBudgetHoldMemo(context.Kernel.Goals);
-        foreach (var dispatch in context.Kernel.Goals.SelectMany(goal => goal.Tasks).SelectMany(task => task.DispatchHistory))
+        var bindings = context.Kernel.Goals.SelectMany(goal => goal.Tasks).SelectMany(task => task.DispatchHistory)
+            .Select(dispatch => ProviderHoldBinding.From(dispatch))
+            .Concat(ProviderHoldBinding.Candidates(context.Kernel.Goals))
+            .DistinctBy(binding => binding.ScopedKey);
+        foreach (var binding in bindings)
         {
-            var provider = dispatch.ProviderName ?? dispatch.WorkerName;
-            if (!holdMemo.TryGet(provider, dispatch.ClaudeCredentialSourceDirectory, out var hold)) continue;
-            if (provider.Equals(target, StringComparison.OrdinalIgnoreCase) || hold.BindingKey.Equals(target, StringComparison.OrdinalIgnoreCase))
-                holds.TryAdd(hold.BindingKey, hold);
+            if (!holdMemo.TryGetExact(binding, out var hold)) continue;
+            if (binding.Provider.Equals(target, StringComparison.OrdinalIgnoreCase) || hold.BindingKey.Equals(target, StringComparison.OrdinalIgnoreCase))
+                holds.TryAdd(binding.ScopedKey, hold);
         }
         if (holds.Count == 0) throw new ArgumentException($"no-current-hold: {parts[1]}");
-        if (holds.Count > 1) throw new ArgumentException($"ambiguous-binding: {string.Join(", ", holds.Keys.Order(StringComparer.OrdinalIgnoreCase))}");
+        if (holds.Count > 1) throw new ArgumentException($"ambiguous-binding: {string.Join(", ", holds.Values.Select(hold => hold.BindingKey).Order(StringComparer.OrdinalIgnoreCase))}");
         var selected = holds.Values.Single();
         var sourceTerminal = context.Kernel.Goals.Any(goal => goal.Id == selected.SourceGoalId && goal.IsTerminal);
         var attribution = CliPersistentStateRunner.ResolveOperatorIntentAttribution(parts,
             CliPersistentStateRunner.OperatorIntentSubmissionSource.Cli);
+        var payload = new ProviderResetOperatorIntentPayload(selected.BindingKey, resetAt.ToUniversalTime(), rationale)
+            { BindingIdentity = selected.BindingIdentity };
         var id = Guid.NewGuid().ToString("N");
         var intent = new OperatorIntentRecord(id, GetFlagValue(parts, "--idempotency-key") ?? id,
             OperatorIntentVerbs.ProviderReset, sourceTerminal ? OperatorIntentScopes.Workspace : selected.SourceGoalId.Value,
             sourceTerminal ? null : selected.SourceTaskId.Value,
-            JsonSerializer.Serialize(new ProviderResetOperatorIntentPayload(selected.BindingKey, resetAt.ToUniversalTime(), rationale), OperatorIntentJson.Options),
+            JsonSerializer.Serialize(payload, OperatorIntentJson.Options),
             [], attribution.Actor, attribution.Channel, attribution.AuthenticationAssurance,
             DateTimeOffset.UtcNow, ActorKind: attribution.ActorKind);
         var persisted = (intentStore ?? SqliteOperatorIntentStore.ForDirectories(

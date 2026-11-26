@@ -349,10 +349,12 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
         Assert.Equal(ProgressKind.TaskNote, note.Kind);
         Assert.Equal(requester.Id, note.TaskId);
         var expectedReceipts = resolved.Select(finding => finding.EvidenceOutcome!.ReceiptId!)
-            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal);
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         Assert.Equal($"FINDING_RECEIPT_CLOSURE task={requester.Id.Value[..8]} " +
             $"findings={string.Join(',', findingIds.Order(StringComparer.Ordinal))} " +
-            $"receipts={string.Join(',', expectedReceipts)} candidate={CandidateSha}; no worker dispatched", note.Message);
+            $"receipts={string.Join(',', expectedReceipts)} candidate={CandidateSha} " +
+            $"candidate_counts={string.Join(',', expectedReceipts.Select(id => $"{id}:executed=1:passed=1"))}; no worker dispatched",
+            note.Message);
     }
 
     internal sealed class ClosureFixture : IDisposable

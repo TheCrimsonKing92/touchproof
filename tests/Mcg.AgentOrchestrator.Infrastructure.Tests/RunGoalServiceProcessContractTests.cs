@@ -77,7 +77,7 @@ public sealed class RunGoalServiceProcessContractTests
     {
         var plan = WorkerDispatchTestSupport.ResearcherContractFixture() + Environment.NewLine +
             WorkerDispatchTestSupport.PlannerContractPlanFixture().Replace(
-            "`seed.txt`, ",
+            "`./seed.txt`, ",
             string.Empty,
             StringComparison.Ordinal);
         var encodedPlan = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(plan));

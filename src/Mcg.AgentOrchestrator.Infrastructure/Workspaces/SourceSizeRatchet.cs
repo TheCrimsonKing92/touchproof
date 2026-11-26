@@ -72,7 +72,7 @@ internal static class SourceSizeRatchet
             // Goal ebfd52d3 integration retains the extracted manifest identity and binds pool settings; measured, no headroom.
             // Goal 0bc1199a: one line binds build receipt recording; logic lives in BuildReceiptSite.
             // Goal e7e044fe: four net lines bind the attempt session and lane transform; selection logic is extracted.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 3911),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 3908),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             // Goal 402c1005 moved TRX completion inspection and shard decisions into AcceptanceShardCompletionAdjudicator.
             // Goal ad3fafc0 extracted run ownership publication and stale-receipt clearing into AcceptanceTestRunPreparation.
@@ -84,7 +84,7 @@ internal static class SourceSizeRatchet
             // Goal 78053cf4 capture custody collaborator measured at 378 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.CaptureCustody.cs", 322),
             // Goal c60a7cb5 split focused-evidence request resolution into its own type.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.FocusedEvidenceRequestResolver.cs", 616),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.FocusedEvidenceRequestResolver.cs", 611),
             // Goal e3bb2a77 extracted acceptance child invocation into its own owner.
             // Goal 6a75c73d records the host test-settings binding after process start succeeds; its request
             // property moved with the request record into AcceptanceProcessRequest.cs (goal 18718c48).
@@ -161,7 +161,7 @@ internal static class SourceSizeRatchet
             // Goal eade84cb preserves published cohort receipts while holder cleanup still reserves capacity.
             // Custody remains separately owned; after integrating main f34678bcb, measured 645 lines, with no extra headroom.
             // Goal f608f29b: two admission call-site lines; probe/cache/hold logic lives in EnvironmentContractGate.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs", 624),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs", 595),
             // Goal 5a07b0d6 retains three orchestration lines carrying reattached receipt ids to the
             // closure-first route; the reused-green branch owns this delivery handoff, not receipt selection.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 638),
@@ -363,7 +363,7 @@ internal static class SourceSizeRatchet
             // preparation and delivered through this shared context boundary; keep that dispatch binding
             // beside the existing task-package preparation until the planned preflight extraction.
             // ed4b8637 adds one dispatch boundary check to preserve the explicit inventory effort.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2429),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2420),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.
@@ -391,7 +391,7 @@ internal static class SourceSizeRatchet
             // for outcome/compatibility mutations; parsing and application live in dedicated collaborators.
             // Goal 9d55c9bf adds four lines to classify dogfood-log list at the existing kernel-state route seam;
             // extracting this single switch case would split route ownership. No additional headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 2990), // Goal e986e021: guard startup effects against copied paths.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 2987), // Goal e986e021: guard startup effects against copied paths.
             // Goal 03aaf13e adds the explicit-root isolation fact at the verifier's existing execution-
             // environment seam; the production verifier remains at its prior ceiling.
             // Goal 56ff780e keeps passed/failed/unknown shard-completion producer coverage in its owning
@@ -586,7 +586,7 @@ internal static class SourceSizeRatchet
             // Goal 35c35d6d: three delegation lines connect diagnosis owned by a separate coordinator.
             // Goal 7ca0990d: two wiring lines carry the exact train plan and scoped admission reservation; same partials.
             // Goal ed4b8637 wires the explicit inventory execution hold into failed-goal recovery (+3 lines).
-            new SourceClassCeiling("ConductorDriver", 13372, 67),
+            new SourceClassCeiling("ConductorDriver", 13366, 67),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -662,7 +662,7 @@ internal static class SourceSizeRatchet
             // Goal 6a75c73d captures host settings at the single configuration read and reports invalid local overrides.
             // Goal 0bc1199a: one added receipt-site binding line across the existing partials.
             // Goal e7e044fe: four net integration lines, no additional partial type.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 6595, 17),
+            new SourceClassCeiling("GoalAcceptanceVerifier", 6593, 17),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
@@ -699,7 +699,7 @@ internal static class SourceSizeRatchet
             // recording remains in AnsweredOperatorHumanInputRecorder and existing callers default to Other.
             // Goal bc361051: carry the dispatch failure payload through existing timeline recording boundaries.
             // Goal 350ad330: declaration mutation and brief-section call; rendering remains in its own type.
-            new SourceClassCeiling("AgentOrchestratorKernel", 8937, 27),
+            new SourceClassCeiling("AgentOrchestratorKernel", 8934, 27),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
@@ -753,7 +753,7 @@ internal static class SourceSizeRatchet
             // the command owns intent submission. After integrating main, measured 5972 lines in the same 18 partials; no headroom.
             // Goal 9d55c9bf adds the same four-line dogfood-log list case in the owning route classifier;
             // keep classification centralized across the same 18 partial files. No additional headroom.
-            new SourceClassCeiling("CliPersistentStateRunner", 4125, 17), // Goal e986e021: guard startup effects against copied paths.
+            new SourceClassCeiling("CliPersistentStateRunner", 4122, 17), // Goal e986e021: guard startup effects against copied paths.
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
             // (2026-10-09 console architecture review, finding 4, taming slice 13).
             // Goal c0ff6203 extracts six small text views (taming slice 14).

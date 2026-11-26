@@ -1,3 +1,4 @@
+using System.Globalization;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using static Mcg.AgentOrchestrator.App.Orchestration.ConductorDriver;
@@ -22,18 +23,30 @@ internal static class FindingReceiptClosureCoordinator
         var closable = diagnosis.ClosableFindings;
         var prior = currentTask.LastVerification!;
         var reviewedSha = prior.ReviewedCommit!.Trim();
+        var countsByReceipt = closable.Select(pair => pair.Receipt)
+            .DistinctBy(receipt => receipt.ReceiptId, StringComparer.Ordinal)
+            .ToDictionary(receipt => receipt.ReceiptId, CandidateCounts, StringComparer.Ordinal);
+        var receiptIds = countsByReceipt.Keys.Order(StringComparer.Ordinal).ToArray();
         var resolved = closable.ToDictionary(pair => pair.Finding.StableId, pair =>
-            pair.Finding with
+        {
+            var counts = countsByReceipt[pair.Receipt.ReceiptId];
+            return pair.Finding with
             {
                 State = ReviewFindingState.Resolved,
                 Description = $"Closed by conductor receipt closure: receipt {pair.Receipt.ReceiptId}; " +
                     $"request {pair.Finding.EvidenceOutcome!.RequestedSelectionIdentity ?? BuildFindingEvidenceIdentity(pair.Receipt.Request)}; " +
-                    $"candidate {reviewedSha}."
-            }, StringComparer.Ordinal);
+                    $"candidate {reviewedSha}; Candidate counts (executed={counts.Executed}, passed={counts.Passed})."
+            };
+        }, StringComparer.Ordinal);
+        var countsInNote = receiptIds.Select(id =>
+        {
+            var counts = countsByReceipt[id];
+            return $"{id}:executed={counts.Executed}:passed={counts.Passed}";
+        });
         var note = $"FINDING_RECEIPT_CLOSURE task={taskId.Value[..8]} " +
             $"findings={string.Join(',', resolved.Keys.Order(StringComparer.Ordinal))} " +
-            $"receipts={string.Join(',', closable.Select(pair => pair.Receipt.ReceiptId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))} " +
-            $"candidate={reviewedSha}{OutsideDiffFindingRerun.FormatClosureDecision(closable)}; no worker dispatched";
+            $"receipts={string.Join(',', receiptIds)} candidate={reviewedSha} " +
+            $"candidate_counts={string.Join(',', countsInNote)}{OutsideDiffFindingRerun.FormatClosureDecision(closable)}; no worker dispatched";
         kernel.RecordTaskVerification(goal.Id, taskId, new TaskVerificationRecord(
             "conductor finding-receipt-closure", prior.WorkingDirectory, 0, OutsideDiffFindingRerun.ClosureOutput(note, resolved.Values), "", utcNow(),
             ReviewedCommit: reviewedSha,
@@ -49,5 +62,16 @@ internal static class FindingReceiptClosureCoordinator
         observation = FailedGoalFindingObservation.Observed(
             FailedGoalFindingObservationKind.FindingEvidencePending, note);
         return true;
+    }
+
+    private static (string Executed, string Passed) CandidateCounts(FindingEvidenceReceipt receipt)
+    {
+        var arm = receipt.Arms!.First(arm => arm.Arm == FindingEvidenceArm.Candidate);
+        if (arm.ExecutedTestCount is not { } executed)
+            return ("unknown", "unknown");
+
+        var failures = (arm.FailingTestIdentities ?? []).Distinct(StringComparer.Ordinal).Count();
+        var passed = Math.Max(0, executed - failures);
+        return (executed.ToString(CultureInfo.InvariantCulture), passed.ToString(CultureInfo.InvariantCulture));
     }
 }

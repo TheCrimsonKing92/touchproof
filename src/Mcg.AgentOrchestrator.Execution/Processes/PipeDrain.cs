@@ -17,6 +17,7 @@ internal sealed class PipeDrain
 
     // Populated by the byte-stream overload, before decoding (including preambles/partial chars).
     internal long ReceivedByteCount => Interlocked.Read(ref _receivedByteCount);
+    internal string? Failure => _failure;
 
     private PipeDrain(TextReader reader, string name)
     {
@@ -35,14 +36,14 @@ internal sealed class PipeDrain
     }
 
     // The caller supplies an unread stream and retains ownership, as with the TextReader overload.
-    internal static PipeDrain Start(Stream stream, Encoding encoding, string name)
+    internal static PipeDrain Start(Stream stream, Encoding encoding, string name, bool detectByteOrderMarks = true)
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(encoding);
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         PipeDrain? drain = null;
         var counted = new ReceivedStream(stream, count => Interlocked.Add(ref drain!._receivedByteCount, count));
-        var reader = new StreamReader(counted, encoding, detectEncodingFromByteOrderMarks: true,
+        var reader = new StreamReader(counted, encoding, detectEncodingFromByteOrderMarks: detectByteOrderMarks,
             bufferSize: 4096, leaveOpen: true);
         drain = new PipeDrain(reader, name);
         drain._thread.Start();
@@ -129,7 +130,7 @@ internal sealed class PipeDrain
                 }
             }
         }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException or DecoderFallbackException)
         {
             _failure = ex.GetType().Name + ": " + ex.Message;
         }

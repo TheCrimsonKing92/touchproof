@@ -30,6 +30,7 @@ public sealed class ProviderResetTerminalSourceTests
         Assert.Null(intent.TaskId);
         var payload = JsonSerializer.Deserialize<ProviderResetOperatorIntentPayload>(intent.PayloadJson, OperatorIntentJson.Options)!;
         Assert.Equal(Binding, payload.BindingKey);
+        Assert.Equal(new SubscriptionLimitEvidence.ProviderBindingKey(Binding, "provider-only"), payload.BindingIdentity);
         Assert.Equal(ResetAt, payload.ResetAt);
         Assert.Equal(Rationale, payload.Rationale);
         Assert.Empty(await fixture.Store.ListForGoalAsync(fixture.Source.Id.Value));
@@ -73,10 +74,14 @@ public sealed class ProviderResetTerminalSourceTests
         var note = after.Timeline.Last();
         Assert.Equal(ProgressKind.TaskNote, note.Kind);
         Assert.Equal(fixture.Hold.SourceTaskId.Value, note.TaskId);
-        Assert.Equal($"PROVIDER_BUDGET_RESET binding=xai::<provider-default> reset_at=2026-10-21T02:03:00.0000000+00:00 source=operator intent={intent.Id}", note.Message);
         Assert.Equal(fixture.Clock.UtcNow, note.OccurredAt);
         var retained = Assert.Single(fixture.Kernel.ProviderHoldHistory.Retained);
         var storedGoal = (await fixture.Repository.LoadGoalsAsync([fixture.Source.Id])).GetGoal(fixture.Source.Id);
+        Assert.True(ProviderBudgetHoldSchedules.TryParseReset(storedGoal.Timeline.Last(), out var marker));
+        Assert.Equal(Binding, marker.BindingKey);
+        Assert.Equal(ResetAt, marker.ResetAt);
+        Assert.Equal(intent.Id, marker.IntentId);
+        Assert.Equal(new SubscriptionLimitEvidence.ProviderBindingKey(Binding, "provider-only"), marker.BindingIdentity);
         Assert.Equal(Serialize(storedGoal.Timeline), Serialize(retained.Timeline));
 
         var restarted = fixture.Restart();
@@ -85,6 +90,39 @@ public sealed class ProviderResetTerminalSourceTests
         Assert.Equal(fixture.Schedule(), fixture.Schedule(restarted));
         AssertOperatorSchedule(fixture.Schedule(restarted));
         Assert.Contains("next_probe=2026-10-21T02:03:00.0000000+00:00; reset_source=operator", fixture.Finding(restarted));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WorkspaceApply_KeepsQueuedIdentityWhenAnotherTerminalHoldHasSameKey(bool originalCleared)
+    {
+        using var fixture = new Fixture();
+        await fixture.Initialize();
+        await fixture.Submit();
+        var intent = Assert.Single(await fixture.Store.ListForGoalAsync(OperatorIntentScopes.Workspace));
+        if (originalCleared) fixture.Succeed();
+        var other = await fixture.AddTerminalRefusal("<provider-default>");
+        Assert.Equal(fixture.Hold.BindingKey, other.BindingKey);
+        Assert.NotEqual(fixture.Hold.BindingIdentity, other.BindingIdentity);
+        var otherBefore = await fixture.Repository.LoadGoalAsync(other.SourceGoalId);
+        Assert.NotNull(otherBefore);
+
+        var result = Assert.Single(fixture.Coordinator().ExecuteWorkspacePending(fixture.Kernel));
+
+        Assert.Equal(Serialize(otherBefore), Serialize(await fixture.Repository.LoadGoalAsync(other.SourceGoalId)));
+        Assert.Equal("backoff", ProviderBudgetHoldSchedules.Evaluate(fixture.Kernel.ProviderHoldScope, other, fixture.Clock.UtcNow).ResetSource);
+        if (originalCleared)
+        {
+            Assert.EndsWith("result=rejected reason=no-current-hold", result);
+            Assert.Empty(ResetNotes(fixture.Kernel, intent.Id));
+        }
+        else
+        {
+            Assert.EndsWith("result=applied", result);
+            Assert.Equal(fixture.Source.Id, Assert.Single(ResetNotes(fixture.Kernel, intent.Id)).GoalId);
+            AssertOperatorSchedule(fixture.Schedule());
+        }
     }
 
     [Fact]
@@ -264,18 +302,7 @@ public sealed class ProviderResetTerminalSourceTests
             Repository = InfrastructureTestSupport.CreateMigratedStateRepository(Workspace.SqliteStatePath);
             Store = SqliteOperatorIntentStore.ForDirectories(Workspace.OrchestratorDirectory, Workspace.LogDirectory);
             Agents = [ProviderHoldAgentSubstitutionTests.Scenario.Agent("xai-tester", "xAI", "grok-cli", "grok-4.7")];
-            Source = Kernel.CreateGoal("Hold source", [new TaskSpec(TaskId.New(), "Verify", AgentRole.Tester)]);
-            Kernel.ActivateGoal(Source.Id, Agents);
-            var dispatchedAt = Clock.UtcNow;
-            Kernel.RecordTaskDispatch(Source.Id, Source.Tasks.Single().Id, new("grok-cli", "grok", Root, dispatchedAt,
-                ProviderName: "xAI", ModelName: "grok-4.7", AssignedAgentId: Agents.Single().Id.Value));
-            Clock.UtcNow = dispatchedAt.AddMinutes(1);
-            const string stderr = "API error (status 402 Payment Required): Grok Build usage balance exhausted";
-            Kernel.RecordTaskVerification(Source.Id, Source.Tasks.Single().Id, new("grok", Root, 1, "", stderr, Clock.UtcNow,
-                ProviderFailureKind: WorkerProviderCatalog.Default().ResolveProfile("grok-cli").ParseOutcome(new(1, "", stderr)),
-                DispatchStartedAt: dispatchedAt));
-            Kernel.ReportTaskProgress(Source.Id, Source.Tasks.Single().Id, WorkTaskStatus.Failed, "Fixture provider failure.");
-            Assert.Equal(GoalStatus.Active, Source.Status);
+            Source = RecordRefusal(null);
             Assert.True(ProviderBudgetHoldSchedules.TryGetHoldByBindingKey(Kernel.ProviderHoldScope, Binding, out var hold));
             Hold = hold;
             Target = Kernel.CreateGoal("Dispatch target", [new TaskSpec(TaskId.New(), "Verify", AgentRole.Tester)]);
@@ -283,6 +310,36 @@ public sealed class ProviderResetTerminalSourceTests
             Clock.UtcNow = DateTimeOffset.Parse("2026-10-17T11:40:00Z");
             _textPath = Path.Combine(Root, "rationale.txt");
             File.WriteAllText(_textPath, Rationale);
+        }
+
+        private Goal RecordRefusal(string? credential)
+        {
+            var goal = Kernel.CreateGoal("Hold source", [new TaskSpec(TaskId.New(), "Verify", AgentRole.Tester)]);
+            Kernel.ActivateGoal(goal.Id, Agents);
+            var task = goal.Tasks.Single().Id;
+            var dispatchedAt = Clock.UtcNow;
+            Kernel.RecordTaskDispatch(goal.Id, task, new("grok-cli", "grok", Root, dispatchedAt,
+                ProviderName: "xAI", ModelName: "grok-4.7", AssignedAgentId: Agents.Single().Id.Value,
+                ClaudeCredentialSourceDirectory: credential));
+            Clock.UtcNow = dispatchedAt.AddMinutes(1);
+            const string stderr = "API error (status 402 Payment Required): Grok Build usage balance exhausted";
+            Kernel.RecordTaskVerification(goal.Id, task, new("grok", Root, 1, "", stderr, Clock.UtcNow,
+                ProviderFailureKind: WorkerProviderCatalog.Default().ResolveProfile("grok-cli").ParseOutcome(new(1, "", stderr)),
+                DispatchStartedAt: dispatchedAt));
+            Kernel.ReportTaskProgress(goal.Id, task, WorkTaskStatus.Failed, "Fixture provider failure.");
+            Assert.Equal(GoalStatus.Active, goal.Status);
+            return goal;
+        }
+
+        internal async Task<ProviderBudgetExhaustionHold> AddTerminalRefusal(string credential)
+        {
+            var goal = RecordRefusal(credential);
+            Kernel.ReplaceGoalWithSnapshot(Kernel.ExportGoalSnapshot(goal.Id) with { Status = GoalStatus.Completed });
+            await Repository.SaveAsync(Kernel);
+            Assert.Equal(1, Kernel.EvictTerminalGoalAggregates([goal.Id]));
+            Assert.True(ProviderLimitSignals.TryGetExactHold(Kernel.ProviderHoldScope, new("xAI", credential, null), out var hold));
+            Assert.Equal(goal.Id, hold.SourceGoalId);
+            return hold;
         }
 
         internal async Task Initialize(GoalStatus? status = GoalStatus.Completed)
@@ -341,7 +398,8 @@ public sealed class ProviderResetTerminalSourceTests
                 CliPersistentStateRunner.LoadConductLoopKernel(Repository, [], Root).ExportSnapshot(), Clock);
             var lines = new List<string>();
             ProviderHoldHistorySeed.Apply(restarted, Repository, lines.Add);
-            Assert.Matches($@"^PROVIDER_HOLD_HISTORY candidates=1 retained=1 goals={Source.Id.Value[..8]} elapsedMs=\d+ loaded=1 historyMs=\d+ evidenceMs=\d+ pruneMs=\d+$", Assert.Single(lines));
+            Assert.Matches($@"^PROVIDER_HOLD_HISTORY candidates=1 retained=1 goals={Source.Id.Value[..8]} elapsedMs=\d+ loaded=1 historyMs=\d+ evidenceMs=\d+ pruneMs=\d+ historyCpuMs=\d+(?: history[A-Za-z]+Ms=\d+)+$",
+                Assert.Single(lines));
             return restarted;
         }
 

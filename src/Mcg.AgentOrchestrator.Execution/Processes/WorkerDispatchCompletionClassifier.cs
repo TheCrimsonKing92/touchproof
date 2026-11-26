@@ -148,12 +148,14 @@ internal sealed class WorkerDispatchCompletionClassifier
         }
 
         var provider = _resolveWorkerProvider(dispatch);
-        var failureKind = provider.ParseOutcome(new WorkerProviderOutcome(
+        var outcome = new WorkerProviderOutcome(
             exitCode,
             standardOutput,
-            standardError));
+            standardError);
+        var failureKind = provider.ParseOutcome(outcome);
         if (failureKind == ProviderFailureKind.Unknown &&
             provider is not StaticWorkerProvider { RecognizeBudgetExhaustion: false } &&
+            ProviderHoldEvidence.Read(outcome, DateTimeOffset.MinValue).Kind == ProviderFailureKind.BudgetExhausted &&
             ProviderLimitEvidenceParser.TryGetCliCreditExhaustionLine(
                 exitCode,
                 standardOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries),

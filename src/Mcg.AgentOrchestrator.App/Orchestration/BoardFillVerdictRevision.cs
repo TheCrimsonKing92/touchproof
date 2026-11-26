@@ -1,5 +1,3 @@
-using System.Text.RegularExpressions;
-
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed record BoardFillVerdictRevisionRequest(string BacklogItemId, string MainHead, string Prompt);
@@ -22,11 +20,7 @@ internal static class BoardFillVerdictRevision
 
     internal static string BulletText(string premise, int bullet)
     {
-        var text = premise.ReplaceLineEndings("\n");
-        // Match the verifier's numbering, retaining continuation lines as part of the claim.
-        var matches = Regex.Matches(text, @"^[ \t]*[-*][ \t]+\S", RegexOptions.Multiline);
-        if (bullet < 1 || bullet > matches.Count) return "bullet text unavailable";
-        var end = bullet < matches.Count ? matches[bullet].Index : text.Length;
-        return text[matches[bullet - 1].Index..end].TrimEnd();
+        var claims = BoardFillPremiseBullets.SourceClaims(premise);
+        return bullet < 1 || bullet > claims.Count ? "bullet text unavailable" : claims[bullet - 1].Text;
     }
 }

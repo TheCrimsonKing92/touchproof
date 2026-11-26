@@ -1054,7 +1054,7 @@ internal sealed partial class WorkerArtifactWriter
 
             // Citations were resolved against the Planner's checkout at capture. Structural
             // validation here must survive later implementation edits to that checkout.
-            if (!PlannerOutputContract.TryValidate(artifact.Plan, out _, out diagnostic))
+            if (!PlannerOutputContract.TryValidatePromotedPlan(artifact.Plan, out diagnostic))
             {
                 return false;
             }
@@ -1106,8 +1106,8 @@ internal sealed partial class WorkerArtifactWriter
             return null;
 
         var output = completedOutput ?? PlannerOutputContract.ReadCapturedOutputTail(process.StandardOutputPath);
-        if (!TryExtractAndRevalidateDurablePlannerPlan(output, process.WorkingDirectory, out var plan, out _) ||
-            !PlannerOutputContract.TryValidate(plan, out _, out _, goal.RefinedSpec?.AcceptanceCriteria))
+        if (!TryExtractAndRevalidateDurablePlannerPlan(output, process.WorkingDirectory, out var plan, out _,
+                goal.RefinedSpec?.AcceptanceCriteria))
             return null;
 
         return new PendingPlannerArtifact(plan, PendingPlannerArtifact.ComputeSha256(plan), dispatch.DispatchedAt, dispatch.BriefVersion);
@@ -1117,7 +1117,8 @@ internal sealed partial class WorkerArtifactWriter
         string text,
         string workingDirectory,
         out string plan,
-        out string diagnostic)
+        out string diagnostic,
+        IReadOnlyList<string>? acceptanceCriteria = null)
     {
         if (!PlannerOutputContract.TryExtractDurablePlan(text, out var extractedPlan, out diagnostic))
         {
@@ -1129,7 +1130,9 @@ internal sealed partial class WorkerArtifactWriter
                 extractedPlan,
                 workingDirectory,
                 out plan,
-                out diagnostic))
+                out diagnostic,
+                acceptanceCriteria,
+                revalidateDurablePlan: true))
         {
             return true;
         }

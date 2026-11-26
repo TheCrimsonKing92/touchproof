@@ -48,7 +48,8 @@ internal sealed partial class ConductorDriver
         bool gateOnly = false,
         bool landFromReceiptOnly = false,
         string? expectedGateIdentity = null,
-        string? outerAttemptId = null)
+        string? outerAttemptId = null,
+        Func<string, IDisposable?>? enterToolPreflight = null)
     {
         ArgumentNullException.ThrowIfNull(selection);
         ArgumentNullException.ThrowIfNull(orderedGoals);
@@ -174,6 +175,7 @@ internal sealed partial class ConductorDriver
                 return Fallback("outcome=replay-miss receipt=none");
             }
             receipt ??= RunMergeTrainSourceSizePreflight(workspace.Path, identity, _mergeTrainAcceptanceStore);
+            using var toolResolution = new GroupedGateToolResolutionScope(enterToolPreflight);
             if (receipt is null)
             {
                 if (runGateInBackground)
@@ -218,6 +220,7 @@ internal sealed partial class ConductorDriver
                 DotnetBuildEnvironmentLease? stableSlotLease = null;
                 try
                 {
+                    toolResolution.Enter(workspace.Path);
                     stableSlotLease = _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLeaseInRounds(
                         identity.Value, $"merge-train:{trainKey}", CohortStableSlotRoundCount, cancellationToken);
                     if (stableSlotLease is null)
@@ -241,6 +244,18 @@ internal sealed partial class ConductorDriver
                         receipt = MergeTrainGateReceiptExecution.Run(_cohortAcceptanceVerifier, workspace.Path,
                             identity, changedFiles, _mergeTrainAcceptanceStore, stableSlotLease,
                             CreateMergeTrainGateExecutionOptions(identity, members, trainKey, goalsById, outerAttemptId ?? attemptId), clock, _utcNow, cancellationToken, attemptId);
+                }
+                catch (AcceptanceInfrastructureDeferredException ex)
+                    when (ex.ReasonCode == GateToolResolutionPreflight.MissingToolsReasonCode)
+                {
+                    var failedCheck = $"infrastructure:{ex.ReasonCode}:{ex.OutputTail}";
+                    var infrastructureReceipt = _mergeTrainAcceptanceStore.SaveGateReceipt(new MergeTrainReceipt(
+                        $"merge-train-receipt-{identity.Value[(MergeTrainIdentity.Version.Length + 1)..]}",
+                        identity, MergeTrainGateOutcome.InfrastructureFailure, _utcNow(), clock.ElapsedMilliseconds,
+                        [failedCheck], ex.ExitCode, []));
+                    if (!MergeTrainBisectRedRetention.KeepsFailedReceipt(lastRecordedReceipt))
+                        lastRecordedReceipt = infrastructureReceipt;
+                    return Fallback($"outcome=infrastructure-failure receipt={infrastructureReceipt.ReceiptId} {failedCheck}");
                 }
                 catch (Exception ex) when (ex is AcceptanceInfrastructureDeferredException or
                     DotnetBuildSlotsBusyException or BuildLockBlockedException or OperationCanceledException or

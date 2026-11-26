@@ -15,8 +15,7 @@ internal sealed class ProviderResetRetainedSourceRecorder(Func<ITransactionalOrc
             return true;
         var payload = JsonSerializer.Deserialize<ProviderResetOperatorIntentPayload>(intent.PayloadJson, OperatorIntentJson.Options)
             ?? throw new InvalidOperationException("provider-reset requires a payload.");
-        if (!ProviderBudgetHoldSchedules.TryGetHoldByBindingKey(kernel.ProviderHoldScope, payload.BindingKey, out var hold))
-            throw new InvalidOperationException("no-current-hold");
+        var hold = ProviderResetIntentHandler.ResolveHold(kernel.ProviderHoldScope, payload);
         if (payload.ResetAt > now.AddDays(31)) throw new InvalidOperationException("reset-too-far");
         if (kernel.Goals.Any(goal => goal.Id == hold.SourceGoalId))
             throw new InvalidOperationException("source-goal-in-working-set");
@@ -33,7 +32,8 @@ internal sealed class ProviderResetRetainedSourceRecorder(Func<ITransactionalOrc
                     return Task.FromResult<(bool, GoalSnapshot?, (bool, GoalSnapshot?))>((false, null, (true, stored)));
 
                 scratch.RecordTaskNote(hold.SourceGoalId, hold.SourceTaskId,
-                    ProviderBudgetHoldSchedules.FormatReset(new(payload.BindingKey, payload.ResetAt, intent.Id)),
+                    ProviderBudgetHoldSchedules.FormatReset(new(payload.BindingKey, payload.ResetAt, intent.Id)
+                        { BindingIdentity = hold.BindingIdentity }),
                     operatorIntentCreatedAt: intent.CreatedAt);
                 var saved = scratch.ExportGoalSnapshot(hold.SourceGoalId);
                 return Task.FromResult<(bool, GoalSnapshot?, (bool, GoalSnapshot?))>((true, saved, (false, saved)));
@@ -63,12 +63,12 @@ internal sealed class ProviderResetRetainedSourceRecorder(Func<ITransactionalOrc
                 // Replace the retained source with its transactional copy, preserving all other binding evidence.
                 var scope = kernel.ProviderHoldScope.Where(goal => goal.Id != hold.SourceGoalId)
                     .Append(scratch.GetGoal(hold.SourceGoalId)).ToArray();
-                if (!ProviderBudgetHoldSchedules.TryGetHoldByBindingKey(scope, hold.BindingKey, out var current) || current != hold)
+                if (!ProviderLimitSignals.TryGetHoldForIdentity(scope, hold.BindingIdentity, out var current) || current != hold)
                     return Task.FromResult<(bool, GoalSnapshot?, GoalSnapshot?)>((false, null, null));
                 var observation = new ProgressEvent(hold.SourceGoalId, hold.SourceTaskId, ProgressKind.TaskNote, note, now);
                 var schedule = ProviderBudgetHoldSchedules.Evaluate(scope, current, now);
                 if (!ProviderBudgetHoldSchedules.TryParseStandaloneResult(observation, out var check) ||
-                    !ProviderBudgetHoldSchedules.IsApplicable(check, ProviderBudgetHoldSchedules.LatestReset(scope, hold.BindingKey)) ||
+                    !ProviderBudgetHoldSchedules.IsApplicable(check, ProviderHoldBindingHistory.Read(scope, hold.BindingIdentity).LatestReset()) ||
                     check.Due != schedule.NextProbeAt || check.Attempt != schedule.Attempt || check.ResetIntentId != schedule.ResetIntentId)
                     return Task.FromResult<(bool, GoalSnapshot?, GoalSnapshot?)>((false, null, null));
                 scratch.RecordTaskNote(hold.SourceGoalId, hold.SourceTaskId, note);
