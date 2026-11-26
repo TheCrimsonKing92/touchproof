@@ -44,10 +44,10 @@ internal static class PreReviewEvidenceContextBuilder
 
     internal static PreReviewEvidenceContext Build(
         string? candidateSha, RepositoryChangeSummary changeSummary, RepositoryTestImpactPlan plan,
-        Action<string>? log = null)
+        Action<string>? log = null, Goal? goal = null, string? worktreePath = null)
     {
         var context = BuildMappedPreReviewEvidenceContext(candidateSha, changeSummary, plan, log ?? Console.WriteLine);
-        return context with
+        context = context with
         {
             MappingReason = context.NoApplicableTests
                 ? DescribeUnmappedTestSources(context.MappingReason, changeSummary, plan)
@@ -55,6 +55,36 @@ internal static class PreReviewEvidenceContextBuilder
             TestImpactDegradation = plan.ReverseDependencyDegradation,
             TestImpactHeadroom = plan.ReverseDependencyHeadroom
         };
+
+        return goal is not null && worktreePath is not null && ReverseDependencyBreadthBound.IsDeferred(plan) &&
+            !context.MappingNeedsInput && !context.RequiresSourceCleanup
+            ? WithNamedClasses(context, goal, worktreePath)
+            : context;
+    }
+
+    private static PreReviewEvidenceContext WithNamedClasses(
+        PreReviewEvidenceContext context, Goal goal, string worktreePath)
+    {
+        var objectiveNames = PreTesterNamedTestClasses.Harvest(goal.Objective).ToHashSet(StringComparer.Ordinal);
+        var obligationNames = GateTestObligationEffectiveSelectors.ForMembers([goal], [goal.Id])
+            .SelectMany(PreTesterNamedTestClasses.Harvest);
+        var names = objectiveNames.Concat(obligationNames).Distinct(StringComparer.Ordinal).ToArray();
+        if (names.Length == 0) return context;
+
+        var objectiveClasses = new List<(string Alias, string ClassName)>();
+        var obligationClasses = new List<(string Alias, string ClassName)>();
+        var resolved = DeveloperDeferredTestSelections.ResolveNames(worktreePath, names, requireUniqueSourceFile: true);
+        foreach (var selection in resolved.Selections)
+        {
+            if (PreReviewFocusedRequestSplitter.TryResolveBrokerAlias(selection.TestProject, out var alias))
+            {
+                var classes = objectiveNames.Contains(selection.TestClass) ? objectiveClasses : obligationClasses;
+                classes.Add((alias!, selection.TestClass));
+            }
+        }
+
+        context = WithAdditionalClasses(context, objectiveClasses, "objective-named coverage");
+        return WithAdditionalClasses(context, obligationClasses, "gate-obligation coverage");
     }
 
     private static PreReviewEvidenceContext BuildMappedPreReviewEvidenceContext(
