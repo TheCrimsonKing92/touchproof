@@ -7,8 +7,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: kernels and evidence files are fixture-owned; revision and inventory I/O is injected.
 public sealed class GateObligationSelectorPreAdmissionTests
 {
-    private const string Candidate = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    private const string NextCandidate = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    internal const string Candidate = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    internal const string NextCandidate = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     [Theory]
     [InlineData("PlannedTests", "Fixture.PlannedTests", "Resolved")]
@@ -71,6 +71,8 @@ public sealed class GateObligationSelectorPreAdmissionTests
         Assert.False(fixture.Apply(Inventory("Fixture.PlannedTestsLauncherTests"), lines.Add).Hold);
         Assert.Single(fixture.Kernel.HumanInputRequests);
         Assert.Single(lines);
+        Assert.Empty(fixture.Developer.CriterionRetryFeedback);
+        Assert.Equal(0, fixture.Goal.AutomaticAcceptanceRetryCount);
         var (_, trxPath, _) = fixture.Evidence.WriteAttempt([("Fixture.PlannedTestsLauncherTests.Check", "Passed")]);
         // Supply the definition a real TRX uses to resolve a namespaced row by simple class name.
         var trx = XDocument.Load(trxPath);
@@ -96,6 +98,8 @@ public sealed class GateObligationSelectorPreAdmissionTests
         using var fixture = new Case("PlannedTests");
         Assert.False(fixture.Apply(Inventory("Fixture.PlannedTests")).Hold);
         Assert.Empty(fixture.Kernel.HumanInputRequests);
+        Assert.Empty(fixture.Developer.CriterionRetryFeedback);
+        Assert.Equal(0, fixture.Goal.AutomaticAcceptanceRetryCount);
         Assert.Empty(ConductorBatchLoop.TrainIneligibleCriterionEvidenceGoalIds([fixture.Goal]));
     }
 
@@ -111,6 +115,7 @@ public sealed class GateObligationSelectorPreAdmissionTests
         var result = fixture.Apply(Inventory(names));
 
         Assert.True(result.Hold);
+        // The hold emits no rebind answer.
         Assert.Empty(fixture.Kernel.HumanInputRequests);
         Assert.Equal($"gate test obligation obligati (brief v1) selector-not-found: PlannedTests; " +
             $"candidate {Candidate}; effective selector PlannedTests; candidate classes considered: " +
@@ -138,6 +143,18 @@ public sealed class GateObligationSelectorPreAdmissionTests
         Assert.True(heldResult.Hold);
         Assert.False(firstResult.Hold);
         Assert.False(secondResult.Hold);
+        if (scenario == "unavailable")
+        {
+            Assert.Empty(held.Developer.CriterionRetryFeedback);
+        }
+        else
+        {
+            var feedback = Assert.Single(held.Developer.CriterionRetryFeedback);
+            Assert.Contains("selector=PlannedTests", feedback, StringComparison.Ordinal);
+            Assert.Equal(1, held.Goal.AutomaticAcceptanceRetryCount);
+        }
+        Assert.Empty(first.Developer.CriterionRetryFeedback);
+        Assert.Empty(second.Developer.CriterionRetryFeedback);
         Goal[] goals = [held.Goal, first.Goal, second.Goal];
         var classifications = new[] { (held.Goal, heldResult), (first.Goal, firstResult), (second.Goal, secondResult) };
         var excluded = ConductorBatchLoop.TrainIneligibleCriterionEvidenceGoalIds(goals,
@@ -176,6 +193,8 @@ public sealed class GateObligationSelectorPreAdmissionTests
         Assert.True(result.Hold);
         Assert.Contains(Candidate, Assert.Single(result.HoldLines));
         Assert.Empty(fixture.Kernel.HumanInputRequests);
+        Assert.Empty(fixture.Developer.CriterionRetryFeedback);
+        Assert.Equal(0, fixture.Goal.AutomaticAcceptanceRetryCount);
     }
 
     [Fact]
@@ -389,7 +408,7 @@ public sealed class GateObligationSelectorPreAdmissionTests
             LandingExecutor.FormatObligationHoldLine(obligation, "pending", [], "source none"));
     }
 
-    private static AcceptanceTestClassDescriptor[] Inventory(params string[] names) =>
+    internal static AcceptanceTestClassDescriptor[] Inventory(params string[] names) =>
         names.Select(name => new AcceptanceTestClassDescriptor(name, null)).ToArray();
 
     private static ConductorSpeculativeAcceptanceCandidate Ready(Goal goal)
@@ -400,11 +419,12 @@ public sealed class GateObligationSelectorPreAdmissionTests
             new(Candidate, Candidate, GateReadyMergeStatus.Clean, GateReadyMergeReason.NoConflictsDetected))));
     }
 
-    private sealed class Case : IDisposable
+    internal sealed class Case : IDisposable
     {
         internal ProspectiveEvidenceGateFixture Evidence { get; } = new();
         internal AgentOrchestratorKernel Kernel { get; }
         internal Goal Goal { get; }
+        internal TaskSpec Developer => Assert.Single(Goal.Tasks);
 
         internal Case(params string[] selectors)
         {
@@ -415,9 +435,10 @@ public sealed class GateObligationSelectorPreAdmissionTests
         }
 
         internal GateObligationSelectorPreAdmissionClassifier.Result Apply(
-            IReadOnlyList<AcceptanceTestClassDescriptor>? inventory, Action<string>? emit = null) =>
+            IReadOnlyList<AcceptanceTestClassDescriptor>? inventory, Action<string>? emit = null,
+            string candidateRevision = Candidate) =>
             GateObligationSelectorPreAdmissionClassifier.Apply(Kernel, Goal, Evidence.OrchestratorDirectory,
-                Candidate, () => inventory, emit ?? (_ => { }));
+                candidateRevision, () => inventory, emit ?? (_ => { }));
 
         public void Dispose() => Evidence.Dispose();
     }
