@@ -45,6 +45,12 @@ if (args.Length >= 2 && args[0] == ConductorGroupedGateAttemptCoordinator.OwnedP
     return ConductorGroupedGateAttemptHost.Run(args[1]);
 }
 
+if (args.Length == 3 && args[0] == SoloRepairCheckAttemptCoordinator.OwnedProcessSubcommandName &&
+    Guid.TryParseExact(args[2], "D", out var soloRepairLaunchId))
+{
+    return SoloRepairCheckAttemptCoordinator.RunOwnedProcess(args[1], soloRepairLaunchId);
+}
+
 if (args.Length >= 1 && args[0] == ConductorSuccessorSelfCheck.SubcommandName)
 {
     return ConductorSuccessorSelfCheck.Run(args);
