@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -55,6 +56,9 @@ internal sealed record ConductorGroupedGateAttempt(
     string? ProjectName = null)
 {
     public int HolderContractVersion { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GateToolResolutionResult? ToolResolution { get; init; }
 }
 
 internal sealed record ConductorGroupedGateLaunchResult(
@@ -306,6 +310,12 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
                 OwnerExecutablePath = executablePath
             };
             Save(claimed);
+            if (claimed.ToolResolution is { } toolResolution && processId == Environment.ProcessId &&
+                Environment.GetCommandLineArgs() is [_, OwnedProcessSubcommandName, var ownedMetadataPath, ..] &&
+                string.Equals(ownedMetadataPath, metadataPath, StringComparison.Ordinal))
+            {
+                GateToolResolutionPreflight.AdoptOwnedAttempt(toolResolution);
+            }
             return claimed;
         });
 
@@ -873,6 +883,10 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         try
         {
             var startInfo = BuildOwnedProcessStartInfo(attempt, _buildStorageRoot);
+            var toolResolution = GateToolResolutionPreflight.EnsureToolsResolve(
+                startInfo.Environment, startInfo.WorkingDirectory);
+            if (toolResolution is not null)
+                Update(attempt.MetadataPath, current => current with { ToolResolution = toolResolution });
             process = HandleListProcessLauncher.StartSuppressed(startInfo)
                 ?? throw new InvalidOperationException("Failed to start grouped acceptance gate child.");
         }

@@ -524,6 +524,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     private readonly Func<ConductorParallelAcceptanceOwnedProcessLaunch, ConductorParallelAcceptanceOwnedProcessLaunchResult> _launchOwnedProcess;
     private readonly bool _runInline;
     private readonly ConductorParallelAcceptanceTryRunPreSlot? _tryRunPreSlot;
+    private readonly Func<IDictionary<string, string?>>? _createGateToolEnvironmentForTests;
     private readonly TimeSpan _heartbeatInterval;
     private readonly TimeSpan _recentHeartbeatGrace;
     private readonly Action<ConductorParallelAcceptanceAttempt, string>? _heartbeatWritten;
@@ -584,7 +585,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         Func<int, bool>? isHolderProcessAbsent = null,
         Func<DateTimeOffset?>? hostBootTime = null,
         Action<string>? attemptMetadataReadObserver = null,
-        Func<GoalId, WorkerBuildCapacitySnapshot>? readPreReviewEvidenceCapacity = null)
+        Func<GoalId, WorkerBuildCapacitySnapshot>? readPreReviewEvidenceCapacity = null,
+        Func<IDictionary<string, string?>>? createGateToolEnvironmentForTests = null)
     {
         if (runInline && attemptCompletionGateForTests is not null)
         {
@@ -596,6 +598,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         _rootDirectory = rootDirectory;
         _attemptMetadataReadObserver = attemptMetadataReadObserver;
         _readPreReviewEvidenceCapacity = readPreReviewEvidenceCapacity;
+        _createGateToolEnvironmentForTests = createGateToolEnvironmentForTests;
         _executionDirectory = executionDirectory;
         _stateDirectory = stateDirectory;
         _projectName = projectName;
@@ -1744,6 +1747,10 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             Timeout.InfiniteTimeSpan);
         try
         {
+            var workingDirectory = !string.IsNullOrWhiteSpace(attempt.ExecutionDirectory)
+                ? attempt.ExecutionDirectory : _executionDirectory ?? _rootDirectory;
+            using var toolResolution = GateToolResolutionPreflight.EnterHermeticAttempt(
+                workingDirectory, _createGateToolEnvironmentForTests);
             WriteHeartbeat(attempt, "running");
             heartbeatTimer.Change(_heartbeatInterval, _heartbeatInterval);
             run = string.Equals(attempt.Kind, GateDispatchKind, StringComparison.Ordinal)
