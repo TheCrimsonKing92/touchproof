@@ -729,6 +729,85 @@ public sealed class SourceReaderIncrementalAnalysisTests
         };
     }
 
+    [Fact]
+    public void ChangedBase_RebindsCallerThroughUnchangedIntermediateType()
+    {
+        var baseline = Base();
+        baseline["tests/Spare0.cs"] = "public class Middle : PlainRoot {}";
+        baseline["tests/Roots.cs"] = "public class PlainRoot { public void Run() {} } " + Reader("ReadingRoot", "Run");
+        baseline["tests/Leaf.cs"] = "public class LeafType : Middle {}";
+        baseline["tests/Uses.cs"] = "public class UsesTests { [Fact] public void Act() { new LeafType().Run(); } }";
+
+        AssertCallerRebound(baseline, "public class Middle : ReadingRoot {}");
+    }
+
+    [Fact]
+    public void AddedBase_RebindsDisposeInUsingStatement()
+    {
+        var baseline = Base();
+        baseline["tests/Spare0.cs"] = "public class Handle {}";
+        baseline["tests/Disposer.cs"] = """
+            public class ReadingDisposer : System.IDisposable {
+                public void Dispose() { RepositorySourceSnapshotCache.Get("root"); }
+            }
+            """;
+        baseline["tests/Factory.cs"] = "public static class Factory { public static Handle Open() => new Handle(); }";
+        // The extractor observes explicit invocations. Keep the using statement as an implicit consumer too.
+        baseline["tests/Uses.cs"] = """
+            public class UsesTests {
+                [Fact] public void Act() {
+                    using (var handle = Factory.Open()) { handle.Dispose(); }
+                }
+            }
+            """;
+
+        AssertCallerRebound(baseline, "public class Handle : ReadingDisposer {}");
+    }
+
+    [Fact]
+    public void AppendedClass_RebindsCallerThatAlreadySpellsItsName()
+    {
+        var baseline = Base();
+        baseline["tests/Uses.cs"] = "public class UsesTests { [Fact] public void Act() { new AddedDisposeProbe().Dispose(); } }";
+
+        AssertCallerRebound(baseline,
+            baseline["tests/Spare0.cs"] + "\n" + Reader("AddedDisposeProbe", "Dispose"));
+    }
+
+    [Fact]
+    public void AppendedExtensionClass_RebindsCallerThatDoesNotSpellItsName()
+    {
+        var baseline = Base();
+        baseline["tests/Handle.cs"] = "public class ExtensionHandle {}";
+        baseline["tests/Uses.cs"] = "public class UsesTests { [Fact] public void Act() { new ExtensionHandle().Dispose(); } }";
+
+        AssertCallerRebound(baseline, baseline["tests/Spare0.cs"] + """
+
+            public static class AddedDisposeExtensions {
+                public static void Dispose(this ExtensionHandle handle) { RepositorySourceSnapshotCache.Get("root"); }
+            }
+            """);
+    }
+
+    private static void AssertCallerRebound(Dictionary<string, string> baseline, string changedSource)
+    {
+        using var storage = new Storage();
+        var before = Analyze(new(storage.Path), baseline);
+        Assert.DoesNotContain("UsesTests", before.ReaderOwners);
+        var candidate = new Dictionary<string, string>(baseline) { ["tests/Spare0.cs"] = changedSource };
+        var extractions = new List<HashSet<string>?>();
+        var cache = new SourceReaderAnalysisCache(storage.Path);
+
+        var incremental = Analyze(cache, candidate, extractions);
+
+        var paths = Assert.IsType<HashSet<string>>(Assert.Single(extractions));
+        Assert.Contains("tests/Uses.cs", paths);
+        Assert.True(paths.Count < candidate.Count);
+        Assert.Equal(paths.Count, cache.SemanticFileCount);
+        Assert.Contains("UsesTests", incremental.ReaderOwners);
+        AssertEquivalent(Analyze(new(null), candidate), incremental);
+    }
+
     private static Dictionary<string, string> Base()
     {
         var files = new Dictionary<string, string>
