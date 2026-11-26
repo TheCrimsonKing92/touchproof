@@ -32,7 +32,8 @@ internal sealed record ConductorSupervisorProcessResult(
     string StderrPath = "",
     bool TerminationConfirmed = true,
     DateTimeOffset? ProcessStartedAt = null,
-    bool ForcedStop = false);
+    bool ForcedStop = false,
+    bool ExitCodeObserved = true);
 
 internal sealed record ConductorContinuityExitArtifact(
     string StopReason,
@@ -40,7 +41,8 @@ internal sealed record ConductorContinuityExitArtifact(
     int Done,
     bool RestartRequested,
     [property: JsonPropertyName("landedGoals")] int LandedGoals = 0,
-    HomeBuildAdoptionRecord? HomeBuildTarget = null)
+    HomeBuildAdoptionRecord? HomeBuildTarget = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ResolverObservationHandoff = null)
 {
     public static void Write(string path, ConductorContinuityExitArtifact artifact)
     {
@@ -109,6 +111,7 @@ internal sealed partial class ConductorContinuitySupervisor(
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
+    internal const string ResolverObservationHandoffPrefix = "--pretester-resolver-handoff=";
     internal const string LoopReadyLinePrefix = "LOOP_READY ";
     internal const string StdoutLogPathEnvironmentVariable = "MCG_ORCHESTRATOR_STDOUT_LOG_PATH";
     internal const string StderrLogPathEnvironmentVariable = "MCG_ORCHESTRATOR_STDERR_LOG_PATH";
@@ -235,6 +238,7 @@ internal sealed partial class ConductorContinuitySupervisor(
             if (inheritedActiveChild is not null)
                 attempt = inheritedActiveChild.Attempt - 1;
         }
+        var resolverObservationHandoff = inherited?.ResolverObservationHandoff;
         while (true)
         {
             attempt++;
@@ -330,7 +334,10 @@ internal sealed partial class ConductorContinuitySupervisor(
             }
             var childArgs = ComposeChildArguments(args, projectName, tenantName, artifactPath,
                 homeBuildFollower is not null ? blockedActivationCommit : null,
-                requireCurrentStores: activeChild is null && pendingSuccessor is not null);
+                requireCurrentStores: activeChild is null && pendingSuccessor is not null,
+                resolverObservationHandoff: resolverObservationHandoff);
+            var launchCheckpoint = resolverObservationHandoff;
+            resolverObservationHandoff = null;
             ConductorSupervisorProcessResult result;
             string? launchFailure = null;
             string? stallFailure = null;
@@ -370,6 +377,21 @@ internal sealed partial class ConductorContinuitySupervisor(
                         [ProtectedProcessIdentity.PidVariable] = identity.ProcessId.ToString(CultureInfo.InvariantCulture),
                         [ProtectedProcessIdentity.StartTicksVariable] = identity.StartTimeUtcTicks.ToString(CultureInfo.InvariantCulture)
                     } : null);
+            ConductorResolverObservationLaunch? resolverLaunch = null;
+            if (activeChild is null && supervisorHandoff is { } launchAuthority)
+            {
+                try
+                {
+                    resolverLaunch = ConductorResolverObservationLaunch.Authorize(artifactPath, launchAuthority.Seam,
+                        commandPrefix?[1] ?? typeof(ConductorContinuitySupervisor).Assembly.Location, launchCheckpoint);
+                }
+                catch (Exception error) when (PreTesterReverseDependencyObservation.IsObservationFailure(error))
+                {
+                    var kind = launchCheckpoint is null ? "LAUNCH" : "CONTINUATION";
+                    TryAppendConductEvent($"SUPERVISOR_RESOLVER_{kind}_UNAVAILABLE attempt={attempt} reason={Sanitize(error.Message)}");
+                }
+            }
+            using var launchGrant = resolverLaunch;
             try
             {
                 if (activeChild is not null)
@@ -705,14 +727,23 @@ internal sealed partial class ConductorContinuitySupervisor(
             var artifact = ConductorContinuityExitArtifact.TryRead(artifactPath);
             TryDeleteArtifact(artifactPath);
 
-            if (stallFailure is null && result.ExitCode == 0 && artifact is { RestartRequested: false })
+            var observedZeroExit = result is { ExitCodeObserved: true, ExitCode: 0, ForcedStop: false };
+            var observedCleanExit = observedZeroExit && result.TerminationConfirmed;
+            var inheritedArtifactOnly = activeChild is not null &&
+                result is { ExitCodeObserved: false, TerminationConfirmed: true, ForcedStop: false } &&
+                artifact is not null;
+            if (inheritedArtifactOnly)
+                TryAppendConductEvent($"SUPERVISOR_INHERITED_EXIT_UNOBSERVED attempt={attempt} pid={result.ProcessId}");
+
+            if (stallFailure is null && (observedCleanExit || inheritedArtifactOnly) && artifact is { RestartRequested: false })
             {
-                Record("stopped", "completed", attempt, artifact.StopReason, result.ProcessId, stdoutPath, stderrPath);
-                return 0;
+                Record("stopped", observedCleanExit ? "completed" : "exit-unobserved", attempt,
+                    artifact.StopReason, result.ProcessId, stdoutPath, stderrPath);
+                return observedCleanExit ? 0 : 1;
             }
 
             if (artifact is { RestartRequested: true } &&
-                ((stallFailure is null && result.ExitCode == 0) || stallFailure is not null))
+                (observedZeroExit || inheritedArtifactOnly || stallFailure is not null))
             {
                 if (stallFailure is not null)
                     TryAppendConductEvent($"SUPERVISOR_STALL_RESTART_HONORED attempt={attempt} pid={result.ProcessId} stall={stallFailure}");
@@ -730,6 +761,9 @@ internal sealed partial class ConductorContinuitySupervisor(
                 }
 
                 Record("restart", "planned", attempt, artifact.StopReason, result.ProcessId, stdoutPath, stderrPath);
+                if (stallFailure is null && observedCleanExit &&
+                    artifact.StopReason is "max-duration" or "self-relaunch-handoff")
+                    resolverObservationHandoff = artifact.ResolverObservationHandoff;
                 Func<Action<string, string, CancellationToken>, CancellationToken, ConductorPreparedSuccessor?>? prepareWithHook = followingHome
                     ? (hook, token) => homeBuildFollower!.Prepare(artifact.HomeBuildTarget!,
                         new ConductorSupervisorBuildIdentity(currentBuild.CommitSha, currentBuild.StagedBuildId),
@@ -852,7 +886,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                 }
                 if (appliedUpgrade is null && await TryHandOffSupervisionAsync(args, workingDirectory, outputDirectory,
                     pendingSuccessor, renewalsWithoutProgress, blockedActivationCommit,
-                    cancellationToken).ConfigureAwait(false))
+                    cancellationToken, resolverObservationHandoff: resolverObservationHandoff).ConfigureAwait(false))
                     return 0;
                 continue;
             }
@@ -900,10 +934,12 @@ internal sealed partial class ConductorContinuitySupervisor(
     }
 
     internal static string[] ComposeChildArguments(IReadOnlyList<string> args, string projectName,
-        string tenantName, string exitArtifactPath, string? blockedHomeBuildCommit, bool requireCurrentStores) =>
+        string tenantName, string exitArtifactPath, string? blockedHomeBuildCommit, bool requireCurrentStores,
+        string? resolverObservationHandoff = null) =>
         args
             .Where(arg => !arg.Equals(ChildFlag, StringComparison.OrdinalIgnoreCase))
             .Where(arg => !arg.StartsWith("--home-build-blocked-commit=", StringComparison.Ordinal))
+            .Where(arg => !arg.StartsWith(ResolverObservationHandoffPrefix, StringComparison.OrdinalIgnoreCase))
             .Concat([
                 $"--project={projectName}",
                 $"--tenant={tenantName}",
@@ -914,6 +950,7 @@ internal sealed partial class ConductorContinuitySupervisor(
             .Concat(blockedHomeBuildCommit is not null
                 ? new[] { $"--home-build-blocked-commit={blockedHomeBuildCommit}" } : Array.Empty<string>())
             .Concat(requireCurrentStores ? new[] { "--require-current-stores" } : Array.Empty<string>())
+            .Concat(resolverObservationHandoff is null ? [] : [ResolverObservationHandoffPrefix + resolverObservationHandoff])
             .ToArray();
 
     private static IDisposable? TryAcquireRunDirectoryLease(string appDll)
@@ -1233,7 +1270,8 @@ internal sealed class SystemConductorSupervisorProcessHost(
                 request.StderrPath,
                 terminationConfirmed,
                 processStartedAt,
-                forcedStop);
+                forcedStop,
+                ExitCodeObserved: false);
         }
         process.WaitForExit();
         return new ConductorSupervisorProcessResult(

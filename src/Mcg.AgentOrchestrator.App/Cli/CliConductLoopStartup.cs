@@ -8,6 +8,41 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class CliConductLoopStartup
 {
+    internal static PreTesterResolverObservationWindow? CreateResolverObservation(
+        IReadOnlyList<string> parts, bool noDispatch, OrchestratorWorkspace workspace,
+        Func<int, int?>? readParentProcessId = null)
+    {
+        var supervisedChild = parts.Contains(ConductorContinuitySupervisor.ChildFlag, StringComparer.OrdinalIgnoreCase);
+        if (!supervisedChild || noDispatch)
+            return null;
+        var prefix = ConductorContinuitySupervisor.ResolverObservationHandoffPrefix;
+        var checkpoint = parts.FirstOrDefault(part => part.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))?[prefix.Length..];
+        var launch = ConductorResolverObservationLaunch.Claim(
+            workspace.OrchestratorDirectory,
+            CliCommandHandlers.GetFlagValue(parts, ConductorContinuitySupervisor.ExitArtifactFlag), checkpoint, readParentProcessId);
+        if (launch is null)
+        {
+            if (checkpoint is not null)
+                Console.WriteLine("PRE_TESTER_RESOLVER_WINDOW status=continuation-unverified");
+            return null;
+        }
+        return PreTesterResolverObservationWindow.ForConductLoop(workspace, launch);
+    }
+
+    internal static ConductLoopHandoffOptions CreateHandoffOptions(CliExecutionContext context,
+        IReadOnlyList<string> parts, string stopFilePath) => new(
+        Args: parts.ToArray(),
+        ExecutionDirectory: context.Workspace.ExecutionDirectory,
+        OrchestratorDirectory: context.Workspace.OrchestratorDirectory,
+        LogDirectory: context.Workspace.LogDirectory,
+        RunEventStorePath: context.Workspace.RunEventStorePath,
+        StopFilePath: stopFilePath,
+        RenewalCount: ConductorLoopHandoff.ParseRenewalCount(parts),
+        MaxRenewals: ConductorLoopHandoff.DefaultMaxRenewalsWithoutLanding,
+        ReleaseCurrentLease: context.ReleaseConductLoopLease,
+        ReacquireCurrentLease: context.ReacquireConductLoopLease,
+        StopFailedSuccessor: ConductorLoopHandoff.StopFailedSuccessor);
+
     internal static void PrintConductorPolicyWarnings(ConductorPolicyResolution resolution)
     {
         foreach (var warning in resolution.Warnings)
