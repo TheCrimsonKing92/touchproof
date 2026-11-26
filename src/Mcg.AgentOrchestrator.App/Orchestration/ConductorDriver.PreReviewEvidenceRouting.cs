@@ -136,14 +136,14 @@ internal sealed partial class ConductorDriver
             worktreePath, targetHome, orchestratorDirectory ?? targetHome?.ProjectHomeDirectory ?? OrchestratorWorkspace.ForDirectory(executionDirectory).OrchestratorDirectory);
     }
 
-    internal PreReviewEvidenceContext GetPreReviewEvidenceContext(Goal goal) =>
-        _getPreReviewEvidenceContext(goal);
+    internal PreReviewEvidenceContext GetPreReviewEvidenceContext(Goal goal) => _getPreReviewEvidenceContext(goal);
 
     internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(
         string? candidateSha, IReadOnlyList<string> changedFiles, string? repositoryRoot = null, WorkerTargetHome? targetHome = null, string? orchestratorDirectory = null)
     {
         var changeSummary = RepositoryChangeClassifier.Classify(changedFiles);
-        var plan = ReverseDependencyEvidenceCostGate.Apply(GoalTargetImpactPlanScope.Plan(changeSummary, repositoryRoot, targetHome), selections => ReverseDependencyEvidenceCostHistory.Read(repositoryRoot, orchestratorDirectory, selections, changedFiles, targetHome?.ProjectHomeDirectory));
+        var boundedPlan = ReverseDependencyBreadthBound.Apply(GoalTargetImpactPlanScope.Plan(changeSummary, repositoryRoot, targetHome), changeSummary.Files.Select(file => file.Path));
+        var plan = ReverseDependencyEvidenceCostGate.Apply(boundedPlan, selections => ReverseDependencyEvidenceCostHistory.Read(repositoryRoot, orchestratorDirectory, selections, changedFiles, targetHome?.ProjectHomeDirectory));
         return BuildPreReviewEvidenceContext(candidateSha, changeSummary, plan);
     }
 
