@@ -342,9 +342,9 @@ internal sealed partial class ConductorDriver
                 receiptRound);
             foreach (var receipt in verification.FindingEvidenceReceipts ?? [])
             {
-                // Copies attached for delivery are references, not new executions. Their original
-                // authority and chronology are supplied by the pre-Tester reader above.
-                if (preTesterIds.Contains(receipt.ReceiptId)) continue;
+                // Copies attached for delivery inherit their authority and chronology from the pre-Tester reader.
+                if (preTesterIds.Contains(receipt.ReceiptId) ||
+                    !FindingEvidenceExecutedCoverage.CanClaimSelectionAuthority(receipt)) continue;
                 if (!string.Equals(receipt.FindingRoundFingerprint, executedRoundFingerprint, StringComparison.Ordinal) ||
                     !string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
                     !string.Equals(receipt.ExecutionBasisIdentity, executionBasisIdentity, StringComparison.Ordinal) ||
