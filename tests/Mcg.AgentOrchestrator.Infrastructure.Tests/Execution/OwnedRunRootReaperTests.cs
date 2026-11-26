@@ -71,6 +71,23 @@ public sealed class OwnedRunRootReaperTests
     }
 
     [Xunit.Fact]
+    public void Due_foreign_retry_does_not_consume_the_only_slot()
+    {
+        using var fixture = new ReaperFixture(OwnedRunRootOwnerLiveness.Gone);
+        var foreign = fixture.StorageRoot.RootPath + "-other";
+        fixture.Registry.Register(foreign, OwnedRunRootPurpose.StableSlot,
+            new SpawnProcessIdentity(12345, Start, "dotnet"), null, null, Start);
+        fixture.Registry.MarkCleanupFailure(foreign, "outside this root", Start, Start);
+        var local = fixture.Register("local", OwnedRunRootPurpose.StableSlot);
+
+        var result = fixture.Reaper.Reap(0, 1);
+
+        Assert.Equal(1, result.RemovedCount);
+        Assert.Equal([local], fixture.FileSystem.DeletedPaths);
+        Assert.Equal(foreign, Assert.Single(fixture.Registry.ReadBatch(0, 10, Start)).CanonicalPath);
+    }
+
+    [Xunit.Fact]
     public void Due_failed_removal_is_retried_when_newer_pages_remain_full()
     {
         using var fixture = new ReaperFixture(OwnedRunRootOwnerLiveness.Gone);
