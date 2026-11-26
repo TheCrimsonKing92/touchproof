@@ -63,6 +63,27 @@ public sealed class BoardFillFileabilityTests
     }
 
     [Fact]
+    public void Contradicted_source_claim_with_runtime_observation_blocks()
+    {
+        using var h = new BoardFillAssessmentTestFixture();
+        var markdown = BoardFillAssessmentTestFixture.Brief.Replace("## Measured premise",
+            "## Measured premise\n- runtime-observation: See operator-evidence/board-fill/round.json.");
+        var round = h.Finished();
+        var preflight = BoardFillPreflightChecks.Run(markdown);
+
+        BoardFillDraftAssessment EvaluateVerdict(BoardFillPremiseVerification verification) =>
+            BoardFillFileability.Evaluate(round, markdown, verification, preflight,
+                BoardFillAssessmentTestFixture.NoDepends, h.Item, [], BoardFillAssessmentTestFixture.Ready);
+
+        var verified = EvaluateVerdict(BoardFillAssessmentTestFixture.Verified);
+        Assert.True(verified.Fileable, string.Join(", ", verified.FailingReasons));
+
+        var contradicted = EvaluateVerdict(new("complete", 1, [new(1, "contradicted", "src/Feature/File.cs:1")]));
+        Assert.False(contradicted.Fileable);
+        Assert.Equal("premise-bullet-1:contradicted", Assert.Single(contradicted.FailingReasons));
+    }
+
+    [Fact]
     public void All_failures_are_listed_and_a_new_link_blocks_even_verified_drafts()
     {
         using var h = new BoardFillAssessmentTestFixture();
