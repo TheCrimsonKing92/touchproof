@@ -79,14 +79,15 @@ public sealed class CostGoalOutcomeSweepTests : IDisposable
         Assert.Equal((Landed, Adopted), Assert.Single(calls));
 
         calls.Clear();
-        WriteGate(AdoptedAt.AddHours(2), later, 70);
-        WriteGate(AdoptedAt.AddHours(2).AddMinutes(1), later, 80);
-        countingSweep.Run(() => AdoptedAt.AddHours(2));
+        var laterTick = AdoptedAt.AddHours(2);
+        WriteGate(laterTick.AddMinutes(-1), later, 70);
+        WriteGate(laterTick.AddMinutes(1), later, 80);
+        countingSweep.Run(() => laterTick);
         Assert.Equal((Landed, later), Assert.Single(calls));
         Assert.Equal(2, Assert.Single(store.Read(goal)!.PendingResults).AfterSampleSize);
 
         calls.Clear();
-        countingSweep.Run(() => AdoptedAt.AddHours(2));
+        countingSweep.Run(() => laterTick);
         Assert.Empty(calls);
         Assert.Equal(2, Assert.Single(store.Read(goal)!.PendingResults).AfterSampleSize);
         Assert.Empty(failures);
