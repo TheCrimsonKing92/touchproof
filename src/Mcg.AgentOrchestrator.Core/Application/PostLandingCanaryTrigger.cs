@@ -216,7 +216,8 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/StateEffectProposals",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/StructuralCoverageFailureDetail",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/StructuralCoverageFailureMessage",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/StructuralCoveragePermitWait"
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/StructuralCoveragePermitWait",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/VstestAcceptanceResultEvidence"
         ]),
         new("post-landing-canary", [
             "src/Mcg.AgentOrchestrator.App/Orchestration/PostLandingCanary",
