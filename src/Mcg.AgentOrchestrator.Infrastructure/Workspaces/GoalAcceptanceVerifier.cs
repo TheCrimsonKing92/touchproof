@@ -2574,7 +2574,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 $"{(unreadableReceipts.Count > 0 ? "focused-selection-receipt-unreadable" : "focused-selection-apparatus-failure")} executed={executedTestCount?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}",
                 BuildGenericCommandResultSummary(result))
             : BuildGenericCommandResultSummary(result);
-        return (GoalAcceptanceVerifierTestTelemetry.WithNormalizedTrxResult(new AcceptanceCheckResult(
+        return (AcceptanceMtpFailureOutput.AttachResultEvidence(result, trxEvidence, new AcceptanceCheckResult(
             IsInterrupted(result) ? BuildInterruptedFailureName(check, result) : check.Name,
             passed,
             result.ExitCode,

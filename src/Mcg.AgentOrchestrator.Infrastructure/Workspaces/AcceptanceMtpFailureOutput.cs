@@ -4,6 +4,33 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class AcceptanceMtpFailureOutput
 {
+    internal static AcceptanceCheckResult AttachResultEvidence(
+        CommandResult result, TrxCompletionEvidence trxEvidence, AcceptanceCheckResult check)
+    {
+        if (result.ExitCode != 0 && !IsInterrupted(result) &&
+            trxEvidence.FailedPredicate == AcceptanceShardCompletionPredicates.MissingTrx)
+        {
+            // A missing-tool diagnostic can explain why the planned TRX was never written.
+            // Keep that diagnostic and only offer actual artifacts for baseline retention.
+            var launchFailure = AcceptanceMissingToolClassifier.Attach(check with
+            {
+                OutputTail = TailOutput(result.Output),
+                FailureClassification = null,
+                TestResultPaths = []
+            });
+            if (launchFailure.FailureClassification == AcceptanceFailureClassifications.MissingTool)
+            {
+                return launchFailure with
+                {
+                    ResultSummary = AcceptanceCommandResultSummary.GenericCommand(result,
+                        AcceptanceCommandResultSummary.ExtractResultSummary(result.Output))
+                };
+            }
+        }
+
+        return GoalAcceptanceVerifierTestTelemetry.WithNormalizedTrxResult(check);
+    }
+
     internal static string BuildMtpFailureOutput(
         string checkName,
         CommandResult result,
