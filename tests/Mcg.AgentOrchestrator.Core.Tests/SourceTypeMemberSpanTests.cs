@@ -63,6 +63,32 @@ public sealed class SourceTypeMemberSpanTests
         Assert.Equal([("Items", 33, 33), ("Name", 34, 35), ("Length", 38, 38)], Spans(symbols.DeclaredTypes[1]));
     }
 
+    [Theory]
+    [InlineData("record Plain", "Plain")]
+    [InlineData("record Promote : Envelope", "Promote")]
+    [InlineData("record struct Marker<T> where T : struct", "Marker")]
+    public void BodylessNestedRecordWithoutParameters_EndsAtItsSemicolon(string header, string name)
+    {
+        var source = $$"""
+            internal partial record Envelope
+            {
+                [Obsolete]
+                public {{header}}
+                    ;
+                private @record value;
+                public int Count => 1;
+            }
+            """;
+
+        Assert.True(CSharpTestClassScanner.TryReadSourceSymbols(source, out var symbols));
+        var envelope = Assert.Single(symbols.DeclaredTypes);
+        Assert.Equal([(name, 3, 5), ("Count", 7, 7)], Spans(envelope));
+        var nested = Assert.Single(envelope.NestedTypes);
+        Assert.Equal((name, 3, 5), (nested.Name, nested.StartLine, nested.EndLine));
+        Assert.Empty(nested.Members);
+        Assert.Contains("value", envelope.ReferencedIdentifiers);
+    }
+
     private static IEnumerable<(string Name, int StartLine, int EndLine)> Spans(
         CSharpTestClassScanner.SourceTypeDeclaration declaration) =>
         declaration.Members.Select(member => (member.Name, member.StartLine, member.EndLine));

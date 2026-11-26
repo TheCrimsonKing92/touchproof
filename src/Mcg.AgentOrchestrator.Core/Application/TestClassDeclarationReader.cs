@@ -625,13 +625,26 @@ internal static class CSharpTestClassScanner
                     parameterListIndex = genericEndIndex + 1;
                 }
 
-                if (parameterListIndex >= tokens.Count || tokens[parameterListIndex].Value != "(")
+                if (parameterListIndex >= tokens.Count)
                 {
                     continue;
                 }
 
-                var parameterEndIndex = FindMatching(tokens, parameterListIndex, "(", ")");
-                if (parameterEndIndex < 0)
+                var headerEndIndex = parameterListIndex;
+                if (tokens[parameterListIndex].Value == "(")
+                {
+                    var parameterEndIndex = FindMatching(tokens, parameterListIndex, "(", ")");
+                    if (parameterEndIndex < 0)
+                    {
+                        continue;
+                    }
+
+                    headerEndIndex = parameterEndIndex + 1;
+                }
+                else if (keyword != "record" ||
+                    tokens[parameterListIndex].Value is not (";" or ":" or "where") ||
+                    !found.Exists(parent => parent.OpenBraceIndex < index && index < parent.CloseBraceIndex) ||
+                    !StartsAtDeclarationBoundary(tokens, index))
                 {
                     continue;
                 }
@@ -642,7 +655,7 @@ internal static class CSharpTestClassScanner
                     endIndex++;
                 }
 
-                if (endIndex >= tokens.Count || tokens[endIndex].Value != ";" || parameterEndIndex >= endIndex)
+                if (endIndex >= tokens.Count || tokens[endIndex].Value != ";" || headerEndIndex > endIndex)
                 {
                     continue;
                 }
@@ -677,6 +690,24 @@ internal static class CSharpTestClassScanner
 
         declarations = found;
         return BracesAreBalanced(tokens);
+    }
+
+    private static bool StartsAtDeclarationBoundary(IReadOnlyList<Token> tokens, int keywordIndex)
+    {
+        var start = FindDeclarationStart(tokens, keywordIndex);
+        var previous = start - 1;
+        if (previous < 0 || tokens[previous].Value is "{" or "}" or ";")
+        {
+            return true;
+        }
+
+        var previousLine = tokens[previous].Line;
+        while (previous > 0 && tokens[previous - 1].Line == previousLine)
+        {
+            previous--;
+        }
+
+        return tokens[previous].Value == "#" && previousLine < tokens[start].Line;
     }
 
     private static int FindBodyOpenBrace(IReadOnlyList<Token> tokens, int startIndex)
