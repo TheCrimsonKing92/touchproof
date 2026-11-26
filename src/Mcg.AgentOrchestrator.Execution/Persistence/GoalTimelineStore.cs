@@ -126,13 +126,14 @@ internal sealed class GoalTimelineStore(JsonSerializerOptions options)
     internal static void CreateSchema(SqliteConnection connection)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = """
+        command.CommandText = $"""
             CREATE TABLE IF NOT EXISTS goal_timeline (
                 goal_id TEXT NOT NULL,
                 sequence INTEGER NOT NULL CHECK (sequence >= 0),
                 entry_json TEXT NOT NULL,
                 PRIMARY KEY (goal_id, sequence)
-            )
+            );
+            {ProviderHoldMarkerIndexSql}
             """;
         command.ExecuteNonQuery();
     }
@@ -146,13 +147,15 @@ internal sealed class GoalTimelineStore(JsonSerializerOptions options)
     internal const string ProviderHoldMarkerGoalsSql =
         "SELECT DISTINCT goal_id FROM goal_timeline WHERE " + ProviderHoldMarkerPredicate;
 
-    [StoreSchemaSource("orchestrator-state", "src/Mcg.AgentOrchestrator.Execution/Persistence/GoalTimelineStore.cs")]
+    private const string ProviderHoldMarkerIndexSql =
+        "CREATE INDEX IF NOT EXISTS ix_goal_timeline_provider_hold_marker " +
+        "ON goal_timeline(goal_id) WHERE " + ProviderHoldMarkerPredicate;
+
     internal static async Task EnsureProviderHoldMarkerIndexAsync(SqliteConnection connection, CancellationToken token)
     {
         using var command = connection.CreateCommand();
         command.CommandTimeout = 1;
-        command.CommandText = "CREATE INDEX IF NOT EXISTS ix_goal_timeline_provider_hold_marker " +
-            "ON goal_timeline(goal_id) WHERE " + ProviderHoldMarkerPredicate;
+        command.CommandText = ProviderHoldMarkerIndexSql;
         try { await command.ExecuteNonQueryAsync(token); }
         catch (SqliteException)
         {

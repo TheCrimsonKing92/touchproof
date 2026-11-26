@@ -94,6 +94,15 @@ public sealed class ProviderHoldSeedWorkBoundTests
             using var fixture = new ProviderHoldSeedFixture();
             var token = TestContext.Current.CancellationToken;
             await fixture.PopulateArchivedRecoveryTimelineAsync(timelineRows);
+            // Simulate an existing store whose schema predates the marker index.
+            using (var legacyConnection = new SqliteConnection($"Data Source={fixture.Database};Pooling=False"))
+            {
+                legacyConnection.Open();
+                using var drop = legacyConnection.CreateCommand();
+                drop.CommandText = "DROP INDEX ix_goal_timeline_provider_hold_marker";
+                drop.ExecuteNonQuery();
+            }
+
             var observations = new List<GoalSnapshotReadObservation>();
             var repository = new SqliteOrchestratorStateRepository(fixture.Database, statementObserver: null,
                 telemetryOptions: null, readObserver: observations.Add);
