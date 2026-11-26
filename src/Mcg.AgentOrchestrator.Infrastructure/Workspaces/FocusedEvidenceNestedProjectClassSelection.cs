@@ -9,6 +9,13 @@ internal static class FocusedEvidenceNestedProjectClassSelection
         FocusedEvidenceRequestResolver.FindFocusedEvidenceClassFiles(worktreePath, project, className).Any(path =>
             RepositoryProjectOwnership.FindNestedProjectFile(worktreePath, Path.GetDirectoryName(project)!, path) is null);
 
+    internal static IEnumerable<string> ExcludeFixtureClasses(string worktreePath, string project, IEnumerable<string> classNames)
+    {
+        var sources = ReadDeclarations(worktreePath, project);
+        return classNames.Where(className =>
+            FindNestedOwner(worktreePath, project, sources, className, preserveExtractedProjects: true) is null);
+    }
+
     internal static List<(string Target, string Project, FocusedEvidenceFilter? Filter)> Apply(
         string worktreePath,
         IReadOnlyList<(string Target, string Project, FocusedEvidenceFilter? Filter)> validated,
@@ -73,7 +80,8 @@ internal static class FocusedEvidenceNestedProjectClassSelection
     }
 
     private static string? FindNestedOwner(
-        string worktreePath, string project, SourceDeclarations[] sources, string containingClass)
+        string worktreePath, string project, SourceDeclarations[] sources, string containingClass,
+        bool preserveExtractedProjects = false)
     {
         var projectDirectory = Path.GetDirectoryName(project)!;
         string? firstOwner = null;
@@ -84,7 +92,7 @@ internal static class FocusedEvidenceNestedProjectClassSelection
                 continue;
 
             var owner = RepositoryProjectOwnership.FindNestedProjectFile(worktreePath, projectDirectory, source.Path);
-            if (owner is null)
+            if (owner is null || (preserveExtractedProjects && RepositoryProjectOwnership.IsExtractedInfrastructureProject(owner)))
                 return null;
             firstOwner ??= owner;
         }
