@@ -34,6 +34,280 @@ public sealed class CostGoalOutcomeSweepTests : IDisposable
     }
 
     [Fact]
+    public void Run_SecondRunWithUnchangedInputsLaunchesNoAncestryChecks()
+    {
+        var goal = RecordFiling();
+        var initial = store.Read(goal)!;
+        WriteGate(AdoptedAt.AddMinutes(1), Adopted, 60);
+        WriteGate(AdoptedAt.AddMinutes(2), Unrelated, 999);
+        var calls = new List<(string Ancestor, string Commit)>();
+        var countingSweep = CreateSweep((ancestor, commit) =>
+        {
+            calls.Add((ancestor, commit));
+            return ancestor == Landed && commit == Adopted;
+        });
+
+        countingSweep.Run(() => AdoptedAt.AddHours(3));
+
+        Assert.Equal([(Landed, Adopted), (Landed, Unrelated)], calls);
+        var first = Assert.Single(store.Read(goal)!.PendingResults);
+        Assert.Equal(1, first.AfterSampleSize);
+
+        store.Write(goal, initial);
+        calls.Clear();
+        countingSweep.Run(() => AdoptedAt.AddHours(3));
+
+        Assert.Empty(calls);
+        Assert.Equal(first, Assert.Single(store.Read(goal)!.PendingResults));
+        Assert.Empty(failures);
+    }
+
+    [Fact]
+    public void Run_PairFirstSeenOnLaterTickChecksOnceThenReuses()
+    {
+        const string later = "later-containing-commit";
+        var goal = RecordFiling();
+        var calls = new List<(string Ancestor, string Commit)>();
+        var countingSweep = CreateSweep((ancestor, commit) =>
+        {
+            calls.Add((ancestor, commit));
+            return ancestor == Landed && (commit == Adopted || commit == later);
+        });
+
+        WriteGate(AdoptedAt.AddMinutes(1), Adopted, 60);
+        countingSweep.Run(() => AdoptedAt.AddHours(1));
+        Assert.Equal((Landed, Adopted), Assert.Single(calls));
+
+        calls.Clear();
+        var laterTick = AdoptedAt.AddHours(2);
+        WriteGate(laterTick.AddMinutes(-1), later, 70);
+        WriteGate(laterTick.AddMinutes(1), later, 80);
+        countingSweep.Run(() => laterTick);
+        Assert.Equal((Landed, later), Assert.Single(calls));
+        Assert.Equal(2, Assert.Single(store.Read(goal)!.PendingResults).AfterSampleSize);
+
+        calls.Clear();
+        countingSweep.Run(() => laterTick);
+        Assert.Empty(calls);
+        Assert.Equal(2, Assert.Single(store.Read(goal)!.PendingResults).AfterSampleSize);
+        Assert.Empty(failures);
+    }
+
+    [Fact]
+    public void Run_AncestryFailureIsNotMemoizedAndRetries()
+    {
+        var goal = RecordFiling();
+        WriteGate(AdoptedAt.AddMinutes(1), Adopted, 60);
+        var calls = new List<(string Ancestor, string Commit)>();
+        var countingSweep = CreateSweep((ancestor, commit) =>
+        {
+            calls.Add((ancestor, commit));
+            if (calls.Count == 1) throw new InvalidOperationException("Git ancestry failed.");
+            return ancestor == Landed && commit == Adopted;
+        });
+
+        countingSweep.Run(() => AdoptedAt.AddHours(3));
+        Assert.Equal((Landed, Adopted), Assert.Single(calls));
+        Assert.Null(store.Read(goal)!.Adoption);
+        Assert.Equal($"COST_GOAL_OUTCOME_SWEEP_FAILED goal={goal} reason=InvalidOperationException",
+            Assert.Single(failures));
+
+        countingSweep.Run(() => AdoptedAt.AddHours(3));
+        Assert.Equal([(Landed, Adopted), (Landed, Adopted)], calls);
+        Assert.Equal(new(Landed, Adopted, AdoptedAt), store.Read(goal)!.Adoption);
+        Assert.Equal(1, Assert.Single(store.Read(goal)!.PendingResults).AfterSampleSize);
+
+        countingSweep.Run(() => AdoptedAt.AddHours(3));
+        Assert.Equal(2, calls.Count);
+        Assert.Single(failures);
+    }
+
+    [Fact]
+    public void Run_BatchedAncestryMatchesPerPairVerdictAndIsReused()
+    {
+        var landed = new string('a', 40);
+        var earlierAdoption = new string('b', 40);
+        var otherAdoption = new string('c', 40);
+        var firstContaining = new string('d', 40);
+        var firstGate = new string('e', 40);
+        var unrelatedGate = new string('f', 40);
+        var lastGate = new string('1', 40);
+        var goal = RecordFiling();
+        var initial = store.Read(goal)!;
+        landings[goal] = landed;
+        adoptions.Clear();
+        adoptions.AddRange([
+            (earlierAdoption, AdoptedAt.AddMinutes(-2)),
+            (otherAdoption, AdoptedAt.AddMinutes(-1)),
+            (firstContaining, AdoptedAt),
+            (landed, AdoptedAt.AddMinutes(1)),
+            (firstGate, AdoptedAt.AddMinutes(2))
+        ]);
+        WriteGate(AdoptedAt.AddMinutes(2), firstGate, 60);
+        WriteGate(AdoptedAt.AddMinutes(3), unrelatedGate, 999);
+        WriteGate(AdoptedAt.AddMinutes(4), lastGate, 70);
+        WriteGate(AdoptedAt.AddMinutes(5), landed, 80);
+
+        var answers = new Dictionary<string, bool>
+        {
+            [earlierAdoption] = false,
+            [otherAdoption] = false,
+            [firstContaining] = true,
+            [firstGate] = true,
+            [unrelatedGate] = false,
+            [lastGate] = true
+        };
+        var batchCalls = new List<(string Ancestor, string[] Commits)>();
+        var perPairCalls = new List<(string Ancestor, string Commit)>();
+        bool ContainsCommit(string ancestor, string commit)
+        {
+            perPairCalls.Add((ancestor, commit));
+            return answers[commit];
+        }
+
+        var batchedSweep = CreateSweep(ContainsCommit, (ancestor, commits) =>
+        {
+            batchCalls.Add((ancestor, commits));
+            return commits.ToDictionary(commit => commit, commit => answers[commit]);
+        });
+
+        batchedSweep.Run(() => AdoptedAt.AddHours(3));
+
+        Assert.Collection(batchCalls,
+            call =>
+            {
+                Assert.Equal(landed, call.Ancestor);
+                Assert.Equal([earlierAdoption, otherAdoption, firstContaining], call.Commits);
+            },
+            call =>
+            {
+                Assert.Equal(landed, call.Ancestor);
+                Assert.Equal([firstGate, unrelatedGate, lastGate], call.Commits);
+            });
+        Assert.Empty(perPairCalls);
+        var batched = store.Read(goal)!;
+        Assert.Equal(new(landed, firstContaining, AdoptedAt), batched.Adoption);
+        var verdict = Assert.Single(batched.FinalVerdicts);
+        Assert.Equal(new(0, Selection, CostGoalOutcomeState.Met, 100, 70, 6, 3, null), verdict);
+
+        // Revisit the same inputs without reusing the persisted adoption or final verdict.
+        store.Write(goal, initial);
+        batchCalls.Clear();
+        batchedSweep.Run(() => AdoptedAt.AddHours(3));
+
+        Assert.Empty(batchCalls);
+        Assert.Empty(perPairCalls);
+        var repeated = store.Read(goal)!;
+        Assert.Equal(batched.Adoption, repeated.Adoption);
+        Assert.Equal(verdict, Assert.Single(repeated.FinalVerdicts));
+
+        store.Write(goal, initial);
+        CreateSweep(ContainsCommit).Run(() => AdoptedAt.AddHours(3));
+
+        Assert.Equal([(landed, earlierAdoption), (landed, otherAdoption), (landed, firstContaining),
+            (landed, firstGate), (landed, unrelatedGate), (landed, lastGate)], perPairCalls);
+        var perPair = store.Read(goal)!;
+        Assert.Equal(batched.Adoption, perPair.Adoption);
+        Assert.Equal(verdict, Assert.Single(perPair.FinalVerdicts));
+        Assert.Empty(failures);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_BatchFailureFallsBackToPerPairAndCachesNothingFromIt(bool partialBatch)
+    {
+        var landed = new string('a', 40);
+        var unrelated = new string('b', 40);
+        var retry = new string('c', 40);
+        var lastGate = new string('d', 40);
+        var goal = RecordFiling();
+        landings[goal] = landed;
+        adoptions.Clear();
+        adoptions.Add((landed, AdoptedAt));
+        WriteGate(AdoptedAt.AddMinutes(1), unrelated, 999);
+        WriteGate(AdoptedAt.AddMinutes(2), retry, 60);
+        WriteGate(AdoptedAt.AddMinutes(3), lastGate, 70);
+
+        var batchCalls = new List<(string Ancestor, string[] Commits)>();
+        var perPairCalls = new List<(string Ancestor, string Commit)>();
+        var failRetryPair = true;
+        var batchedSweep = CreateSweep((ancestor, commit) =>
+        {
+            perPairCalls.Add((ancestor, commit));
+            if (commit == retry && failRetryPair) throw new InvalidOperationException("Git ancestry failed.");
+            return commit != unrelated;
+        }, (ancestor, commits) =>
+        {
+            batchCalls.Add((ancestor, commits));
+            var answers = new Dictionary<string, bool>();
+            if (partialBatch) answers.Add(unrelated, false);
+            return answers;
+        });
+
+        batchedSweep.Run(() => AdoptedAt.AddHours(3));
+
+        var batch = Assert.Single(batchCalls);
+        Assert.Equal(landed, batch.Ancestor);
+        Assert.Equal([unrelated, retry, lastGate], batch.Commits);
+        (string Ancestor, string Commit)[] firstFallbacks = partialBatch
+            ? [(landed, retry)]
+            : [(landed, unrelated), (landed, retry)];
+        Assert.Equal(firstFallbacks, perPairCalls);
+        Assert.Empty(store.Read(goal)!.PendingResults);
+        Assert.Equal($"COST_GOAL_OUTCOME_SWEEP_FAILED goal={goal} reason=InvalidOperationException",
+            Assert.Single(failures));
+
+        failRetryPair = false;
+        batchCalls.Clear();
+        perPairCalls.Clear();
+        batchedSweep.Run(() => AdoptedAt.AddHours(3));
+
+        Assert.Empty(batchCalls);
+        Assert.Equal([(landed, retry), (landed, lastGate)], perPairCalls);
+        var pending = Assert.Single(store.Read(goal)!.PendingResults);
+        Assert.Equal(2, pending.AfterSampleSize);
+
+        perPairCalls.Clear();
+        batchedSweep.Run(() => AdoptedAt.AddHours(3));
+
+        Assert.Empty(batchCalls);
+        Assert.Empty(perPairCalls);
+        Assert.Equal(pending, Assert.Single(store.Read(goal)!.PendingResults));
+        Assert.Single(failures);
+    }
+
+    [Fact]
+    public void ReadGitAncestryBatch_MatchesMergeBaseAndLeavesTagAndInvalidPairsForFallback()
+    {
+        using var repo = new InProcessGitFixture();
+        var ancestor = repo.Git("rev-parse", "HEAD");
+        var older = repo.Git("rev-parse", "HEAD^");
+        repo.Git("-c", "tag.gpgSign=false", "tag", "-a", "at-ancestor", "-m", "tag at ancestor");
+        var tag = repo.Git("rev-parse", "at-ancestor");
+        repo.Git("-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "descendant");
+        var descendant = repo.Git("rev-parse", "HEAD").ToUpperInvariant();
+        var side = repo.Git("commit-tree", $"{older}^{{tree}}", "-p", older, "-m", "side branch");
+
+        var answers = CostGoalOutcomeSweep.ReadGitAncestryBatch(repo.Worktree, ancestor, [descendant, side, older, tag]);
+
+        Assert.Equal(3, answers.Count);
+        Assert.True(answers[descendant]);
+        Assert.False(answers[side]);
+        Assert.False(answers[older]);
+        Assert.DoesNotContain(tag, answers.Keys);
+        foreach (var (commit, contains) in answers)
+            Assert.Equal(contains ? 0 : 1, GitCli.RunDirect(repo.Worktree,
+                "merge-base", "--is-ancestor", "--", ancestor, commit).ExitCode);
+
+        Assert.Equal(0, GitCli.RunDirect(repo.Worktree, "merge-base", "--is-ancestor", "--", ancestor, tag).ExitCode);
+        Assert.DoesNotContain(ancestor,
+            CostGoalOutcomeSweep.ReadGitAncestryBatch(repo.Worktree, tag, [ancestor, side, older]).Keys);
+        var missing = new string('0', ancestor.Length);
+        Assert.Empty(CostGoalOutcomeSweep.ReadGitAncestryBatch(repo.Worktree, ancestor, [descendant, side, missing]));
+    }
+
+    [Fact]
     public void Run_CountsOnlyContainingGatesStartedAfterFirstContainingAdoption()
     {
         var goal = RecordFiling();
@@ -257,8 +531,13 @@ public sealed class CostGoalOutcomeSweepTests : IDisposable
         }
     }
 
-    private CostGoalOutcomeSweep CreateSweep() => new(root, store, () => (backlog, events), landings.GetValueOrDefault,
-        () => adoptions, (ancestor, commit) => ancestor == Landed && commit == Adopted, failures.Add);
+    private CostGoalOutcomeSweep CreateSweep(Func<string, string, bool>? containsCommit = null) =>
+        CreateSweep(containsCommit ?? ((ancestor, commit) => ancestor == Landed && commit == Adopted), null);
+
+    private CostGoalOutcomeSweep CreateSweep(Func<string, string, bool> containsCommit,
+        Func<string, string[], IReadOnlyDictionary<string, bool>>? readAncestryBatch) =>
+        new(root, store, () => (backlog, events), landings.GetValueOrDefault,
+            () => adoptions, containsCommit, failures.Add, readAncestryBatch: readAncestryBatch);
 
     private void Run() => sweep.Run(() => AdoptedAt.AddHours(3));
 
