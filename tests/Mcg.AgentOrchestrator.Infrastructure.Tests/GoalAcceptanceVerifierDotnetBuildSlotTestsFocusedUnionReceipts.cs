@@ -11,10 +11,17 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedUnionReceip
     {
         var request = "Infrastructure.Tests:" + Fqn(ClassA) + "|" + Fqn(MethodA);
         var checks = Resolve(request, out var coverage);
-        var completed = new AcceptanceCheckResult(checks[0].Name, true, 0, "passed", ExecutedTestCount: 1);
+        var classCheck = Assert.Single(checks, check => check.FocusedEvidenceTokens.Any(token => token.Value == ClassA));
+        var methodCheck = Assert.Single(checks, check => check.FocusedEvidenceTokens.Any(token => token.Value == MethodA));
+        using var worktree = new FocusedEvidenceUnexecutedClassCauseTests.Worktree();
+        var report = Path.Combine(worktree.Root, "class.ctrf.json");
+        NormalizedTestResultWriter.Write(report, "vstest",
+            [FocusedEvidenceNotRunPlanRemainderTests.Result(ClassA + ".Executed", TestResultStatus.Passed)]);
+        var completed = new AcceptanceCheckResult(classCheck.Name, true, 0, "passed", ExecutedTestCount: 1)
+            { NormalizedTestResultPaths = [report] };
         var notRun = FocusedEvidenceNotRunPlan.Compare(checks, [completed], coverage, continueAfterFailure: true);
-        Assert.Equal(checks[1].Name, Assert.Single(notRun.Checks).CheckName);
-        Assert.Equal(Fqn(ClassA) + "|" + Fqn(MethodA), Assert.Single(notRun.Selections).TestClass);
+        Assert.Equal(methodCheck.Name, Assert.Single(notRun.Checks).CheckName);
+        Assert.Equal(Fqn(MethodA), Assert.Single(notRun.Selections).TestClass);
     }
 
     [Xunit.Theory]
