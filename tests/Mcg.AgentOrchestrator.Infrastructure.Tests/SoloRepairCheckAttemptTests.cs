@@ -157,6 +157,49 @@ public sealed class SoloRepairCheckAttemptTests
     }
 
     [Fact]
+    public void FailedExecution_SurfacesRecordedDetailForSameProofAfterRestart()
+    {
+        const string failure = "Timed out preparing the focused check worktree.";
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        var workspace = Workspace(fixture);
+        var store = new SoloBaselineRepairStore(Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName));
+        var candidate = fixture.Context.CandidateSha;
+        var main = fixture.Context.MainSha;
+        var finding = SoloRepairReplayTests.Finding() with { Candidate = candidate, Main = main, Baseline = main };
+        var (key, allowCandidatePass) = store.ResolveAttributionRequest(fixture.Goal.Id.Value, finding, candidate, main);
+        var request = new SoloRepairCheckRequest(key, finding, candidate, main, true, allowCandidatePass,
+            SoloBaselineRepairStore.FocusedProofIdentity(key, finding, candidate, main, true, allowCandidatePass));
+        var launched = new List<(string Path, Guid Id)>();
+        SpawnProcessIdentity Launch(string path, Guid id)
+        {
+            launched.Add((path, id));
+            return Owner;
+        }
+
+        var coordinator = AttemptCoordinator(workspace, Launch);
+        coordinator.StartOrObserve(store, request);
+        var first = Assert.Single(launched);
+        Assert.Equal(1, SoloRepairCheckAttemptCoordinator.RunAttempt(first.Path, first.Id,
+            _ => throw new TimeoutException(failure)));
+
+        var error = Assert.Throws<InvalidOperationException>(() => coordinator.StartOrObserve(store, request));
+        Assert.Contains(failure, error.Message, StringComparison.Ordinal);
+        var restarted = AttemptCoordinator(workspace, Launch);
+        var recoveredError = Assert.Throws<InvalidOperationException>(() => restarted.StartOrObserve(store, request));
+        Assert.Equal(error.Message, recoveredError.Message);
+        Assert.Single(launched);
+        Assert.Null(store.ReadCheck(key));
+
+        var changedProof = request with
+        {
+            AllowCandidatePass = !allowCandidatePass,
+            ProofIdentity = SoloBaselineRepairStore.FocusedProofIdentity(key, finding, candidate, main, true, !allowCandidatePass)
+        };
+        restarted.StartOrObserve(store, changedProof);
+        Assert.Equal(2, launched.Count);
+    }
+
+    [Fact]
     public async Task Restart_ObservesLiveOwnerAndHeldMutex_ThenCompletesStagedCheckWithoutExecuting()
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
