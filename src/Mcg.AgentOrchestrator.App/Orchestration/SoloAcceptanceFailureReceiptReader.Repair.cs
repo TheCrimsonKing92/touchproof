@@ -242,7 +242,7 @@ internal static partial class SoloAcceptanceFailureReceiptReader
         try { candidate = ReadExactRow(candidateRows.Value[identity], identity); }
         catch (Exception ex) when (IsRepairEvidenceError(ex)) { return finding with { Reason = ex.Message }; }
         if (candidate?.Value.Outcome != "Failed") return finding with { Reason = SoloHoldReasons.FailingTestsAbsent };
-        // A tool launch fault or build timeout can explain the arm disposition without invalidating siblings.
+        // A check-local fault can explain the arm disposition without invalidating siblings.
         if (!proof.Baseline.Accepted ||
             (proof.Baseline.Disposition == FindingEvidenceArmDisposition.ApparatusFailure &&
              !CanPartitionBaselineApparatusFailure(proof.Baseline.Checks)))
@@ -314,8 +314,16 @@ internal static partial class SoloAcceptanceFailureReceiptReader
     private static bool CanPartitionBaselineApparatusFailure(IReadOnlyList<AcceptanceCheckResult> checks)
     {
         var faults = checks.Where(FocusedEvidenceExecution.IsFocusedEvidenceApparatusFailure).ToArray();
-        return faults.Length > 0 && faults.All(check => check.FailureClassification is
-            AcceptanceFailureClassifications.MissingTool or AcceptanceFailureClassifications.BuildPhaseTimeout);
+        return faults.Length > 0 && faults.All(check =>
+            check.FailureClassification is AcceptanceFailureClassifications.MissingTool or
+                AcceptanceFailureClassifications.BuildPhaseTimeout ||
+            check is
+            {
+                FailureClassification: AcceptanceFailureClassifications.FocusedSelectionApparatusFailure,
+                Passed: false,
+                CompletionDecision: { Passed: false, TimedOut: false, TrxOutcome: "missing" },
+                TestResultPaths: []
+            });
     }
 
     private static string RepairFeedback(TrxRow row)

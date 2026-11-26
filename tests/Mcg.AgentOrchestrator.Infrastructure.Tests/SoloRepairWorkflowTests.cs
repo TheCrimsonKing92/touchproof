@@ -1381,7 +1381,10 @@ public sealed class SoloRepairWorkflowTests
             else
             {
                 Assert.False(failed.Check.Passed);
-                Assert.Equal("missing", failed.Check.CompletionDecision?.TrxOutcome);
+                Assert.Equal(AcceptanceFailureClassifications.FocusedSelectionApparatusFailure, failed.Check.FailureClassification);
+                Assert.Equal(FindingEvidenceArmDisposition.ApparatusFailure, proof.Baseline.Disposition);
+                Assert.True(failed.Check.CompletionDecision is { Passed: false, TimedOut: false, TrxOutcome: "missing" });
+                Assert.Empty(Assert.IsAssignableFrom<IReadOnlyList<string>>(failed.Check.TestResultPaths));
                 Assert.Null(failed.Check.LaneToolResolution?.MissingTool);
                 Assert.Empty(failed.Artifacts);
             }

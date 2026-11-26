@@ -167,9 +167,10 @@ public sealed class SoloRepairEvidenceTests
     }
 
     [Theory]
-    [InlineData(AcceptanceFailureClassifications.BuildPhaseTimeout)]
-    [InlineData(AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable)]
-    public async Task BaselineApparatusFailure_OnlyPartitionsKnownToolAndBuildFaults(string classification)
+    [InlineData(AcceptanceFailureClassifications.BuildPhaseTimeout, true)]
+    [InlineData(AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable, false)]
+    [InlineData(AcceptanceFailureClassifications.FocusedSelectionApparatusFailure, false)]
+    public async Task BaselineApparatusFailure_RequiresEvidenceOfCheckLocalFault(string classification, bool partitions)
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
         await fixture.Produce(mixed: true);
@@ -199,7 +200,7 @@ public sealed class SoloRepairEvidenceTests
         Assert.Equal(SoloHoldReasons.BaselineUnavailable,
             SoloAcceptanceFailureReceiptReader.Read(fixture.Goal, fixture.Context).Reason);
         var partition = Read(fixture);
-        if (classification == AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable)
+        if (!partitions)
         {
             Assert.Null(partition.Introduced);
             Assert.Equal(3, partition.Findings.Count);
