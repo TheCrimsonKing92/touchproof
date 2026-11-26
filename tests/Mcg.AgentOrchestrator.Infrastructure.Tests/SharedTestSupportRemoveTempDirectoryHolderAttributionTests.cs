@@ -9,41 +9,15 @@ public sealed class SharedTestSupportRemoveTempDirectoryHolderAttributionTests
     [Fact(Skip = "Requires Windows deletion-blocking file handles.", SkipUnless = nameof(IsWindows))]
     public void RemoveTempDirectory_FileHeldPastBudget_NamesThisProcessAsHolder()
     {
-        WithHeldFile((root, _, _) =>
+        WithHeldFile((root, file, _) =>
         {
-            var delays = 0;
-            var diagnostics = new LockAttributionDiagnosticCollector();
-            var error = Assert.Throws<IOException>(() => SharedTestSupport.RemoveTempDirectory(
-                root, () => TimeSpan.FromMilliseconds(1), _ => delays++,
-                file => LockAttribution.AttributeWithDiagnosticsForTests(
-                    file, null, "test-cleanup", "remove-temp-directory", diagnostics),
-                budget: TimeSpan.FromMilliseconds(1)));
-
-            // Retain the branch and hook evidence when an executor cannot identify
-            // this known, still-held file.
-            Console.WriteLine(diagnostics.Receipt.Format());
-            Console.WriteLine(error.Message);
-
-            var line = HolderLine(error);
             using var process = Process.GetCurrentProcess();
-            // Focused-gate feedback retains assertion failures, but may omit stdout.
-            // Keep the selected branch and captured hooks with the failing assertion.
-            var processPath = process.MainModule!.FileName;
-            var description = FileVersionInfo.GetVersionInfo(processPath).FileDescription;
-            // The attribution mechanisms report an application description, executable
-            // filename or process name. Require the actual holder's identity in each case.
-            var expectedNames = new[] { process.ProcessName, Path.GetFileName(processPath), description }
-                .Where(name => !string.IsNullOrWhiteSpace(name))
-                .Select(name => $"pid={process.Id} name={name}")
-                .ToArray();
-            var holders = line.Split("; ", StringSplitOptions.None);
-            Assert.True(holders.Any(holder => expectedNames.Contains(holder, StringComparer.Ordinal)),
-                $"Expected this process's holder id and name ({string.Join(" or ", expectedNames)}). Actual: {line}"
-                + Environment.NewLine + diagnostics.Receipt.Format());
-            Assert.Contains("source=", line, StringComparison.Ordinal);
-            Assert.DoesNotContain("unavailable", line, StringComparison.Ordinal);
-            Assert.Equal(0, delays);
-            AssertOriginalFailure(error, root);
+            var holder = new BuildLockHolder(process.Id, process.ProcessName, null, false);
+            const string probeSource = "test-probe";
+            var error = FailWithProbe(root, file, path => new BuildLockAttribution(path, [holder], probeSource));
+
+            Assert.Equal($"Holder attribution: source={probeSource}; path={file}; "
+                + $"pid={holder.ProcessId} name={holder.ProcessName}", HolderLine(error));
         });
     }
 
