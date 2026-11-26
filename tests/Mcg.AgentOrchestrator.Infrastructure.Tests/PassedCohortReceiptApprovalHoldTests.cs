@@ -166,7 +166,8 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
     {
         private readonly ManualResetEventSlim _started = new();
         private readonly ManualResetEventSlim _release = new();
-        internal string Repo { get; } = CreateReducedAcceptanceCohortRepository();
+        // A nested solo-repair checkout can exceed Git's path limit for detached worktrees.
+        internal string Repo { get; } = CreateReducedAcceptanceCohortRepository(containerParent: Path.GetTempPath());
         internal AgentOrchestratorKernel Kernel { get; } = new();
         internal Goal[] Goals { get; }
         internal string[] CandidateRevisions { get; }
@@ -294,7 +295,7 @@ public sealed class PassedCohortReceiptApprovalHoldTests : AcceptanceCohortWorkf
             var drained = SpinWait.SpinUntil(() => Driver.GetActiveCohortGateMemberGoalIds().Count == 0,
                 TimeSpan.FromSeconds(30));
             Assert.True(drained, "The cohort gate did not drain before scenario teardown.");
-            DeleteDirectory(Repo);
+            DeleteDirectory(Path.GetDirectoryName(Repo)!);
             _started.Dispose();
             _release.Dispose();
         }

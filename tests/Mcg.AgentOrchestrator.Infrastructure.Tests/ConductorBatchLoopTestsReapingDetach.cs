@@ -1557,7 +1557,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         var heartbeatPath = Path.Combine(root, "detached.heartbeat.json");
         var now = startedAt ?? DateTimeOffset.UtcNow;
         var plannerPlan = WorkerDispatchTestSupport.PlannerContractPlanFixture().Replace(
-            "`seed.txt`, ",
+            "`./seed.txt`, ",
             string.Empty,
             StringComparison.Ordinal).Replace(
             WorkerDispatchTestSupport.PlannerContractAcceptanceMappingBody,

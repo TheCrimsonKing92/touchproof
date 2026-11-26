@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
@@ -7,7 +8,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 // Disposable acceleration data: every miss uses the canonical snapshot projection.
 internal static class ProviderHoldSeedEvidenceStore
 {
-    internal const int FormatVersion = 1;
+    internal const int FormatVersion = 3;
+    private const int BackfillJsonByteLimit = 4 * 1024 * 1024;
 
     // Snapshot writers advance version/updated_at; archiving and recompression change archive metadata.
     // Keep this expression identical for cache validation and the atomic snapshot/marker read.
@@ -48,15 +50,17 @@ internal static class ProviderHoldSeedEvidenceStore
                 var id = reader.GetString(0);
                 try
                 {
-                    if (reader.GetValue(1) is not string json) continue;
-                    var evidence = JsonSerializer.Deserialize<ProviderUsageGoalEvidence>(json, options);
+                    if (reader.GetValue(1) is not byte[] payload) continue;
+                    using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(payload)!;
+                    var evidence = JsonSerializer.Deserialize<ProviderUsageGoalEvidence>(stream, options);
                     if (evidence is not null && evidence.GoalId == id && evidence.Tasks is not null &&
                         evidence.Timeline is not null && evidence.Tasks.All(task => task is not null &&
                             GoalTaskHistoryStore.HasUsableCachedHistories(task)) &&
                         evidence.Timeline.All(evt => evt is not null && evt.GoalId?.Value == id))
                         result[id] = evidence;
                 }
-                catch (Exception exception) when (exception is JsonException or NotSupportedException or InvalidOperationException)
+                catch (Exception exception) when (exception is JsonException or InvalidDataException or
+                    NotSupportedException or InvalidOperationException)
                 { /* Unusable rows are misses, never authoritative evidence. */ }
             }
         }
@@ -114,8 +118,16 @@ internal static class ProviderHoldSeedEvidenceStore
             await command.ExecuteNonQueryAsync(token);
             began = true;
             await CreateSchemaAsync(connection, token);
+            // Every miss has already been projected. Limit optional backfill to a prefix of
+            // those misses so large histories can advance the cache over successive starts.
+            var remainingJsonBytes = BackfillJsonByteLimit;
             foreach (var (evidence, marker) in rows)
             {
+                var json = JsonSerializer.SerializeToUtf8Bytes(evidence, options);
+                remainingJsonBytes -= json.Length;
+                if (remainingJsonBytes < 0)
+                    break;
+
                 command.CommandText = """
                     INSERT INTO provider_hold_seed_evidence (goal_id, marker, format_version, evidence_json)
                     VALUES ($id, $marker, $version, $json)
@@ -126,7 +138,7 @@ internal static class ProviderHoldSeedEvidenceStore
                 command.Parameters.AddWithValue("$id", evidence.GoalId);
                 command.Parameters.AddWithValue("$marker", marker);
                 command.Parameters.AddWithValue("$version", FormatVersion);
-                command.Parameters.AddWithValue("$json", JsonSerializer.Serialize(evidence, options));
+                command.Parameters.AddWithValue("$json", GoalSnapshotArchiveCodec.Encode(json, CompressionLevel.Fastest));
                 await command.ExecuteNonQueryAsync(token);
             }
             command.CommandText = "COMMIT";

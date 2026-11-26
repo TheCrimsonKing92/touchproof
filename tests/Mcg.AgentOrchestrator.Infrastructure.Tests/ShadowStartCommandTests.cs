@@ -41,8 +41,8 @@ public sealed class ShadowStartCommandTests
     public void LateFirstTick_FailsStartupCeilingWhileNormalStartupPasses()
     {
         using var fixture = new Fixture();
-        var failure = fixture.Run("slow", "late", startupSeconds: "8");
-        var success = fixture.Run("normal", "normal", startupSeconds: "8");
+        var failure = fixture.Run("withhold-first-tick", "late", startupSeconds: "8");
+        var success = fixture.Run("normal", "normal");
 
         Assert.NotEqual(0, failure.Exit);
         Assert.Contains("assertion=startup-ceiling", failure.Error);
@@ -162,7 +162,10 @@ public sealed class ShadowStartCommandTests
                 throw "Legacy grouped attempt has no lease in $root"
             }
         }
-        if ($mode -eq 'slow') { Start-Sleep -Seconds 30 }
+        if ($mode -eq 'withhold-first-tick') {
+            $release = Join-Path $root '.first-tick-release'
+            while (-not (Test-Path -LiteralPath $release -PathType Leaf)) { Start-Sleep -Milliseconds 25 }
+        }
         Write-Event 'startup-first-tick' 'STARTUP_FIRST_TICK'
         Write-Event 'tick' 'TICK tick=1'
         if ($mode -eq 'stdout-tick') {

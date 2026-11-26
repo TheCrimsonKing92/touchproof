@@ -14,7 +14,7 @@ public sealed partial class GoalAcceptanceVerifier
         if (classifyMissingSelectionsAsAbsent)
         {
             return AcceptanceFailureAttributionPlanner.BuildBaselineSourceSelections(
-                baselineSha, focusedChecks, ProjectLabel, EngineSettings, baselinePath);
+                baselineSha, focusedChecks, EngineSettings, baselinePath);
         }
 
         if (!partitionCandidateOnlySelections)

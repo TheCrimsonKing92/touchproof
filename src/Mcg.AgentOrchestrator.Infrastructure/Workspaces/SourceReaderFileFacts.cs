@@ -23,6 +23,10 @@ internal sealed record SourceReaderFileFacts(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public AssemblyScanningGuardTestClasses.ScanFile? AssemblyScans { get; init; }
 
+    // Only the live candidate can provide syntax for narrowing the plan.
+    [JsonIgnore]
+    private SyntaxNode? SyntaxRoot { get; init; }
+
     internal sealed record TypeFact(
         [property: JsonRequired] string Id,
         [property: JsonRequired] string Owner,
@@ -60,22 +64,6 @@ internal sealed record SourceReaderFileFacts(
             .Select(token => token.ValueText).Concat(nodes.SelectMany(ImplicitReferences))
             .Where(name => !string.IsNullOrWhiteSpace(name))
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
-        // Include namespace segments and attribute shorthand as conservative invalidation names.
-        var names = nodes.SelectMany(node => node switch
-        {
-            BaseTypeDeclarationSyntax type => new[] { type.Identifier.ValueText },
-            DelegateDeclarationSyntax type => new[] { type.Identifier.ValueText },
-            MethodDeclarationSyntax method => new[] { method.Identifier.ValueText },
-            PropertyDeclarationSyntax property => new[] { property.Identifier.ValueText },
-            EventDeclarationSyntax member => new[] { member.Identifier.ValueText },
-            VariableDeclaratorSyntax variable => new[] { variable.Identifier.ValueText },
-            EnumMemberDeclarationSyntax member => new[] { member.Identifier.ValueText },
-            BaseNamespaceDeclarationSyntax space => space.Name.DescendantTokens()
-                .Where(token => token.IsKind(SyntaxKind.IdentifierToken)).Select(token => token.ValueText),
-            _ => Enumerable.Empty<string>()
-        }).Where(name => !string.IsNullOrWhiteSpace(name))
-            .SelectMany(name => name.Length > 9 && name.EndsWith("Attribute", StringComparison.Ordinal)
-            ? new[] { name, name[..^9] } : new[] { name }).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         // These causes cannot be bounded by declaration/reference names in either changed version.
         var unbounded = nodes.Any(node => node is OperatorDeclarationSyntax or ConversionOperatorDeclarationSyntax or
                 IndexerDeclarationSyntax or DelegateDeclarationSyntax ||
@@ -89,19 +77,42 @@ internal sealed record SourceReaderFileFacts(
             .Where(AssemblyScanningGuardTestClasses.IsScanSite).Select(call => call.SpanStart).Distinct().ToArray();
         return new(RelativePath(sources, tree), contentHash,
             nodes.OfType<ClassDeclarationSyntax>().Any(type => type.Identifier.ValueText == "RepositorySourceSnapshotCache"),
-            unbounded, names, references,
-            nodes.Where(node => node is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax or BaseNamespaceDeclarationSyntax ||
-                    node is ConstructorDeclarationSyntax or TypeParameterConstraintClauseSyntax ||
-                    node is PropertyDeclarationSyntax property && property.Modifiers.Any(SyntaxKind.RequiredKeyword) ||
-                    node is FieldDeclarationSyntax field && (field.Modifiers.Any(SyntaxKind.ConstKeyword) ||
-                        field.Modifiers.Any(SyntaxKind.RequiredKeyword)))
-                .Select(DeclarationShape).Order(StringComparer.Ordinal).ToArray(), [],
+            unbounded, GetDeclaredNames(nodes), references, GetDeclarationShapes(nodes), [],
             nodes.OfType<ClassDeclarationSyntax>().Select(type => new TypeFact("", ImpactReplayTestSourceIndex.ClassName(type),
                 null, type.BaseList?.WithoutTrivia().ToFullString() ?? "")).ToArray(), [])
         {
-            AssemblyScans = scanPositions.Length == 0 ? null : new(contentHash, tree.Length, scanPositions)
+            AssemblyScans = scanPositions.Length == 0 ? null : new(contentHash, tree.Length, scanPositions),
+            SyntaxRoot = root
         };
     }
+
+    // Include namespace segments and attribute shorthand as conservative invalidation names.
+    private static string[] GetDeclaredNames(IEnumerable<SyntaxNode> nodes) =>
+        nodes.SelectMany(node => node switch
+        {
+            BaseTypeDeclarationSyntax type => new[] { type.Identifier.ValueText },
+            DelegateDeclarationSyntax type => new[] { type.Identifier.ValueText },
+            MethodDeclarationSyntax method => new[] { method.Identifier.ValueText },
+            PropertyDeclarationSyntax property => new[] { property.Identifier.ValueText },
+            EventDeclarationSyntax member => new[] { member.Identifier.ValueText },
+            VariableDeclaratorSyntax variable => new[] { variable.Identifier.ValueText },
+            EnumMemberDeclarationSyntax member => new[] { member.Identifier.ValueText },
+            BaseNamespaceDeclarationSyntax space => space.Name.DescendantTokens()
+                .Where(token => token.IsKind(SyntaxKind.IdentifierToken)).Select(token => token.ValueText),
+            _ => Enumerable.Empty<string>()
+        }).Where(name => !string.IsNullOrWhiteSpace(name)).SelectMany(NameVariants)
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+
+    private static string[] NameVariants(string name) =>
+        name.Length > 9 && name.EndsWith("Attribute", StringComparison.Ordinal) ? [name, name[..^9]] : [name];
+
+    private static string[] GetDeclarationShapes(IEnumerable<SyntaxNode> nodes) =>
+        nodes.Where(node => node is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax or BaseNamespaceDeclarationSyntax ||
+                node is ConstructorDeclarationSyntax or TypeParameterConstraintClauseSyntax ||
+                node is PropertyDeclarationSyntax property && property.Modifiers.Any(SyntaxKind.RequiredKeyword) ||
+                node is FieldDeclarationSyntax field && (field.Modifiers.Any(SyntaxKind.ConstKeyword) ||
+                    field.Modifiers.Any(SyntaxKind.RequiredKeyword)))
+            .Select(DeclarationShape).Order(StringComparer.Ordinal).ToArray();
 
     // Syntax-only declaration shape: scope, kind, name, arity and accessibility can all change lookup
     // inside an unchanged member signature. Constant values also flow through unchanged declarations
@@ -188,7 +199,9 @@ internal sealed record SourceReaderFileFacts(
         var changed = old.Keys.Union(current.Keys, StringComparer.Ordinal).Where(path =>
             !old.TryGetValue(path, out var before) || !current.TryGetValue(path, out var after) ||
             before.ContentHash != after.ContentHash).ToHashSet(StringComparer.Ordinal);
-        var versions = baseline.Concat(candidate).Where(file => changed.Contains(file.Path)).ToArray();
+        if (changed.Count == 1 && current.TryGetValue(changed.Single(), out var changedFile))
+            current[changedFile.Path] = BoundNewClass(changedFile, baseline, candidate);
+        var versions = baseline.Concat(current.Values).Where(file => changed.Contains(file.Path)).ToArray();
         if (versions.Any(file => file.Unbounded)) return null;
         var names = versions.SelectMany(file => file.DeclaredNames).ToHashSet(StringComparer.Ordinal);
         var baseListChanged = false;
@@ -203,9 +216,7 @@ internal sealed record SourceReaderFileFacts(
                 before.Concat(after).Any(type => type.BaseList.Length != 0))
             {
                 baseListChanged = true;
-                names.UnionWith(before.Concat(after).SelectMany(type => SyntaxFactory.ParseTokens(type.BaseList))
-                    .Where(token => token.IsKind(SyntaxKind.IdentifierToken)).Select(token => token.ValueText)
-                    .Where(name => !string.IsNullOrWhiteSpace(name)));
+                names.UnionWith(before.Concat(after).SelectMany(type => BaseNames(SyntaxFactory.ParseTokens(type.BaseList))));
             }
         }
         if (baseListChanged || names.Any(ImplicitBindingName) ||
@@ -236,6 +247,49 @@ internal sealed record SourceReaderFileFacts(
         return candidate.Where(file => changed.Contains(file.Path) ||
             file.ReferencedNames.Any(names.Contains)).Select(file => file.Path).ToHashSet(StringComparer.Ordinal);
     }
+
+    private static SourceReaderFileFacts BoundNewClass(SourceReaderFileFacts file, SourceReaderFileFacts[] baseline,
+        SourceReaderFileFacts[] candidate)
+    {
+        // Limit the bound to a new global class at the end of the changed file. A static, partial,
+        // or nested declaration can affect lookup without callers spelling the new class name.
+        if (file.Unbounded || file.SyntaxRoot is not CompilationUnitSyntax root ||
+            root.Members.LastOrDefault() is not ClassDeclarationSyntax type ||
+            type.Modifiers.Any(SyntaxKind.StaticKeyword) || type.Modifiers.Any(SyntaxKind.PartialKeyword) ||
+            type.DescendantNodes().Any(node => node is BaseTypeDeclarationSyntax ||
+                node is ParameterSyntax parameter && parameter.Modifiers.Any(SyntaxKind.ThisKeyword)))
+            return file;
+
+        var owner = ImpactReplayTestSourceIndex.ClassName(type);
+        if (baseline.Any(other => other.Types.Any(declaration => declaration.Owner == owner)) ||
+            candidate.Sum(other => other.Types.Count(declaration => declaration.Owner == owner)) != 1)
+            return file;
+
+        var typeNames = NameVariants(type.Identifier.ValueText).ToHashSet(StringComparer.Ordinal);
+        var otherFiles = baseline.Concat(candidate.Where(other => other.Path != file.Path)).ToArray();
+        if (otherFiles.Any(other => other.ReferencedNames.Any(typeNames.Contains)) ||
+            root.DescendantTokens().Any(token => token.IsKind(SyntaxKind.IdentifierToken) &&
+                !type.Span.Contains(token.Span) && typeNames.Contains(token.ValueText)))
+            return file;
+
+        var outsideClass = root.DescendantNodes(node => node.Span != type.Span)
+            .Where(node => node.Span != type.Span).ToArray();
+        var names = GetDeclaredNames(outsideClass).ToHashSet(StringComparer.Ordinal);
+        // A source base may supply inherited members to the new class. Keep its declarations in reach.
+        var baseNames = BaseNames(type.BaseList?.DescendantTokens() ?? []).ToHashSet(StringComparer.Ordinal);
+        if (baseNames.Count != 0)
+            names.UnionWith(otherFiles.SelectMany(other => other.DeclaredNames).Where(baseNames.Contains));
+        return file with
+        {
+            DeclaredNames = names.ToArray(),
+            Types = file.Types.Where(declaration => declaration.Owner != owner).ToArray(),
+            TypeDeclarationShapes = GetDeclarationShapes(outsideClass)
+        };
+    }
+
+    private static IEnumerable<string> BaseNames(IEnumerable<SyntaxToken> tokens) =>
+        tokens.Where(token => token.IsKind(SyntaxKind.IdentifierToken)).Select(token => token.ValueText)
+            .Where(name => !string.IsNullOrWhiteSpace(name));
 
     internal static bool Valid(SourceReaderFileFacts[] files)
     {

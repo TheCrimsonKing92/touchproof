@@ -12,7 +12,11 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
 {
     internal const string First = "Sample.Tests.SoloTests.Fails";
     internal const string Long = "Sample.Tests.SoloTests.Long";
+    internal const string Unknown = "Sample.Tests.SoloTests.Unknown";
     internal const string Project = "tests/Sample.Tests/Sample.Tests.csproj";
+    internal const string FirstCollisionProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/first/Mcg.AgentOrchestrator.Infrastructure.Collision.Tests.csproj";
+    internal const string SecondCollisionProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/second/Mcg.AgentOrchestrator.Infrastructure.Collision.Tests.csproj";
+    internal const string ManifestCheckName = "solo tests";
     internal string Root { get; } = Path.Combine(Path.GetTempPath(), "mcg-solo-route", Guid.NewGuid().ToString("N"));
     internal string Repo => Path.Combine(Root, "repo");
     internal AgentOrchestratorKernel Kernel { get; private set; } = new();
@@ -23,29 +27,25 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
     internal int BaselineRuns { get; private set; }
     internal int CandidateRuns { get; private set; }
     internal Action? BeforeStart { get; set; }
+    private readonly bool _vstest;
 
-    internal SoloAttributedFailureRouteFixture(bool committed = true)
+    internal SoloAttributedFailureRouteFixture(bool committed = true, bool collidingProjectLabels = false,
+        bool vstest = false, bool firstTestAbsentAtBaseline = false)
     {
+        _vstest = vstest;
+        var project = collidingProjectLabels ? SecondCollisionProject : Project;
+        var shadowInvocation = collidingProjectLabels ? Invocation(FirstCollisionProject) + "," : "";
+        var invocations = vstest ? "" : shadowInvocation + Invocation(project);
+        var runner = vstest ? "vstest" : "mtp";
         Directory.CreateDirectory(Path.Combine(Repo, "config"));
-        Directory.CreateDirectory(Path.Combine(Repo, "tests", "Sample.Tests"));
-        File.WriteAllText(Path.Combine(Repo, Project), "<Project />");
-        File.WriteAllText(Path.Combine(Repo, "tests/Sample.Tests/SoloTests.cs"), """
-            namespace Sample.Tests;
-            public class SoloTests {
-                [Xunit.Fact] public void Fails() { }
-                [Xunit.Fact] public void Long() { }
-            }
-            """);
-        File.WriteAllText(Path.Combine(Repo, "config/acceptance-manifest.json"), """
+        WriteProject(project, includeFirst: !firstTestAbsentAtBaseline);
+        if (collidingProjectLabels) WriteProject(FirstCollisionProject);
+        File.WriteAllText(Path.Combine(Repo, "config/acceptance-manifest.json"), $$"""
             { "version": 1, "engine": {
               "slotCount": 1, "maxConcurrentShards": 1, "enforceStructuralCoverage": false,
-              "mtpInvocations": [{
-                "project": "tests/Sample.Tests/Sample.Tests.csproj",
-                "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
-                "arguments": ["{executable}", "--results-directory", "{resultsDirectory}", "--report-trx", "--report-trx-filename", "{trxFileName}"]
-              }] }, "checks": [
-              { "name": "solo tests", "type": "dotnet-test", "runner": "mtp",
-                "project": "tests/Sample.Tests/Sample.Tests.csproj", "arguments": [] }
+              "mtpInvocations": [{{invocations}}] }, "checks": [
+              { "name": "{{ManifestCheckName}}", "type": "dotnet-test", "runner": "{{runner}}",
+                "project": "{{project}}", "arguments": [] }
             ], "forbiddenChangedPathGlobs": [] }
             """);
         Git("init", "-b", "main");
@@ -57,16 +57,45 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         Git("checkout", "-b", "candidate");
         File.WriteAllText(Path.Combine(Repo, "README.md"), "candidate");
         Git("add", "README.md");
+        if (firstTestAbsentAtBaseline)
+        {
+            WriteProject(project);
+            Git("add", Path.GetDirectoryName(project)!);
+        }
         Git("commit", "-m", "Candidate");
         Context = new(Git("rev-parse", "HEAD"), main, Git("rev-parse", "HEAD^{tree}"), main);
         Goal = CompletedGoal(Kernel, committed: committed);
+
+        static string Invocation(string path) => $$"""
+            {"project":"{{path}}",
+             "executablePathTemplate":"bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+             "arguments":["{executable}","--results-directory","{resultsDirectory}","--report-trx","--report-trx-filename","{trxFileName}"]}
+            """;
+
+        void WriteProject(string path, bool includeFirst = true)
+        {
+            var projectDirectory = Path.GetDirectoryName(Path.Combine(Repo, path))!;
+            Directory.CreateDirectory(projectDirectory);
+            File.WriteAllText(Path.Combine(Repo, path), "<Project />");
+            var first = includeFirst ? "[Xunit.Fact] public void Fails() { }" : "";
+            File.WriteAllText(Path.Combine(projectDirectory, "SoloTests.cs"), $$"""
+                namespace Sample.Tests;
+                public class SoloTests {
+                    {{first}}
+                    [Xunit.Fact] public void Long() { }
+                    [Xunit.Fact] public void Unknown() { }
+                }
+                """);
+        }
     }
 
-    internal async Task Produce(bool baselineThrows = false, bool buildFails = false, bool baselineFails = false,
-        bool collidingPassedRows = false, string? attemptId = null)
+    internal GoalAcceptanceVerifier CreateVerifier(string checkout, bool baselineThrows = false, bool baselineFails = false,
+        bool collidingPassedRows = false, bool mixed = false, bool singleRow = false, string? firstCase = null,
+        Action? onFailedBuild = null, bool captureFails = false, Exception? baselineException = null,
+        string? baselineMissingToolFor = null, string? baselineCrashFor = null)
     {
-        var failedBuilds = 0;
-        var verifier = new GoalAcceptanceVerifier(new GoalAcceptanceVerifierTestOverrides
+        string? candidateTrx = null;
+        return new(new GoalAcceptanceVerifierTestOverrides
         {
             BuildStorageRootForTests = new(Path.Combine(Root, "dotnet")),
             ShardPermitRootForTests = Path.Combine(Root, "permits"),
@@ -75,34 +104,82 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         }, (args, directory, _) =>
         {
             var results = Array.IndexOf(args, "--results-directory");
-            if (buildFails && args.Contains("build"))
+            if (onFailedBuild is not null && args.Contains("build"))
             {
-                failedBuilds++;
+                onFailedBuild();
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1,
                     "SoloTests.cs(1,1): error CS1002: ; expected\nBuild FAILED."));
             }
             if (results < 0) return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
-            var filename = Array.IndexOf(args, "--report-trx-filename");
-            Assert.True(filename >= 0, "The fixture must execute the MTP TRX path.");
-            var baseline = !Path.GetFullPath(directory).Equals(Path.GetFullPath(Repo), StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(_vstest, GoalAcceptanceVerifier.IsDotnetTestCommand(args));
+            var filename = Array.IndexOf(args, _vstest ? "--logger" : "--report-trx-filename");
+            Assert.True(filename >= 0, "The selected runner must request a TRX receipt.");
+            var trxFile = args[filename + 1];
+            if (_vstest)
+            {
+                const string trxLogger = "trx;LogFileName=";
+                Assert.StartsWith(trxLogger, trxFile);
+                trxFile = trxFile[trxLogger.Length..];
+            }
+            var baseline = !Path.GetFullPath(directory).Equals(Path.GetFullPath(checkout), StringComparison.OrdinalIgnoreCase);
             if (baseline) BaselineRuns++; else CandidateRuns++;
-            if (baseline && baselineThrows) throw new InvalidOperationException("Fixture baseline runner failed.");
-            var method = Array.IndexOf(args, "--filter-method");
-            string[] names = method < 0 ? collidingPassedRows ? [First] : [First, Long] : [args[method + 1].Trim('*')];
+            if (baseline && (baselineThrows || baselineException is not null))
+                throw baselineException ?? new InvalidOperationException("Fixture baseline runner failed.");
+            var method = Array.IndexOf(args, _vstest ? "--filter" : "--filter-method");
+            var selection = method < 0 ? null : args[method + 1];
+            if (_vstest && selection is not null)
+            {
+                const string vstestFilter = "FullyQualifiedName~";
+                Assert.StartsWith(vstestFilter, selection);
+                selection = selection[vstestFilter.Length..];
+            }
+            string[] names = selection is null
+                ? collidingPassedRows || singleRow ? [First] : mixed ? [First, Long, Unknown] : [First, Long]
+                : [selection.Trim('*')];
+            if (baseline && baselineMissingToolFor is not null && names.SequenceEqual([baselineMissingToolFor]))
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(9009,
+                    "'dotnet' is not recognized as an internal or external command") { LaneToolResolution = new() });
+            if (baseline && baselineCrashFor is not null && names.SequenceEqual([baselineCrashFor]))
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1,
+                    "Test host exited before writing results.") { LaneToolResolution = new() });
+            if (firstCase is not null)
+                names = names.Select(name => name == First ? name + firstCase : name).ToArray();
             Directory.CreateDirectory(args[results + 1]);
-            var passed = baseline && !baselineFails;
-            var path = Path.Combine(args[results + 1], args[filename + 1]);
+            var passed = baseline && (mixed ? names.SequenceEqual([Long]) : !baselineFails);
+            var path = Path.Combine(args[results + 1], trxFile);
             if (collidingPassedRows && !baseline && method < 0) File.WriteAllText(path, CollisionTrx);
             else WriteTrx(path, passed, names);
+            if (captureFails)
+            {
+                if (!baseline) candidateTrx = path;
+                else File.Delete(Assert.IsType<string>(candidateTrx));
+            }
             return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(passed ? 0 : 1,
                 collidingPassedRows && !baseline && method < 0 ? "Failed! - Failed: 1, Passed: 3, Skipped: 2, Total: 6." :
                 passed ? $"Passed! - Failed: 0, Passed: {names.Length}, Total: {names.Length}." :
-                    $"Failed! - Failed: {names.Length}, Passed: 0, Total: {names.Length}."));
+                    $"Failed! - Failed: {names.Length}, Passed: 0, Total: {names.Length}.")
+            {
+                LaneToolResolution = new()
+            });
         });
-        await using var owner = AcceptanceExecutionOwners.CreateAttempt(Repo, Goal.Id,
+    }
+
+    internal async Task Produce(bool baselineThrows = false, bool buildFails = false, bool baselineFails = false,
+        bool collidingPassedRows = false, string? attemptId = null, bool mixed = false,
+        string? candidateWorktree = null, Goal? goal = null, bool singleRow = false, string? firstCase = null,
+        Exception? baselineException = null, string? baselineMissingToolFor = null, string? baselineCrashFor = null)
+    {
+        var checkout = candidateWorktree ?? Repo;
+        var checkedGoal = goal ?? Goal;
+        var failedBuilds = 0;
+        var verifier = CreateVerifier(checkout, baselineThrows, baselineFails, collidingPassedRows, mixed,
+            singleRow, firstCase, buildFails ? () => failedBuilds++ : null, baselineException: baselineException,
+            baselineMissingToolFor: baselineMissingToolFor, baselineCrashFor: baselineCrashFor);
+        var baselineDidNotExecute = baselineThrows || baselineException is not null;
+        await using var owner = AcceptanceExecutionOwners.CreateAttempt(checkout, checkedGoal.Id,
             options: new(RunId: attemptId ?? "solo-attempt", ResultsPrefix: attemptId is null
                 ? Path.Combine(Root, "results") : Path.Combine(Root, attemptId, "results"), IntegrationBranch: "main"));
-        var verification = await verifier.RunOwnedAsync(Repo, Goal.Id, ["README.md"], null, null, owner);
+        var verification = await verifier.RunOwnedAsync(checkout, checkedGoal.Id, ["README.md"], null, null, owner);
         Assert.False(verification.Passed);
         if (buildFails)
         {
@@ -113,7 +190,7 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         }
         else
         {
-            if (baselineThrows) Assert.Null(verification.SoloFailureReceipt);
+            if (baselineDidNotExecute) Assert.Null(verification.SoloFailureReceipt);
             else
             {
                 Assert.NotNull(verification.SoloFailureReceipt);
@@ -123,16 +200,19 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
             Assert.True(CandidateRuns > 0);
         }
         var failed = verification.Checks!.Where(check => !check.Passed && !check.Advisory).ToArray();
-        Assert.All(failed.SelectMany(check => check.FailingTestAttributions ?? []),
-            attr => Assert.Equal(baselineThrows ? AcceptanceTestFailureOrigin.Unattributed :
-                baselineFails ? AcceptanceTestFailureOrigin.Inherited : AcceptanceTestFailureOrigin.Introduced,
-                attr.Origin));
+        if (!mixed)
+            Assert.All(failed.SelectMany(check => check.FailingTestAttributions ?? []),
+                attr => Assert.Equal(baselineDidNotExecute ? AcceptanceTestFailureOrigin.Unattributed :
+                    baselineFails ? AcceptanceTestFailureOrigin.Inherited : AcceptanceTestFailureOrigin.Introduced,
+                    attr.Origin));
         Summary = AcceptanceVerificationSummary.FromVerification(verification, failed, failed.Select(check => check.Name).ToArray(),
-            Context.CandidateSha, Context.MainSha, verification.TestResultPaths,
-            buildFails ? null : failed.Select(check => new AcceptanceCheckAttribution(check.Name,
-                baselineThrows ? AcceptanceFailureOrigin.Unattributed :
+            verification.SoloFailureReceipt?.CandidateSha ?? Context.CandidateSha,
+            verification.SoloFailureReceipt?.MainSha ?? Context.MainSha, verification.TestResultPaths,
+            buildFails ? null : failed.Where(check => check.FailureClassification != AcceptanceFailureClassifications.MissingTool)
+                .Select(check => new AcceptanceCheckAttribution(check.Name,
+                baselineDidNotExecute ? AcceptanceFailureOrigin.Unattributed :
                     baselineFails ? AcceptanceFailureOrigin.Inherited : AcceptanceFailureOrigin.Introduced,
-                baselineThrows ? "fixture baseline execution failed" :
+                baselineDidNotExecute ? "fixture baseline execution failed" :
                     baselineFails ? "fixture authoritative baseline fails the same identities" :
                     "fixture authoritative baseline is green")).ToArray(), null);
     }
@@ -262,19 +342,24 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
         </TestRun>
         """;
 
-    private string Git(params string[] args)
+    internal string Git(params string[] args)
     {
         var result = GitCli.Run(Repo, args);
         Assert.True(result.Succeeded, result.Error);
         return result.Output.Trim();
     }
 
-    private static void WriteTrx(string path, bool passed, string[] names)
+    internal static void WriteTrx(string path, bool passed, params string[] names)
     {
         new XDocument(new XElement("TestRun", new XAttribute("id", Guid.NewGuid()),
-            new XElement("TestDefinitions", names.Select((name, i) => new XElement("UnitTest", new XAttribute("id", i),
-                new XElement("TestMethod", new XAttribute("className", name[..name.LastIndexOf('.')]),
-                    new XAttribute("name", name[(name.LastIndexOf('.') + 1)..]))))),
+            new XElement("TestDefinitions", names.Select((name, i) =>
+            {
+                var method = AcceptanceTrxTestIdentityResolver.NormalizeSelector(name);
+                var separator = method.LastIndexOf('.');
+                return new XElement("UnitTest", new XAttribute("id", i),
+                    new XElement("TestMethod", new XAttribute("className", method[..separator]),
+                        new XAttribute("name", method[(separator + 1)..])));
+            })),
             new XElement("Results", names.Select((name, i) => new XElement("UnitTestResult", new XAttribute("testId", i),
                 new XAttribute("testName", name), new XAttribute("outcome", passed ? "Passed" : "Failed"),
                 passed ? null : new XElement("Output", new XElement("ErrorInfo", new XElement("Message",

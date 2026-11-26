@@ -559,6 +559,12 @@ protected static void CompleteResearcherAndPlannerArtifacts(
     protected static string CreateSeededDispatchRepository() =>
         SeededDispatchRepositories.Create().PublishedIdentity.RepositoryPath;
 
+    protected static void StagePlannerCitationFixtures(string workingDirectory, params string[] paths)
+    {
+        ReadGit(workingDirectory, ["init", "--quiet"]);
+        ReadGit(workingDirectory, ["add", "--", .. paths]);
+    }
+
     private sealed record PreparedDispatchCommit(string Root, string BaseCommit, string Head);
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<
@@ -735,7 +741,7 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         var longBody = string.Join(' ', Enumerable.Repeat("uncited implementation detail", 20)) +
             " TRAILING-SENTINEL";
         var plan = PlannerContractPlanFixture().Replace(
-            "Inspect repository evidence `seed.txt`, `PlannerOutputContract.Resolve`, and `WorkerArtifactWriter.BuildPriorTaskEvidence`; these backticked citations identify the concrete implementation seams without guessing a nonexistent target file.",
+            "Inspect repository evidence `./seed.txt`, `PlannerOutputContract.Resolve`, and `WorkerArtifactWriter.BuildPriorTaskEvidence`; these backticked citations identify the concrete implementation seams without guessing a nonexistent target file.",
             longBody,
             StringComparison.Ordinal);
 
@@ -835,7 +841,7 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
 
         var incidentalAddition = PlannerContractPlanFixture().Replace(
-            "Inspect repository evidence `seed.txt`, `PlannerOutputContract.Resolve`, and `WorkerArtifactWriter.BuildPriorTaskEvidence`; these backticked citations identify the concrete implementation seams without guessing a nonexistent target file.",
+            "Inspect repository evidence `./seed.txt`, `PlannerOutputContract.Resolve`, and `WorkerArtifactWriter.BuildPriorTaskEvidence`; these backticked citations identify the concrete implementation seams without guessing a nonexistent target file.",
             "In addition, `src/Nonexistent.cs` is cited as an existing target seam alongside `PlannerOutputContract.Resolve`, with enough concrete symbol detail for mechanical section coverage.",
             StringComparison.Ordinal);
 
@@ -1839,7 +1845,7 @@ internal static string PlannerContractPlanFixture() =>
     1. Map the requested behavior to captured output, map completion to a deterministic gate, and map downstream use to the generated context artifact with exact-content assertions.
 
     ## Target seams and symbols
-    Inspect repository evidence `seed.txt`, `PlannerOutputContract.Resolve`, and `WorkerArtifactWriter.BuildPriorTaskEvidence`; these backticked citations identify the concrete implementation seams without guessing a nonexistent target file.
+    Inspect repository evidence `./seed.txt`, `PlannerOutputContract.Resolve`, and `WorkerArtifactWriter.BuildPriorTaskEvidence`; these backticked citations identify the concrete implementation seams without guessing a nonexistent target file.
 
     ## Ownership and lifecycle
     The dispatch completion boundary owns validation, the verification stdout log owns durable evidence, and context generation owns the downstream task-scoped copy for its dispatch lifecycle.

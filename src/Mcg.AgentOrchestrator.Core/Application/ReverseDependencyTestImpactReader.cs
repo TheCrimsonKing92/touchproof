@@ -214,22 +214,26 @@ internal static class ReverseDependencyTestImpactReader
                     normalizedRanges.Add(normalized, merged = []);
                 merged.AddRange(ranges.Where(range => range.StartLine >= 1 && range.EndLine >= range.StartLine));
             }
-            var frontier = changedPaths
+            var frontier = MergeFrontier(changedPaths
                 .SelectMany(path =>
                 {
                     var declarations = indexedFiles[path].Symbols!.DeclaredTypes;
                     var key = NormalizeRepositoryPath(Path.GetRelativePath(repositoryRoot, path));
-                    if (!normalizedRanges.TryGetValue(key, out var ranges)) return declarations;
-                    var overlapping = declarations.Where(declaration => ranges.Any(range =>
-                        declaration.StartLine <= range.EndLine && range.StartLine <= declaration.EndLine)).ToArray();
-                    return overlapping.Length > 0 ? overlapping : declarations;
-                })
-                .Select(declaration => new FrontierSymbol(
-                    declaration.Name,
-                    TestSelectionMode.AllReferencingClasses))
-                .Distinct()
-                .OrderBy(symbol => symbol.Name, StringComparer.Ordinal)
-                .ToArray();
+                    if (normalizedRanges.TryGetValue(key, out var ranges))
+                    {
+                        var overlapping = declarations.Where(declaration =>
+                            OverlapsAnyRange(declaration.StartLine, declaration.EndLine, ranges)).ToArray();
+                        if (overlapping.Length > 0)
+                        {
+                            declarations = overlapping;
+                        }
+                    }
+
+                    return declarations.Select(declaration => new FrontierSymbol(
+                        declaration.Name,
+                        TestSelectionMode.AllReferencingClasses,
+                        SeedFilter(declaration, ranges)));
+                }));
             headroom = headroom with { LargestFrontierSymbolCount = frontier.Length };
             if (frontier.Length == 0)
             {
@@ -238,12 +242,9 @@ internal static class ReverseDependencyTestImpactReader
                     receipt, headroom);
             }
 
-            frontier = frontier
+            frontier = MergeFrontier(frontier
                 .Concat(WideImpactTestSelectionInputs.GetSeedTypeNames(normalizedChangedPaths)
-                    .Select(name => new FrontierSymbol(name, TestSelectionMode.AllReferencingClasses)))
-                .Distinct()
-                .OrderBy(symbol => symbol.Name, StringComparer.Ordinal)
-                .ToArray();
+                    .Select(name => new FrontierSymbol(name, TestSelectionMode.AllReferencingClasses))));
 
             var seenPaths = changedPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var selectedTestClasses = new SortedSet<string>(StringComparer.Ordinal);
@@ -258,22 +259,31 @@ internal static class ReverseDependencyTestImpactReader
                 var frontierSet = frontier
                     .Select(symbol => symbol.Name)
                     .ToHashSet(StringComparer.Ordinal);
+                var hasMemberFilters = frontier.Any(symbol => symbol.MemberFilter is not null);
+                bool ReferencesFrontier(CSharpTestClassScanner.SourceTypeDeclaration declaration) =>
+                    declaration.ReferencedIdentifiers.Overlaps(frontierSet) &&
+                    (!hasMemberFilters || frontier.Any(symbol => References(declaration, symbol)));
+
                 var consumers = indexedFiles.Values
                     .Where(file => !seenPaths.Contains(file.Path))
-                    .Where(file => file.Symbols!.DeclaredTypes.Any(declaration =>
-                        declaration.ReferencedIdentifiers.Overlaps(frontierSet)))
+                    .Where(file => file.Symbols!.DeclaredTypes.Any(ReferencesFrontier))
                     .OrderBy(file => file.Path, StringComparer.Ordinal)
                     .ToArray();
                 foreach (var consumer in consumers.Where(file => file.IsTargetTestProject))
                 {
                     var referencedFrontier = frontier
                         .Where(symbol => consumer.Symbols!.DeclaredTypes.Any(declaration =>
-                            declaration.ReferencedIdentifiers.Contains(symbol.Name)))
+                            References(declaration, symbol)))
                         .ToArray();
                     var allReferencingSymbols = referencedFrontier
-                        .Where(symbol => symbol.TestSelectionMode == TestSelectionMode.AllReferencingClasses)
+                        .Where(symbol => symbol.TestSelectionMode == TestSelectionMode.AllReferencingClasses &&
+                                         symbol.MemberFilter is null)
                         .Select(symbol => symbol.Name)
                         .ToHashSet(StringComparer.Ordinal);
+                    var filteredReferencingSymbols = referencedFrontier
+                        .Where(symbol => symbol.TestSelectionMode == TestSelectionMode.AllReferencingClasses &&
+                                         symbol.MemberFilter is not null)
+                        .ToArray();
                     var ownedClassNames = referencedFrontier
                         .Where(symbol => symbol.TestSelectionMode == TestSelectionMode.OwnedClassOnly)
                         .Select(symbol => $"{symbol.Name}Tests")
@@ -285,7 +295,8 @@ internal static class ReverseDependencyTestImpactReader
                                 StringComparer.Ordinal))
                             .Where(declaration =>
                                 ownedClassNames.Contains(declaration.Name) ||
-                                declaration.ReferencedIdentifiers.Overlaps(allReferencingSymbols))
+                                declaration.ReferencedIdentifiers.Overlaps(allReferencingSymbols) ||
+                                filteredReferencingSymbols.Any(symbol => References(declaration, symbol)))
                             .Select(declaration => declaration.Name));
                     if (shippingReachDiagnostics is not null && hop == 2)
                     {
@@ -294,7 +305,7 @@ internal static class ReverseDependencyTestImpactReader
                         foreach (var symbol in referencedFrontier.Where(symbol => shippingFrontier!.Contains(symbol.Name)))
                         {
                             if (symbol.TestSelectionMode == TestSelectionMode.AllReferencingClasses
-                                    ? declaration.ReferencedIdentifiers.Contains(symbol.Name)
+                                    ? References(declaration, symbol)
                                     : declaration.Name == $"{symbol.Name}Tests")
                                 shippingReachDiagnostics(symbol.Name, declaration.Name);
                         }
@@ -309,12 +320,12 @@ internal static class ReverseDependencyTestImpactReader
                 if (shippingFrontier is not null && hop == 1)
                     shippingFrontier.UnionWith(consumers.Where(file => !file.IsTargetTestProject)
                         .SelectMany(file => file.Symbols!.DeclaredTypes)
-                        .Where(declaration => declaration.ReferencedIdentifiers.Overlaps(frontierSet))
+                        .Where(ReferencesFrontier)
                         .Select(declaration => declaration.Name));
 
-                frontier = consumers
+                frontier = MergeFrontier(consumers
                     .SelectMany(file => file.Symbols!.DeclaredTypes
-                        .Where(declaration => declaration.ReferencedIdentifiers.Overlaps(frontierSet))
+                        .Where(ReferencesFrontier)
                         .Where(declaration =>
                             !file.IsTargetTestProject ||
                             !file.Symbols.TestClassNames.Contains(declaration.Name, StringComparer.Ordinal))
@@ -322,16 +333,8 @@ internal static class ReverseDependencyTestImpactReader
                             declaration.Name,
                             file.IsTargetTestProject || propagateShippingSourceReach
                                 ? TestSelectionMode.AllReferencingClasses
-                                : TestSelectionMode.OwnedClassOnly)))
-                    .GroupBy(symbol => symbol.Name, StringComparer.Ordinal)
-                    .Select(group => new FrontierSymbol(
-                        group.Key,
-                        group.Any(symbol =>
-                            symbol.TestSelectionMode == TestSelectionMode.AllReferencingClasses)
-                            ? TestSelectionMode.AllReferencingClasses
-                            : TestSelectionMode.OwnedClassOnly))
-                    .OrderBy(symbol => symbol.Name, StringComparer.Ordinal)
-                    .ToArray();
+                                : TestSelectionMode.OwnedClassOnly,
+                            declaration.IsPartial ? MemberNames(declaration.Members) : null))));
                 if (frontier.Length == 0)
                 {
                     break;
@@ -839,7 +842,46 @@ internal static class ReverseDependencyTestImpactReader
 
     private readonly record struct FileVersion(long Length, long LastWriteTimeUtcTicks);
 
-    private sealed record FrontierSymbol(string Name, TestSelectionMode TestSelectionMode);
+    private static bool OverlapsAnyRange(
+        int startLine,
+        int endLine,
+        IReadOnlyList<(int StartLine, int EndLine)> ranges) =>
+        ranges.Any(range => startLine <= range.EndLine && range.StartLine <= endLine);
+
+    private static IReadOnlySet<string>? SeedFilter(
+        CSharpTestClassScanner.SourceTypeDeclaration declaration,
+        IReadOnlyList<(int StartLine, int EndLine)>? ranges) =>
+        declaration.IsPartial && ranges is { Count: > 0 }
+            ? MemberNames(declaration.Members.Where(member => OverlapsAnyRange(member.StartLine, member.EndLine, ranges)))
+            : null;
+
+    private static IReadOnlySet<string>? MemberNames(IEnumerable<SourceMemberDeclaration> members)
+    {
+        var names = members.Select(member => member.Name).ToHashSet(StringComparer.Ordinal);
+        return names.Count > 0 ? names : null;
+    }
+
+    private static bool References(CSharpTestClassScanner.SourceTypeDeclaration declaration, FrontierSymbol symbol) =>
+        declaration.ReferencedIdentifiers.Contains(symbol.Name) &&
+        (symbol.MemberFilter is null || declaration.ReferencedIdentifiers.Overlaps(symbol.MemberFilter));
+
+    private static FrontierSymbol[] MergeFrontier(IEnumerable<FrontierSymbol> symbols) =>
+        symbols.GroupBy(symbol => symbol.Name, StringComparer.Ordinal)
+            .Select(group => new FrontierSymbol(
+                group.Key,
+                group.Any(symbol => symbol.TestSelectionMode == TestSelectionMode.AllReferencingClasses)
+                    ? TestSelectionMode.AllReferencingClasses
+                    : TestSelectionMode.OwnedClassOnly,
+                group.Any(symbol => symbol.MemberFilter is null)
+                    ? null
+                    : group.SelectMany(symbol => symbol.MemberFilter!).ToHashSet(StringComparer.Ordinal)))
+            .OrderBy(symbol => symbol.Name, StringComparer.Ordinal)
+            .ToArray();
+
+    private sealed record FrontierSymbol(
+        string Name,
+        TestSelectionMode TestSelectionMode,
+        IReadOnlySet<string>? MemberFilter = null);
 
     private enum TestSelectionMode
     {

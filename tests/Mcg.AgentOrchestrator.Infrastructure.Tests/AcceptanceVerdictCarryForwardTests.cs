@@ -144,6 +144,53 @@ public sealed class AcceptanceVerdictCarryForwardTests : HostCapacityBoundTestBa
         finally { TryDeleteDirectory(repo); }
     }
 
+    [Xunit.Fact]
+    public async Task ReceiptReplay_ValidatedBaselineRepairRequiresAFreshGateOnDisjointMainAdvance()
+    {
+        using var proofFixture = new SoloAttributedFailureRouteFixture();
+        var repo = proofFixture.Repo;
+        proofFixture.Git("checkout", "main");
+        var fixture = CreateAcceptedCandidate(repo, "README.md", "candidate");
+        await proofFixture.Produce(baselineFails: true, candidateWorktree: fixture.Worktree,
+            goal: fixture.Goal, singleRow: true);
+        var failed = proofFixture.Summary;
+        fixture.Kernel.RecordAcceptanceFailure(fixture.Goal.Id, failed.FailedChecks!, failed.BranchHeadSha,
+            failed.MainHeadSha, failed.CheckAttributions, failed.BaselineAttestation, failed.AttemptId, failed.SoloFailureReceipt);
+        var context = new SoloAcceptanceConsumptionContext(fixture.BranchHeadSha, fixture.MainHeadSha,
+            ReadGit(fixture.Worktree, "rev-parse", "HEAD^{tree}"), fixture.MainHeadSha);
+        var partition = Assert.IsType<SoloRepairPartition>(SoloAcceptanceFailureReceiptReader.ReadRepairPartition(fixture.Goal, context));
+        var finding = Assert.Single(partition.Findings);
+        Assert.True(finding.Inherited, finding.Reason);
+        fixture.Kernel.ClearAcceptanceFailure(fixture.Goal.Id);
+        SeedReplayReceipt(fixture);
+        AppendCommit(repo, "src/unrelated-lane.txt", "racing landing");
+        var main = ReadGit(repo, "rev-parse", "main");
+        Assert.True(GoalWorktrees.TryRebaseOntoMain(repo, fixture.Goal.Id).UpdatedBranch);
+        var store = new SoloBaselineRepairStore(Path.Combine(fixture.Workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName));
+        store.Retain(fixture.Goal.Id.Value, [finding]);
+        store.ReserveGroup(finding.GroupKey, "{}");
+        store.AcknowledgeRepair(finding.GroupKey, GoalId.New().Value);
+        var policy = ConductorAutonomyPolicy.Conservative;
+        Assert.Null(fixture.Driver.TryBuildParallelAcceptanceCandidate(fixture.Goal, policy, 0, out var pendingReason));
+        Assert.Equal(SoloHoldReasons.RepairPending, pendingReason);
+
+        SoloRepairWorkflowTests.RecordPassedValidation(store, finding, main);
+        var fresh = fixture.Driver.TryBuildParallelAcceptanceCandidate(fixture.Goal, policy, 0, out var declineReason);
+        Assert.Null(declineReason);
+        Assert.NotNull(fresh);
+        Assert.Equal(main, fresh.MainHeadSha);
+        Assert.Equal(ReadGit(fixture.Worktree, "rev-parse", "HEAD"), fresh.BranchHeadSha);
+        Assert.NotEqual(fixture.BranchHeadSha, fresh.BranchHeadSha);
+
+        Assert.Null(fixture.Driver.TryReplayPassedAcceptance(fixture.Goal, policy));
+        Assert.Null(fixture.Driver.TryReplayPassedAcceptance(fixture.Goal, policy));
+        Assert.IsType<AcceptanceMainAdvanceDisposition.Unknown>(
+            fixture.Driver.CarryForwardGreenVerdict(fixture.Candidate, fixture.Acceptance));
+        Assert.DoesNotContain(GoalOperationJournal.Read(repo, fixture.Goal.Id).Entries,
+            entry => entry.Operation == ConductorDriver.AcceptanceMainAdvanceCarryOperation);
+        Assert.Equal(main, ReadGit(repo, "rev-parse", "main"));
+    }
+
     private static ConductorParallelAcceptanceAttempt SeedReplayReceipt(CandidateFixture fixture)
     {
         fixture.Kernel.RecordGoalRefinement(fixture.Goal.Id, new RefinedSpec(
@@ -448,7 +495,7 @@ public sealed class AcceptanceVerdictCarryForwardTests : HostCapacityBoundTestBa
 
     private static CandidateFixture CreateAcceptedCandidate(string repo, string path, string content)
     {
-        var workspace = OrchestratorWorkspace.ForDirectory(repo);
+        var workspace = InfrastructureTestSupport.CreateSetUpWorkspace(repo);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Implement the accepted candidate.", AgentRole.Developer);
         var goal = kernel.CreateGoal("Acceptance carry-forward test", [task]);

@@ -16,7 +16,7 @@ public sealed class RunGoalServiceTests
     private const string UnexecutedProfileCommand = "Write-Output run-goal-service-tests-never-executes-this";
 
     private static readonly string PlannerPlanText = WorkerDispatchTestSupport.PlannerContractPlanFixture().Replace(
-        "`seed.txt`, ",
+        "`./seed.txt`, ",
         string.Empty,
         StringComparison.Ordinal);
 

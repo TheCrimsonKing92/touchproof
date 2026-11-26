@@ -29,7 +29,7 @@ public static class GoalSnapshotArchiveCodec
     private sealed class ArchiveReadStream(byte[] bytes) : Stream
     {
         private BrotliDecoder decoder = new();
-        private readonly Decoder utf8 = StrictUtf8.GetDecoder();
+        private Decoder? utf8;
         private int offset = Marker.Length;
         private bool done;
         private long delivered;
@@ -45,20 +45,25 @@ public static class GoalSnapshotArchiveCodec
             done = status == OperationStatus.Done && offset == bytes.Length;
             if (!done && (status != OperationStatus.DestinationTooSmall || (consumed == 0 && written == 0)))
                 throw new InvalidDataException("Invalid or incomplete goal_snapshot_archive Brotli payload.");
-            try
-            {
-                var chars = ArrayPool<char>.Shared.Rent(written + 2);
-                try { utf8.Convert(buffer[..written], chars, done, out _, out _, out _); }
-                finally { ArrayPool<char>.Shared.Return(chars); }
-            }
-            catch (DecoderFallbackException ex)
-            {
-                throw new InvalidDataException("Invalid goal_snapshot_archive UTF-8 payload.", ex);
-            }
+            // Escaped JSON is usually ASCII. Once the decoder has seen a non-ASCII
+            // byte, keep using it so a split UTF-8 sequence is still validated.
+            if (utf8 is not null || !Ascii.IsValid(buffer[..written]))
+                ValidateUtf8(buffer[..written]);
             delivered += written;
             if (done)
                 CompleteUtf8Bytes = delivered;
             return written;
+        }
+
+        private void ValidateUtf8(ReadOnlySpan<byte> bytes)
+        {
+            var chars = ArrayPool<char>.Shared.Rent(bytes.Length + 2);
+            try { (utf8 ??= StrictUtf8.GetDecoder()).Convert(bytes, chars, done, out _, out _, out _); }
+            catch (DecoderFallbackException ex)
+            {
+                throw new InvalidDataException("Invalid goal_snapshot_archive UTF-8 payload.", ex);
+            }
+            finally { ArrayPool<char>.Shared.Return(chars); }
         }
 
         protected override void Dispose(bool disposing)
@@ -78,12 +83,15 @@ public static class GoalSnapshotArchiveCodec
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
-    public static byte[] Encode(string json)
+    public static byte[] Encode(string json) =>
+        Encode(Encoding.UTF8.GetBytes(json), CompressionLevel.Optimal);
+
+    internal static byte[] Encode(ReadOnlySpan<byte> json, CompressionLevel level)
     {
         using var output = new MemoryStream();
         output.Write(Marker);
-        using (var compressor = new BrotliStream(output, CompressionLevel.Optimal, leaveOpen: true))
-            compressor.Write(Encoding.UTF8.GetBytes(json));
+        using (var compressor = new BrotliStream(output, level, leaveOpen: true))
+            compressor.Write(json);
         return output.ToArray();
     }
 

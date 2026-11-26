@@ -925,11 +925,8 @@ internal static partial class CliPersistentStateRunner
             }
             return SeedProviderHoldHistory();
 
-            AgentOrchestratorKernel SeedProviderHoldHistory()
-            {
-                ProviderHoldHistorySeed.Apply(startupKernel, stateRepository, Console.WriteLine, ConductorStartupHeartbeat.Shipped);
-                return startupKernel;
-            }
+            AgentOrchestratorKernel SeedProviderHoldHistory() => ProviderHoldHistoryStartupSeed.ApplyRequired(
+                startupKernel, stateRepository, Console.WriteLine, ConductorStartupHeartbeat.Shipped);
         }
 
         var loopCurrentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
@@ -1087,9 +1084,9 @@ internal static partial class CliPersistentStateRunner
             throw new InvalidOperationException("Cannot report conductor readiness without the loop lease.");
         }
 
-        var state = loadState();
+        var state = runStartupSweep(loadState());
         emitLine(formatReadinessLine(state));
-        return runStartupSweep(state);
+        return state;
     }
 
     internal static bool RebaseCheckpointAfterDurableSave(

@@ -387,10 +387,12 @@ internal static class CliShadowStartCommand
             "--repository-root", scratch, "--expected-state-directory", state, "--disposable-fixture" })
             info.ArgumentList.Add(arg);
 
-        foreach (var key in info.Environment.Keys.Where(key =>
-            key.StartsWith("MCG_", StringComparison.OrdinalIgnoreCase) ||
-            key.StartsWith("GIT_", StringComparison.OrdinalIgnoreCase)).ToArray())
-            info.Environment.Remove(key);
+        info.Environment.Clear();
+        foreach (var key in new[] { "PATH", "SystemRoot", "SystemDrive", "WINDIR", "ComSpec",
+            "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "PATHEXT", "DOTNET_ROOT", "DOTNET_ROOT_X64",
+            "LD_LIBRARY_PATH", "LANG", "LC_ALL" })
+            if (Environment.GetEnvironmentVariable(key) is { } value)
+                info.Environment[key] = value;
         info.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = scratch;
         info.Environment[OrchestratorDataRoot.EnvironmentVariable] = Path.Combine(scratch, "data");
         info.Environment[OrchestratorProjectRegistry.RegistryHomeEnvironmentVariable] = Path.Combine(scratch, "projects");
@@ -415,6 +417,7 @@ internal static class CliShadowStartCommand
         var logs = Path.Combine(state, "logs");
         var stopFile = Path.Combine(scratch, ConductorBatchLoop.StopFileName);
         var tail = new Queue<string>();
+        var startupLines = new List<string>();
         var evidence = new JournalEvidence();
         DateTimeOffset? stopRequested = null;
         long? peak = null;
@@ -547,7 +550,7 @@ internal static class CliShadowStartCommand
         lock (tail)
             return new(failure, detail, elapsed.ElapsedMilliseconds, peak,
                 evidence.FirstTick is { } observed ? (long)(observed - launchedAt).TotalMilliseconds : null,
-                tail.ToArray(), OperatingSystem.IsWindows() && confirmed && drained);
+                tail.ToArray(), OperatingSystem.IsWindows() && confirmed && drained, startupLines.ToArray());
 
         async Task<string?> WaitForCustodianAsync(bool groupReleased)
         {
@@ -569,6 +572,11 @@ internal static class CliShadowStartCommand
             {
                 lock (tail)
                 {
+                    if (channel == "stdout" && startupLines.Count < 12 &&
+                        (line.StartsWith(ProviderHoldHistoryStartupSeed.CompletedLinePrefix, StringComparison.Ordinal) ||
+                         line.StartsWith(ConductorContinuitySupervisor.LoopReadyLinePrefix, StringComparison.Ordinal) ||
+                         line.StartsWith("LOOP_START ", StringComparison.Ordinal)))
+                        startupLines.Add(line);
                     if (tail.Count == 40) tail.Dequeue();
                     tail.Enqueue($"{channel}: {(line.Length <= 2048 ? line : line[..2048])}");
                 }
@@ -614,6 +622,8 @@ internal static class CliShadowStartCommand
         writer.WriteLine(line);
         if (measurement.Assertion is not null)
             writer.WriteLine(measurement.Detail ?? $"Shadow startup assertion failed: {measurement.Assertion}.");
+        foreach (var startupLine in measurement.StartupLines ?? [])
+            writer.WriteLine(startupLine);
     }
 
     private sealed record Options(string Source, string Scratch, string? Candidate,

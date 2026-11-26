@@ -119,8 +119,14 @@ public sealed class GoalWorktreeTestsRemoveCleanupStorage : GoalWorktreeTestBase
             Assert.Equal(GoalStatus.Verified, goal.Status);
 
             var accepted = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], Context(rootB)));
-            Assert.Contains("Fast-forwarded", accepted);
+            Assert.True(accepted.Contains("Fast-forwarded", StringComparison.Ordinal), accepted);
             Assert.Equal(GoalStatus.Completed, goal.Status);
+            var outcomes = GoalOperationJournal.Read(repo, goal.Id).Entries;
+            var deferral = Assert.Single(outcomes, entry => entry.AcceptanceOutcome == "blocked:slot-unavailable");
+            var pass = Assert.Single(outcomes, entry => entry.AcceptanceOutcome == "gate-passed");
+            Assert.Equal(deferral.BranchHeadSha, pass.BranchHeadSha);
+            Assert.Equal(deferral.MainHeadSha, pass.MainHeadSha);
+            Assert.True(pass.RequiredChecksValidated);
             var environment = Assert.IsType<DotnetBuildEnvironment>(verifier.ObservedEnvironment);
             Assert.Equal(DotnetBuildEnvironmentManager.GoalRoot(goal.Id, rootB), environment.RootPath);
             var reportedRoot = Assert.Single(accepted.Split('\n')
