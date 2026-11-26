@@ -1060,11 +1060,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 cancellationToken,
                 classifyMissingSelectionsAsAbsent: true).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException && !GateToolResolutionPreflight.IsMissingToolsFailure(ex))
         {
             foreach (var item in prepared)
             {
@@ -3568,6 +3564,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             RunClass = GateHeartbeatRunClass.Classify(_executionContext),
             RunId = GateHeartbeatRunClass.ResolveRunId(_executionContext),
             AttemptIdentity = (_executionContext as AcceptanceAttemptExecutionOwner)?.Identity,
+            FocusedReplayIdentity = GateReplayReceipt.ResolveFocusedLaunchIdentity(_executionContext),
             RequiresAcceptanceLease = requiresAcceptanceLease,
             DeclaredTestResultPaths = declaredTestResultPaths
         };

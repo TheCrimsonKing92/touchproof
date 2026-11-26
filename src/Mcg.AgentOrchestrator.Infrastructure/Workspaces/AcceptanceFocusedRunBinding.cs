@@ -1,4 +1,7 @@
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 // Execution-local binding: the build and test phases must use this same environment.
-public sealed record AcceptanceFocusedRunBinding(DotnetBuildEnvironment Environment, string MemberId);
+public sealed record AcceptanceFocusedRunBinding(DotnetBuildEnvironment Environment, string MemberId)
+{
+    internal string? ReplayObservedMainSha { get; init; }
+}
