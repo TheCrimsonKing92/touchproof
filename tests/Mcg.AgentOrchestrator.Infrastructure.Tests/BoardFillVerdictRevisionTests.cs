@@ -83,6 +83,25 @@ public sealed class BoardFillVerdictRevisionTests
     }
 
     [Fact]
+    public void BulletText_RuntimeObservationBeforeSourceClaim_ReturnsNthSourceClaim()
+    {
+        const string premise = """
+            ## Measured premise
+            - runtime-observation: The rounds are recorded
+              in operator-evidence/board-fill/round.json.
+            - First source claim cites `src/First.cs:3`.
+            * runtime-observation: Figures are recorded in note ABC123.
+              * Second source claim cites `src/Second.cs:8`.
+                Its continuation stays with the claim.
+            """;
+
+        Assert.Equal("- First source claim cites `src/First.cs:3`.", BoardFillVerdictRevision.BulletText(premise, 1));
+        Assert.Equal("  * Second source claim cites `src/Second.cs:8`.\n    Its continuation stays with the claim.",
+            BoardFillVerdictRevision.BulletText(premise, 2));
+        Assert.Equal("bullet text unavailable", BoardFillVerdictRevision.BulletText(premise, 3));
+    }
+
+    [Fact]
     public void RenderVerdictRevision_CombinedFailures_QuotesAllFeedbackAndPreviousDraft()
     {
         const string previous = """
