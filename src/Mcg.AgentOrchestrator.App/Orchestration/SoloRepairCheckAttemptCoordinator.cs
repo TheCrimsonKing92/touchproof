@@ -29,7 +29,9 @@ internal sealed class SoloRepairCheckAttemptCoordinator(
         var prior = Read(path);
         if (HasLiveOwner(prior) || store.ReadVerifiedCheck(request.Key, request.ProofIdentity) is not null)
             return;
-        if (prior is { Outcome: "failed" } && prior.Request.ProofIdentity == request.ProofIdentity)
+        // A failed child may have staged its result before cleanup or completion failed.
+        if (prior is { Outcome: "failed" } && prior.Request.ProofIdentity == request.ProofIdentity &&
+            store.ReadCheckExecution(request.Key) is null)
             throw new InvalidOperationException($"Solo repair check {request.Key} failed to execute. {prior.Detail}");
 
         using var execution = SoloRepairCheckRunner.OpenOwnership(workspace.SqliteStatePath, request.Key);

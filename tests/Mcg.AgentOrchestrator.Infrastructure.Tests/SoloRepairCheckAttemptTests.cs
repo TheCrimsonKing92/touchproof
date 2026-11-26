@@ -200,6 +200,57 @@ public sealed class SoloRepairCheckAttemptTests
     }
 
     [Fact]
+    public void FailedExecution_RecoversStagedResultAfterRestartWithoutRerunningVerifier()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        var workspace = Workspace(fixture);
+        var storePath = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var store = new SoloBaselineRepairStore(storePath);
+        var main = fixture.Context.MainSha;
+        var finding = SoloRepairReplayTests.Finding() with { Baseline = main };
+        var key = SoloBaselineRepairStore.ValidationKey(finding, main);
+        var request = new SoloRepairCheckRequest(key, finding, main, main, false, false,
+            SoloBaselineRepairStore.FocusedProofIdentity(key, finding, main, main, false, false));
+        var launched = new List<(string Path, Guid Id)>();
+        SpawnProcessIdentity Launch(string path, Guid id)
+        {
+            launched.Add((path, id));
+            return Owner;
+        }
+
+        var verifier = new ControlledVerifier(fixture.Root) { Finding = finding };
+        SoloRepairReplayTests.ExecuteSql(storePath, """
+            CREATE TRIGGER stop_check_ack BEFORE UPDATE OF result ON solo_repair_check
+            BEGIN SELECT RAISE(ABORT, 'lost check write'); END
+            """);
+        AttemptCoordinator(workspace, Launch).StartOrObserve(store, request);
+        var first = Assert.Single(launched);
+        Assert.Equal(1, SoloRepairCheckAttemptCoordinator.RunAttempt(first.Path, first.Id, attempt =>
+            SoloRepairCheckRunner.Run(workspace, store, verifier, (_, _) => Lease(workspace), attempt.Request)));
+        var staged = Assert.IsType<SoloRepairCheckReceipt>(store.ReadCheckExecution(key));
+        Assert.Equal("passed", staged.Outcome);
+        Assert.NotNull(staged.Proof);
+        Assert.Null(store.ReadCheck(key));
+        Assert.Equal((finding.Request!, main), Assert.Single(verifier.FocusedRuns));
+        SoloRepairReplayTests.ExecuteSql(storePath, "DROP TRIGGER stop_check_ack");
+
+        var restarted = AttemptCoordinator(workspace, Launch);
+        restarted.StartOrObserve(store, request);
+        Assert.Equal(2, launched.Count);
+        var recovery = launched[1];
+        Assert.NotEqual(first.Id, recovery.Id);
+        Assert.Equal(0, SoloRepairCheckAttemptCoordinator.RunAttempt(recovery.Path, recovery.Id, attempt =>
+            SoloRepairCheckRunner.Run(workspace, store, verifier,
+                (_, _) => throw new InvalidOperationException("Recovery must consume staged proof before acquiring a slot."),
+                attempt.Request)));
+        var completed = Assert.IsType<SoloRepairCheckReceipt>(store.ReadVerifiedCheck(key, request.ProofIdentity));
+        Assert.Equal(staged.Outcome, completed.Outcome);
+        Assert.Equal(staged.Proof, completed.Proof);
+        Assert.Null(store.ReadCheckExecution(key));
+        Assert.Single(verifier.FocusedRuns);
+    }
+
+    [Fact]
     public async Task Restart_ObservesLiveOwnerAndHeldMutex_ThenCompletesStagedCheckWithoutExecuting()
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
