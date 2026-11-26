@@ -7,9 +7,10 @@ internal static class BoardFillPremiseBullets
 {
     private const string RuntimeObservationPrefix = "runtime-observation:";
     private static readonly Regex Marker = new(@"^[ \t]*[-*][ \t]+\S", RegexOptions.Multiline);
-    private static readonly Regex StandaloneProse = new(@"\n[ \t]*\n(?=[^ \t\n])");
+    private static readonly Regex CitationBoundary = new(
+        @"^[ \t]*(?=\n[^ \t\n])|^[ \t]*(?:\+|[0-9]{1,9}[.)])[ \t]+(?=\S)", RegexOptions.Multiline);
     private static readonly Regex EvidencePath = new("""(?:^|\s)\S*[/\\][^\s/\\]*\.[\p{L}\p{N}]+(?=[\x60'"\])>.,;:!?]*(?:\s|$))""");
-    private static readonly Regex NoteCitation = new("""\bnote\s+[0-9a-fA-F]+(?=[\x60'"\])>.,;:!?]*(?:\s|$))""");
+    private static readonly Regex NoteCitation = new("""\bnote\s+[0-9a-fA-F]+(?=[*\x60'"\])>.,;:!?]*(?:\s|$))""");
 
     internal static string MeasuredPremise(string markdown)
     {
@@ -52,9 +53,9 @@ internal static class BoardFillPremiseBullets
 
             if (body.StartsWith(RuntimeObservationPrefix, StringComparison.Ordinal))
             {
-                // A blank line followed by unindented prose ends the observation's citation span.
-                var prose = StandaloneProse.Match(body);
-                var bodyEnd = prose.Success ? prose.Index + 1 : body.Length;
+                // Standalone prose and other Markdown list items end the citation span.
+                var boundary = CitationBoundary.Match(body);
+                var bodyEnd = boundary.Success ? boundary.Index : body.Length;
                 var evidence = body[RuntimeObservationPrefix.Length..bodyEnd];
                 if (EvidencePath.IsMatch(evidence) || NoteCitation.IsMatch(evidence))
                 {
