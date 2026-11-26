@@ -1,7 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Parallel-safe: each case owns its temporary repository and uses no process or clock.
+// Parallel-safe: each case owns its checkout and index.
 public sealed class PlannerOutputContractRuntimeMentionTests : WorkerDispatchTestSupport
 {
     [Xunit.Fact]
@@ -16,7 +16,7 @@ public sealed class PlannerOutputContractRuntimeMentionTests : WorkerDispatchTes
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData("  - It is stored camelCase in `landing-escalations.json` and locked through `landing-escalations.lock` (`OperatorInbox.cs:106`, `OperatorInbox.cs:107`).")]
+    [Xunit.InlineData("  - It is stored camelCase in `landing-escalations.json` and locked through `landing-escalations.lock` (`src/OperatorInbox.cs:106`, `src/OperatorInbox.cs:107`).")]
     [Xunit.InlineData("  - The host keeps its state file `host-health-state.json` in `OrchestratorDirectory`.")]
     [Xunit.InlineData("  - Observe `/.orchestrator/conductor-policy.json` for runtime policy state.")]
     [Xunit.InlineData("  - Observe `$artifactsPath\\worker-build-receipt.json` for build evidence.")]
@@ -103,6 +103,7 @@ public sealed class PlannerOutputContractRuntimeMentionTests : WorkerDispatchTes
         Directory.CreateDirectory(Path.Combine(workingDirectory, "src", "Other"));
         File.WriteAllText(Path.Combine(workingDirectory, "src", "settings.json"), "{}");
         File.WriteAllText(Path.Combine(workingDirectory, "src", "Other", "settings.json"), "{}");
+        ReadGit(workingDirectory, ["add", "--", "src/settings.json", "src/Other/settings.json"]);
         var plan = PlanWithExcerpt("  - Inspect `settings.json` for configuration.");
 
         var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
@@ -111,6 +112,65 @@ public sealed class PlannerOutputContractRuntimeMentionTests : WorkerDispatchTes
         Xunit.Assert.Contains("target citation 'settings.json' is ambiguous", result.Diagnostic, StringComparison.Ordinal);
         Xunit.Assert.Contains("'src/settings.json'", result.Diagnostic, StringComparison.Ordinal);
         Xunit.Assert.Contains("'src/Other/settings.json'", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("global.json", "./global.json")]
+    [Xunit.InlineData("config/global.json", "config/global.json")]
+    public void Resolve_WrongCaseTrackedJson_RejectsWithCanonicalPath(string trackedPath, string explicitPath)
+    {
+        var root = CreateFixtureRepository();
+        var path = Path.Combine(root, trackedPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "{}");
+        StagePlannerCitationFixtures(root, trackedPath);
+
+        var plan = PlanWithExcerpt("  - Inspect `Global.json:43` for configuration.");
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, root);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains(
+            "target citation 'Global.json:43' does not exist and is not marked as a new file",
+            result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"Did you mean `{explicitPath}:43`?", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.True(PlannerOutputContract.TryValidatePlan(
+            plan.Replace("Global.json:43", $"{explicitPath}:43", StringComparison.Ordinal),
+            root, out _, out var diagnostic), diagnostic);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Global.json:43", "No tracked file matches the short citation.", new[] { "config/global.json" })]
+    [Xunit.InlineData("global.json:43", "is ambiguous", new[] { "config/global.json", "other/global.json" })]
+    public void ValidatePlan_UnavailableIndexRejectsBareJsonCitation(
+        string citation, string expectedHealthyDiagnostic, string[] trackedPaths)
+    {
+        var root = CreateFixtureRepository();
+        var plan = PlanWithExcerpt($"  - Inspect `{citation}` for configuration.");
+        var healthyIndex = new GitCli.GitResult(0, string.Join('\0', trackedPaths) + '\0', string.Empty);
+
+        Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(plan, root, out _, out var healthyDiagnostic,
+            readTrackedIndex: () => healthyIndex));
+        Xunit.Assert.Contains(expectedHealthyDiagnostic, healthyDiagnostic, StringComparison.Ordinal);
+
+        var failedIndex = healthyIndex with { ExitCode = 1, Error = "injected index read failure" };
+        Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(plan, root, out _, out var failedDiagnostic,
+            readTrackedIndex: () => failedIndex));
+        Xunit.Assert.Contains("the checkout's tracked file list was unavailable", failedDiagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"Offending citation: '{citation}'", failedDiagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void BareRuntimeJsonMentionDoesNotResolveToAnUntrackedSourceFile()
+    {
+        var root = CreateFixtureRepository();
+        File.WriteAllText(Path.Combine(root, "settings.json.cs"), "// untracked source decoy");
+        const string excerpt = "  - Inspect `settings.json` for the runtime configuration.";
+
+        var result = PlannerOutputContract.Resolve(PlanWithExcerpt(excerpt), string.Empty, root);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Contains(excerpt.Trim(), result.Plan, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("settings.json.cs", result.Plan, StringComparison.Ordinal);
     }
 
     [Xunit.Theory]
@@ -129,7 +189,7 @@ public sealed class PlannerOutputContractRuntimeMentionTests : WorkerDispatchTes
 
     private static string CreateFixtureRepository()
     {
-        var workingDirectory = CreateTempDirectory();
+        var workingDirectory = CreateSeededDispatchRepository();
         Directory.CreateDirectory(Path.Combine(workingDirectory, "src"));
         File.WriteAllText(Path.Combine(workingDirectory, "src", "Present.cs"), "// fixture");
         File.WriteAllText(Path.Combine(workingDirectory, "src", "OperatorInbox.cs"), "// fixture");

@@ -101,6 +101,8 @@ internal interface ITestClassDeclarationReader
 
     TestClassDeclarations ReadProject(string repositoryRelativeDirectory);
 
+    string? ReadNestedProjectFile(string projectDirectory, string sourcePath) => null;
+
     ReverseDependencyTestSelection ReadReverseDependentTestClasses(
         IReadOnlyList<string> changedSourcePaths) => ReverseDependencyTestSelection.Unavailable;
 }
@@ -183,6 +185,9 @@ internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarati
             return TestClassDeclarations.Unreadable;
         }
     }
+
+    public string? ReadNestedProjectFile(string projectDirectory, string sourcePath) =>
+        RepositoryProjectOwnership.FindNestedProjectFile(_repositoryRoot, projectDirectory, sourcePath);
 
     public ReverseDependencyTestSelection ReadReverseDependentTestClasses(
         IReadOnlyList<string> changedSourcePaths) =>

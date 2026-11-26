@@ -102,6 +102,27 @@ public sealed class ProviderResetIntentTests
     }
 
     [Fact]
+    public async Task Apply_RejectsDifferentBindingWithSameKeyAfterOriginalClears()
+    {
+        using var fixture = new Fixture();
+        var bindingKey = fixture.Hold.BindingKey;
+        fixture.Submit(bindingKey, ResetText, fixture.TextPath);
+        var intent = Assert.Single(await fixture.Store.ListForGoalAsync(fixture.Source.Id.Value));
+        fixture.Succeed();
+        var other = fixture.Exhaust("xAI", "<provider-default>");
+        Assert.True(ProviderBudgetHoldSchedules.TryGetHoldByBindingKey(fixture.Kernel.Goals, bindingKey, out var current));
+        Assert.Equal(other.Id, current.SourceGoalId);
+
+        new OperatorIntentCoordinator(fixture.Store, utcNow: () => fixture.Clock.UtcNow)
+            .ExecutePending(fixture.Kernel, fixture.Source);
+
+        var rejected = (await fixture.Store.GetAsync(intent.Id))!;
+        Assert.Equal(OperatorIntentStatus.Rejected, rejected.Status);
+        Assert.Equal("Rejected provider-reset: no-current-hold", rejected.Outcome);
+        Assert.Empty(fixture.Markers());
+    }
+
+    [Fact]
     public async Task PastOperatorResetIsDueImmediatelyAndSubmissionIsIdempotent()
     {
         using var fixture = new Fixture();
