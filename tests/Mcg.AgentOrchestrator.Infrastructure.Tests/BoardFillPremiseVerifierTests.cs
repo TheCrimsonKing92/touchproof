@@ -64,6 +64,33 @@ public sealed class BoardFillPremiseVerifierTests
         AssertBlocked(h, result);
     }
 
+    [Fact]
+    public void Prompt_RuntimeObservationBullet_IsOmittedFromVerifierPayload()
+    {
+        const string premise = """
+            ## Measured premise
+            - First claim cites `src/First.cs:3`.
+            - runtime-observation: See
+              operator-evidence/round.json.
+
+            Unrelated prose stays in the premise.
+            * Second claim cites `src/Second.cs:8`.
+            """;
+        const string expected = """
+            ## Measured premise
+            - First claim cites `src/First.cs:3`.
+
+            Unrelated prose stays in the premise.
+            * Second claim cites `src/Second.cs:8`.
+            """;
+
+        var prompt = BoardFillVerifierContract.Prompt(premise, BoardFillAssessmentTestFixture.Head);
+        using var document = JsonDocument.Parse(prompt[(prompt.LastIndexOf('\n') + 1)..]);
+
+        Assert.Equal(2, BoardFillVerifierContract.BulletCount(premise));
+        Assert.Equal(expected.ReplaceLineEndings("\n"), document.RootElement.GetProperty("measuredPremise").GetString());
+    }
+
     [Theory]
     [InlineData("unbound", "unavailable", "expected-one-binding")]
     [InlineData("wrong-profile", "unavailable", "wrong-profile")]

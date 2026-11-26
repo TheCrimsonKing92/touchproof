@@ -78,6 +78,30 @@ public sealed class AuthorBriefDraftPremiseBulletsTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_RuntimeObservationBullets_CountOnlySourceClaims(bool includeSourceClaim)
+    {
+        using var fixture = new CliAuthorDraftCommandTests.Fixture();
+        const string sourceClaim = "- Observed in `docs/role-capability-matrix.md:1`.";
+        const string observations = """
+            - runtime-observation: See operator-evidence/round.json.
+            * runtime-observation: See backlog note B7.
+            """;
+        var markdown = CliAuthorDraftCommandTests.ValidMarkdown.Replace(sourceClaim,
+            includeSourceClaim ? observations + "\n" + sourceClaim : observations);
+
+        var checks = AuthorBriefDraftChecks.Run(markdown,
+            CliAuthorDraftCommandTests.Fixture.MainSha, fixture.Repository);
+        var result = Assert.Single(checks, check => check.Name == "premise-bullets");
+        Assert.Equal(includeSourceClaim, result.Passed);
+        if (includeSourceClaim)
+            Assert.Equal("1 premise bullets.", result.Detail);
+        else
+            Assert.Contains("Restate each source claim as one bullet", result.Detail);
+    }
+
+    [Theory]
     [InlineData("\n")]
     [InlineData("\r\n")]
     public void Provided_bullets_pass_and_count_without_head_citations(string newline)
