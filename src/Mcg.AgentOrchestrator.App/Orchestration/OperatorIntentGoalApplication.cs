@@ -30,7 +30,7 @@ internal static class OperatorIntentGoalApplication
         var result = intents.ExecutePending(kernel, goal, intentIds, retryAnswerIds);
         goal = kernel.GetGoal(goal.Id);
         var lines = new List<string>();
-        if (result.MutatedGoalState && !supersessionOnly && goal.Status != GoalStatus.Completed)
+        if (result.MutatedGoalState && !result.OnlyDismissedHumanInput && !supersessionOnly && goal.Status != GoalStatus.Completed)
         {
             var invalidation = AcceptanceAttemptRetryInvalidation.Apply(
                 kernel,
