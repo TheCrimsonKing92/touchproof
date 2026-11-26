@@ -7,11 +7,20 @@ internal static class BoardFillPremiseBullets
 {
     private const string RuntimeObservationPrefix = "runtime-observation:";
     private static readonly Regex Marker = new(@"^[ \t]*[-*][ \t]+\S", RegexOptions.Multiline);
+
+    // CommonMark HTML block starts that can interrupt a paragraph.
+    private const string HtmlBlockStart =
+        @"<(?:!--|\?|![A-Za-z]|!\[CDATA\[|(?i:pre|script|style|textarea)(?=[ \t>]|$)|" +
+        @"/?(?i:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|" +
+        @"fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|" +
+        @"nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?=[ \t>]|/>|$))";
+
     private static readonly Regex CitationBoundary = new(
         @"^[ \t]*(?=\n(?<continuationIndent>[ \t]*)\S)" +
-        @"|^[ \t]*(?:>|(?:\+|[0-9]{1,9}[.)])[ \t]+(?=\S))" +
-        @"|^(?<continuationIndent>[ \t]*)(?:-(?:[ \t]*-){2,}|\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,})[ \t]*$",
-        RegexOptions.Multiline);
+        @"|^(?<continuationIndent>[ \t]*)(?:>|(?:\+|[0-9]{1,9}[.)])[ \t]+(?=\S)" +
+        @"|(?:-(?:[ \t]*-){2,}|\*(?:[ \t]*\*){2,}|_(?:[ \t]*_){2,})[ \t]*$" +
+        @"|#{1,6}(?=[ \t]|$)|`{3,}[^`\n]*$|~{3,}|" + HtmlBlockStart + ")",
+        RegexOptions.Multiline | RegexOptions.CultureInvariant);
     private static readonly Regex EvidencePath = new("""(?:^|\s)\S*[/\\][^\s/\\]*\.[\p{L}\p{N}]+(?=[\x60'"\])>.,;:!?]*(?:\s|$))""");
     private static readonly Regex NoteCitation = new("""\bnote\s+[0-9a-fA-F]+(?=[*\x60'"\p{Pf}\])>.,;:!?]*(?:\s|$))""");
 
@@ -76,9 +85,9 @@ internal static class BoardFillPremiseBullets
         var contentColumn = MarkdownColumnWidth(markerPrefix);
         foreach (Match boundary in CitationBoundary.Matches(body))
         {
-            // Paragraphs after blank lines and thematic breaks belong to the item at its content indentation.
+            // Blocks and paragraphs after blank lines can continue the item at its content indentation.
             var indent = boundary.Groups["continuationIndent"];
-            if (!indent.Success || MarkdownColumnWidth(indent.ValueSpan) < contentColumn)
+            if (MarkdownColumnWidth(indent.ValueSpan) < contentColumn)
                 return boundary.Index;
         }
 

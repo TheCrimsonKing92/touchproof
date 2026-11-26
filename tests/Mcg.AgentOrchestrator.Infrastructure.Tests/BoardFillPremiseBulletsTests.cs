@@ -14,6 +14,9 @@ public sealed class BoardFillPremiseBulletsTests
     [InlineData("‘note B7’.")]
     [InlineData("the following paragraph.\n\n  See note B7.")]
     [InlineData("the following paragraph.\n\n  ---\n\n  See note B7.")]
+    [InlineData("the following line.\n###Evidence cites note B7.")]
+    [InlineData("the following line.\n```inline``` cites note B7.")]
+    [InlineData("the following line.\n<div-like>See note B7. </div-like>")]
     public void BulletCount_RuntimeObservationWithEvidencePathOrNoteId_CountsOnlySourceClaims(string citation)
     {
         var premise = WithSourceClaims($"runtime-observation: Results are recorded in {citation}");
@@ -63,16 +66,26 @@ public sealed class BoardFillPremiseBulletsTests
     }
 
     [Theory]
-    [InlineData("> ")]
-    [InlineData("\n ")]
-    [InlineData("---\n")]
-    [InlineData("***\n")]
-    [InlineData("___\n")]
-    [InlineData(" _ _ _ \n")]
-    public void SourceClaims_AdjacentMarkdownBlocks_KeepTheirOwnCitations(string blockStart)
+    [InlineData("> ", "")]
+    [InlineData("\n ", "")]
+    [InlineData("---\n", "")]
+    [InlineData("***\n", "")]
+    [InlineData("___\n", "")]
+    [InlineData(" _ _ _ \n", "")]
+    [InlineData("### ", "")]
+    [InlineData("#\n", "")]
+    [InlineData("```text\n", "\n```")]
+    [InlineData(" ~~~text\n", "\n ~~~")]
+    [InlineData("<!-- ", " -->")]
+    [InlineData("<?evidence ", " ?>")]
+    [InlineData("<!Evidence ", " >")]
+    [InlineData("<![CDATA[", " ]]>")]
+    [InlineData("<PRE>\n", "\n</PRE>")]
+    [InlineData("<DIV>\n", "\n</DIV>\n")]
+    public void SourceClaims_AdjacentMarkdownBlocks_KeepTheirOwnCitations(string blockStart, string blockEnd)
     {
-        var separateBlock = $"{blockStart}Separate block cites note B7.";
-        var followingBlock = $"{blockStart}Separate block follows a cited observation.";
+        var separateBlock = $"{blockStart}Separate block cites note B7.{blockEnd}";
+        var followingBlock = $"{blockStart}Separate block follows a cited observation.{blockEnd}";
         var premise = WithSourceClaims($"""
             runtime-observation: Rounds failed often.
             {separateBlock}
@@ -85,6 +98,26 @@ public sealed class BoardFillPremiseBulletsTests
         Assert.Contains($"runtime-observation: Rounds failed often.\n{separateBlock}", payload);
         Assert.DoesNotContain("runtime-observation: Figures are in note B7.", payload);
         Assert.EndsWith($"{followingBlock}\n- The second source claim cites `src/Second.cs:8`.", payload);
+    }
+
+    [Theory]
+    [InlineData("### Evidence cites note B7.")]
+    [InlineData("```text\nSee operator-evidence/round.json.\n```")]
+    [InlineData("~~~text\nSee note B7.\n~~~")]
+    [InlineData("<!-- Evidence cites note B7. -->")]
+    [InlineData("> Evidence cites note B7.")]
+    [InlineData("+ Evidence cites operator-evidence/round.json.")]
+    [InlineData("1. Evidence cites note B7.")]
+    public void SourceClaims_NestedMarkdownBlocks_KeepCitationsWithObservation(string block)
+    {
+        var premise = WithSourceClaims($"runtime-observation: Rounds failed often.\n  {block.Replace("\n", "\n  ")}");
+
+        Assert.Equal(2, BoardFillVerifierContract.BulletCount(premise));
+        Assert.Equal("""
+            ## Measured premise
+            - The first source claim cites `src/First.cs:3`.
+            - The second source claim cites `src/Second.cs:8`.
+            """.ReplaceLineEndings("\n"), BoardFillPremiseBullets.SourceClaimPremise(premise));
     }
 
     private static string WithSourceClaims(string bullet) => $"""
