@@ -704,14 +704,16 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
             string? worktreePath,
             AcceptanceVerificationResult? verification,
             bool verificationSkipped,
-            string? executionDirectory = null) =>
+            string? executionDirectory = null,
+            bool verificationAlreadyPassed = false) =>
             new DefaultCliGoalWorktreeService(new WorktreeCleanupContext(cleanupHooks)).BuildAcceptanceEvidence(
                 kernel,
                 goal,
                 worktreePath,
                 verification,
                 verificationSkipped,
-                executionDirectory);
+                executionDirectory,
+                verificationAlreadyPassed);
     }
 
     private protected sealed class FakeAcceptanceVerifier(

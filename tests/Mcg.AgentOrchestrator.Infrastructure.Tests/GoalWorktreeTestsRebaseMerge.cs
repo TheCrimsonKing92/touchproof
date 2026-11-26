@@ -1331,6 +1331,8 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             File.WriteAllText(Path.Combine(worktreePath, "tested.txt"), "tested work");
             RunGit(worktreePath, "add", "-A");
             RunGit(worktreePath, "commit", "-m", "Tested work");
+            var testedHead = RunGitOutput(worktreePath, "rev-parse", "HEAD");
+            var mainHead = RunGitOutput(repo, "rev-parse", "HEAD");
 
             var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
@@ -1353,13 +1355,16 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                 AcceptanceVerifier = fakeVerifier
             };
 
-            // When called through the normal acceptance path (which doesn't have the stale check),
-            // the merge will still succeed even though the worktree changed during verification
             CliCommandHandlers.Execute(["acceptance"], context);
 
-            // Verify the merge happened and the new files exist
-            Assert.True(File.Exists(Path.Combine(repo, "tested.txt")));
-            Assert.True(File.Exists(Path.Combine(repo, "after-verifier-started.txt")));
+            Assert.Equal(1, fakeVerifier.RunCount);
+            Assert.Equal(testedHead, RunGitOutput(worktreePath, "rev-parse", "HEAD^"));
+            Assert.Equal(mainHead, RunGitOutput(repo, "rev-parse", "HEAD"));
+            Assert.Contains(GoalOperationJournal.Read(repo, goal.Id).Entries, entry =>
+                entry.AcceptanceOutcome == "aborted:state-guard" &&
+                entry.BranchHeadSha == testedHead && entry.MainHeadSha == mainHead);
+            Assert.False(File.Exists(Path.Combine(repo, "tested.txt")));
+            Assert.False(File.Exists(Path.Combine(repo, "after-verifier-started.txt")));
         }
         finally
         {
