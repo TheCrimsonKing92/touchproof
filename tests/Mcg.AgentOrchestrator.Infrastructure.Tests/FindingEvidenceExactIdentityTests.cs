@@ -7,7 +7,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using static ConductorDriverTests;
 using static ConductorDriverTestsFindingEvidenceReuse;
 
-public sealed class ConductorDriverTestsFindingEvidenceExactIdentity
+public sealed class FindingEvidenceExactIdentityTests
 {
     private const string OriginalCandidate = "abc1234abcdef1234abcdef1234abcdef1234abcd12";
     private const string ChangedCandidate = "def5678abcdef1234abcdef1234abcdef1234abcd12";
