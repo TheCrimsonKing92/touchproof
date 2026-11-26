@@ -320,7 +320,7 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
         {
             Assert.False(File.Exists(Path.Combine(repo, "mcg-orchestrator.cmd")));
             Assert.False(Directory.Exists(Path.Combine(repo, "src")));
-            using var appOutput = PrepareRepoProcessAppOutput(repo);
+            using var appOutput = PrepareRepoProcessAppOutput(repo, isolateRuntimeCache: true);
             string[] helperScripts =
             [
                 "Get-RepoProcessInfo.ps1",
@@ -330,7 +330,7 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
             foreach (var helperScript in helperScripts)
             {
                 var first = RunRedirectedProcess(
-                    CreateRepoProcessHelperStartInfo(repo, helperScript, appOutput.Path),
+                    CreateRepoProcessHelperStartInfo(repo, helperScript, appOutput.Path, appOutput.TempDirectory),
                     $"first {helperScript}",
                     timeoutMs: RepoScriptHangFailsafeMilliseconds);
 
@@ -338,7 +338,7 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
                 Assert.False(first.TimedOut);
 
                 var second = RunRedirectedProcess(
-                    CreateRepoProcessHelperStartInfo(repo, helperScript, appOutput.Path),
+                    CreateRepoProcessHelperStartInfo(repo, helperScript, appOutput.Path, appOutput.TempDirectory),
                     $"second {helperScript}",
                     timeoutMs: RepoScriptHangFailsafeMilliseconds);
 
@@ -1094,46 +1094,45 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
         }
     }
 
-    private static PreparedAppOutput PrepareRepoProcessAppOutput(string repositoryRoot)
+    private static PreparedAppOutput PrepareRepoProcessAppOutput(string repositoryRoot, bool isolateRuntimeCache = false)
     {
-        var sourceRoot = FindCurrentSourceRoot();
-        var appOutput = Path.Combine(
-            Path.GetTempPath(),
-            "mcg-repo-helper-app-output-" + Guid.NewGuid().ToString("N"));
-        CopyAppOutput(AppContext.BaseDirectory, appOutput);
+        // The staged closure adds a digest and nested runtime paths. Keep it under a short
+        // private temp directory so Windows PowerShell can copy it from a nested worktree.
+        var tempDirectory = Directory.CreateTempSubdirectory().FullName;
+        var appOutput = Path.Combine(tempDirectory, "app");
         try
         {
+            CopyAppOutput(AppContext.BaseDirectory, appOutput);
             var appDll = Path.Combine(appOutput, "Mcg.AgentOrchestrator.App.dll");
-            var markerPath = appDll + ".git-head";
             Assert.True(File.Exists(appDll), $"Test output does not contain the referenced App assembly: {appDll}");
 
-            var startInfo = CreateRepoScriptStartInfo(sourceRoot, "scripts\\Update-AppDllGitHeadMarker.ps1");
-            startInfo.ArgumentList.Add("-RepositoryRoot");
-            startInfo.ArgumentList.Add(repositoryRoot);
-            startInfo.ArgumentList.Add("-MarkerPath");
-            startInfo.ArgumentList.Add(markerPath);
-            var result = RunRedirectedProcess(startInfo, "Update-AppDllGitHeadMarker.ps1", timeoutMs: 10000);
-
-            Assert.Equal(0, result.ExitCode);
-            Assert.True(File.Exists(markerPath), $"App marker was not prepared before the bounded helper call: {markerPath}");
+            var repositoryHead = RunGitOutput(repositoryRoot, "rev-parse", "--verify", "HEAD");
+            File.WriteAllText(appDll + ".git-head", repositoryHead, Encoding.ASCII);
 
             var resolverStartInfo = CreateRepoScriptStartInfo(repositoryRoot, "scripts\\Resolve-RepoProcessAppDll.ps1");
             resolverStartInfo.ArgumentList.Add("-RepositoryRoot");
             resolverStartInfo.ArgumentList.Add(repositoryRoot);
             resolverStartInfo.Environment["MCG_ORCHESTRATOR_APP_OUTPUT"] = appOutput;
+            if (isolateRuntimeCache)
+                resolverStartInfo.Environment["TEMP"] = tempDirectory;
             var resolverResult = RunRedirectedProcess(
                 resolverStartInfo,
                 "Resolve-RepoProcessAppDll.ps1 preparation");
-            Assert.Equal(0, resolverResult.ExitCode);
+            Assert.True(resolverResult.ExitCode == 0,
+                $"App resolver exited {resolverResult.ExitCode}.{Environment.NewLine}{resolverResult.Stdout}{Environment.NewLine}{resolverResult.Stderr}");
+            var resolvedDll = resolverResult.Stdout.Trim();
+            if (isolateRuntimeCache)
+                Assert.StartsWith(Path.Combine(tempDirectory, "mcg-run") + Path.DirectorySeparatorChar,
+                    resolvedDll, StringComparison.OrdinalIgnoreCase);
             Assert.True(
-                File.Exists(resolverResult.Stdout.Trim()),
+                File.Exists(resolvedDll),
                 $"Resolver preparation did not produce a runnable App assembly: {resolverResult.Stdout}");
 
-            return new PreparedAppOutput(appOutput);
+            return new PreparedAppOutput(appOutput, tempDirectory);
         }
         catch
         {
-            _ = GoalWorktrees.DeleteDirectoryWithRetry(appOutput);
+            _ = GoalWorktrees.DeleteDirectoryWithRetry(tempDirectory);
             throw;
         }
     }
@@ -1174,7 +1173,8 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
     private static ProcessStartInfo CreateRepoProcessHelperStartInfo(
         string repo,
         string helperScript,
-        string appOutput)
+        string appOutput,
+        string? runtimeTemp = null)
     {
         var startInfo = CreateRepoScriptStartInfo(repo, "scripts\\" + helperScript);
         switch (helperScript)
@@ -1197,6 +1197,8 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
         }
 
         startInfo.Environment["MCG_ORCHESTRATOR_APP_OUTPUT"] = appOutput;
+        if (runtimeTemp is not null)
+            startInfo.Environment["TEMP"] = runtimeTemp;
         return startInfo;
     }
 
@@ -1223,7 +1225,8 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
     private static void AssertRepoProcessHelperResult(string helperScript, RedirectedProcessResult result)
     {
         Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
-        Assert.Contains("MCG_PHASE=run-cli-direct", result.Stdout, StringComparison.Ordinal);
+        Assert.True(result.Stdout.Contains("MCG_PHASE=run-cli-direct", StringComparison.Ordinal),
+            $"{helperScript} did not launch the prepared App directly.{Environment.NewLine}{result.Stdout}");
         Assert.DoesNotContain("MCG_PHASE=rebuild-and-run-cli", result.Stdout, StringComparison.Ordinal);
         switch (helperScript)
         {
@@ -1247,15 +1250,16 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
         }
     }
 
-    private sealed class PreparedAppOutput(string path) : IDisposable
+    private sealed class PreparedAppOutput(string path, string tempDirectory) : IDisposable
     {
         public string Path { get; } = path;
+        public string TempDirectory { get; } = tempDirectory;
 
         public void Dispose()
         {
             Assert.True(
-                GoalWorktrees.DeleteDirectoryWithRetry(Path),
-                $"Could not remove prepared App output directory: {Path}");
+                GoalWorktrees.DeleteDirectoryWithRetry(TempDirectory),
+                $"Could not remove repo process helper temp directory: {TempDirectory}");
         }
     }
 
