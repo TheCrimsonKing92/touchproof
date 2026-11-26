@@ -54,7 +54,142 @@ public sealed class FindingReceiptClosureDiagnosisRoutingTests
         var receipt = Assert.Single(fixture.Requester.LastVerification!.FindingEvidenceReceipts!);
         Assert.Equal(ReviewFindingState.Resolved, Assert.Single(fixture.Requester.LastVerification.MergedReviewFindings!).State);
         Assert.Contains(fixture.Goal.Timeline, item => item.Message ==
-            $"FINDING_RECEIPT_CLOSURE task={fixture.Requester.Id.Value[..8]} findings=closure-finding receipts={receipt.ReceiptId} candidate={CandidateSha}; no worker dispatched");
+            $"FINDING_RECEIPT_CLOSURE task={fixture.Requester.Id.Value[..8]} findings=closure-finding receipts={receipt.ReceiptId} " +
+            $"candidate={CandidateSha} candidate_counts={receipt.ReceiptId}:executed=1:passed=1; no worker dispatched");
+    }
+
+    [Fact]
+    public void OlderHistoryReceiptClosesWithCandidateCountsAndNoWorkerDispatched()
+    {
+        using var fixture = new ClosureFixture();
+        var finding = Finding();
+        var receipt = GreenHistoryReceipt(finding);
+        receipt = receipt with
+        {
+            Arms =
+            [
+                new(FindingEvidenceArm.SourceReverted, CandidateSha, FindingEvidenceArmDisposition.Red,
+                    Accepted: true, Passed: false, Summary: "One test failed on reverted source",
+                    FailingTestIdentities: ["ConductorDriverTests.DetectsRegression"], ExecutedTestCount: 7),
+                .. receipt.Arms!
+            ]
+        };
+        SeedOlderHistoryReceipt(fixture, finding, receipt);
+        var timelineCount = fixture.Goal.Timeline.Count;
+        var lastDispatch = fixture.Requester.LastDispatch;
+        var closedAt = fixture.Requester.LastVerification!.CompletedAt.AddSeconds(1);
+
+        Assert.True(FindingReceiptClosureCoordinator.TryClose(fixture.Kernel, fixture.Goal, fixture.Requester.Id,
+            CandidateSha, () => closedAt, out var diagnosis, out _), diagnosis.Describe());
+
+        Assert.Equal(FindingReceiptClosureDiagnosis.Closable, diagnosis.Code);
+        Assert.Equal(WorkTaskStatus.Completed, fixture.Requester.Status);
+        var closed = Assert.Single(fixture.Requester.LastVerification!.MergedReviewFindings!);
+        Assert.Equal(finding.StableId, closed.StableId);
+        Assert.Equal(ReviewFindingState.Resolved, closed.State);
+        var request = ConductorDriver.BuildFindingEvidenceIdentity(receipt.Request);
+        Assert.Equal($"Closed by conductor receipt closure: receipt {receipt.ReceiptId}; request {request}; " +
+            $"candidate {CandidateSha}; Candidate counts (executed=3, passed=3).", closed.Description);
+        var newEvents = fixture.Goal.Timeline.Skip(timelineCount).ToArray();
+        var closure = Assert.Single(newEvents, item => item.Message.StartsWith("FINDING_RECEIPT_CLOSURE", StringComparison.Ordinal));
+        Assert.Equal($"FINDING_RECEIPT_CLOSURE task={fixture.Requester.Id.Value[..8]} findings={finding.StableId} " +
+            $"receipts={receipt.ReceiptId} candidate={CandidateSha} candidate_counts={receipt.ReceiptId}:executed=3:passed=3; no worker dispatched",
+            closure.Message);
+        Assert.Same(lastDispatch, fixture.Requester.LastDispatch);
+        Assert.DoesNotContain(newEvents, item => item.Kind is ProgressKind.TaskDispatchRecorded or
+            ProgressKind.TaskProcessStarted or ProgressKind.TaskRetried or ProgressKind.HumanInputRequested);
+        Assert.Empty(fixture.Requests);
+        Assert.Empty(fixture.Retried);
+        Assert.Empty(fixture.Escalations);
+    }
+
+    [Fact]
+    public void OlderHistoryReceiptAtDifferentCandidateLeavesFindingOpen()
+    {
+        var finding = Finding();
+        AssertOlderHistoryReceiptRejected(finding, GreenHistoryReceipt(finding, OlderSha),
+            FindingReceiptClosureDiagnosis.ReceiptCandidateDiffers);
+    }
+
+    [Fact]
+    public void OlderHistoryNonPassingReceiptLeavesFindingOpen()
+    {
+        var finding = Finding();
+        var receipt = GreenHistoryReceipt(finding) with
+        {
+            Passed = false,
+            Summary = "Candidate tests failed",
+            Arms =
+            [
+                new(FindingEvidenceArm.Candidate, CandidateSha, FindingEvidenceArmDisposition.Red,
+                    Accepted: true, Passed: false, Summary: "One Candidate test failed",
+                    FailingTestIdentities: ["ConductorDriverTests.DetectsRegression"], ExecutedTestCount: 3)
+            ]
+        };
+        AssertOlderHistoryReceiptRejected(finding, receipt, FindingReceiptClosureDiagnosis.ReceiptNotPassing);
+    }
+
+    [Fact]
+    public void OlderHistoryReceiptForNonTestEvidenceFindingLeavesFindingOpen()
+    {
+        var finding = Finding() with { Category = FindingCategory.Correctness };
+        AssertOlderHistoryReceiptRejected(finding, GreenHistoryReceipt(finding),
+            FindingReceiptClosureDiagnosis.FindingCategoryNotTestEvidence);
+    }
+
+    [Fact]
+    public void OlderHistoryReceiptWithoutRequestedNegativeControlLeavesFindingOpen()
+    {
+        var finding = Finding();
+        finding = finding with
+        {
+            EvidenceRequest = finding.EvidenceRequest! with { NegativeControl = FindingEvidenceNegativeControl.RevertSrc }
+        };
+        AssertOlderHistoryReceiptRejected(finding, GreenHistoryReceipt(finding),
+            FindingReceiptClosureDiagnosis.NegativeControlNotDemonstrated);
+    }
+
+    private static FindingEvidenceReceipt GreenHistoryReceipt(ReviewFinding finding, string candidateSha = CandidateSha) =>
+        new("historical-receipt", candidateSha, finding.EvidenceRequest!, Accepted: true, Passed: true,
+            Summary: "Candidate tests passed",
+            Arms:
+            [
+                new(FindingEvidenceArm.Candidate, candidateSha, FindingEvidenceArmDisposition.Green,
+                    Accepted: true, Passed: true, Summary: "Three Candidate tests passed", ExecutedTestCount: 3)
+            ]);
+
+    private static void SeedOlderHistoryReceipt(ClosureFixture fixture, ReviewFinding finding, FindingEvidenceReceipt receipt)
+    {
+        var requester = fixture.Requester;
+        var outcome = new FindingEvidenceOutcome(true, receipt.ReceiptId, ResultReason: FindingEvidenceOutcomeReason.ValidEvidence,
+            RequestedSelectionIdentity: ConductorDriver.BuildFindingEvidenceIdentity(receipt.Request));
+        fixture.Report([finding]);
+        fixture.Kernel.RecordFindingEvidenceOutcome(fixture.Goal.Id, requester.Id, finding.StableId, outcome, receipt);
+        fixture.Kernel.RetryTask(fixture.Goal.Id, requester.Id, "Ask Tester to reconsider the finding", RetryCause.NewTestFinding);
+
+        fixture.Report([finding]);
+        fixture.Kernel.RecordFindingEvidenceOutcome(fixture.Goal.Id, requester.Id, finding.StableId, outcome);
+
+        var latest = requester.LastVerification!;
+        Assert.Equal(CandidateSha, latest.ReviewedCommit);
+        Assert.Equal(receipt.ReceiptId, Assert.Single(latest.MergedReviewFindings!).EvidenceOutcome!.ReceiptId);
+        Assert.Empty(latest.FindingEvidenceReceipts ?? []);
+        Assert.Contains(requester.VerificationHistory.Take(requester.VerificationHistory.Count - 1),
+            record => record.FindingEvidenceReceipts?.Contains(receipt) == true);
+    }
+
+    private static void AssertOlderHistoryReceiptRejected(ReviewFinding finding, FindingEvidenceReceipt receipt, string expectedDiagnosis)
+    {
+        using var fixture = new ClosureFixture();
+        SeedOlderHistoryReceipt(fixture, finding, receipt);
+
+        Assert.False(FindingReceiptClosureCoordinator.TryClose(fixture.Kernel, fixture.Goal, fixture.Requester.Id,
+            CandidateSha, () => DateTimeOffset.UtcNow, out var diagnosis, out _));
+
+        Assert.Equal(expectedDiagnosis, diagnosis.Code);
+        Assert.Equal(ReviewFindingState.Open, Assert.Single(fixture.Requester.LastVerification!.MergedReviewFindings!).State);
+        Assert.NotEqual(WorkTaskStatus.Completed, fixture.Requester.Status);
+        Assert.DoesNotContain(fixture.Goal.Timeline, item => item.Message.StartsWith("FINDING_RECEIPT_CLOSURE", StringComparison.Ordinal));
     }
 
     [Fact]
