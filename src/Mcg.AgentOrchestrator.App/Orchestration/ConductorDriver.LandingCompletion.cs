@@ -8,6 +8,19 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
+    private readonly SoloBaselineRepairCoordinator? _soloBaselineRepair;
+
+    private SoloAcceptanceConsumptionContext? ReadSoloAcceptanceContext(Goal goal) =>
+        SoloAcceptanceContextReader is { } reader ? reader(goal) :
+            SoloAcceptanceFailureHandler.ReadContext(goal, _executionDirectory, ReadCurrentCohortAttributionRevisions(goal));
+
+    private SoloAcceptanceFailureHandler SoloAcceptanceFailure => new(
+        () => _cohortKernel ?? _conductorTickKernel, _recordAcceptanceFailure, _utcNow, ReadSoloAcceptanceContext,
+        _recordCriterionRetryFeedback, RouteAttributedFailure, RecordEscalation,
+        goal => _parallelAcceptanceAttemptCoordinator.TryReadLatest(goal.Id.Value),
+        (goal, route) => FailureDiagnosis?.Enrich(goal, route) ?? route,
+        (goal, prefix, policy, acceptance) => _soloBaselineRepair?.TryAdvance(goal, prefix, policy, acceptance));
+
     internal LandingEscalationRecheckResult RecheckPreLandingRebaseConflict(Goal goal)
         => _recheckPreLandingRebaseConflict(goal);
 
@@ -40,6 +53,8 @@ internal sealed partial class ConductorDriver
         AcceptanceVerificationSummary acceptance)
     {
         goal = GetCurrentGoal(goal);
+        if (_soloBaselineRepair?.ObserveAcceptedPair(goal, goalPrefix, policy, acceptance) is { } repairHold)
+            return repairHold;
         if (acceptance.Passed && MultiRepositoryGoal.Applies(goal))
             return ExecuteRepositoryAcceptance(goal, goalPrefix, policy, GoalLifecycle.ResolveState(goal));
         var decision = LandingGoalStateGuardPolicy.Evaluate(new(null, goal.LifecycleStatus,
@@ -53,12 +68,16 @@ internal sealed partial class ConductorDriver
         // Lazy keeps the changed-path git call at one per advance and off paths that never need it.
         var landingFileScopes = new Lazy<IReadOnlyList<string>>(() => _getLandingFileScopes(goal));
         var apparatusRedReading = _apparatusRedGate?.RecordGateCompletion(goal, acceptance, landingFileScopes);
+        if (!acceptance.Passed && acceptance is { RequiresSoloFailureReceipt: true, SoloFailureReceipt: null })
+            _soloBaselineRepair?.RetainUnresolvedCompletion(goal, acceptance);
         if (TryDisposeWithinAttemptRerunApparatus(goal, goalPrefix, policy, acceptance) is { } rerunApparatus)
         {
             return rerunApparatus;
         }
         if (IsEnvironmentalApparatusAcceptanceRun(acceptance))
         {
+            if (!acceptance.Passed && acceptance.SoloFailureReceipt is not null)
+                _soloBaselineRepair?.RetainUnresolvedCompletion(goal, acceptance);
             var failedChecks = acceptance.FailedChecks is { Count: > 0 }
                 ? acceptance.FailedChecks
                 : acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray();
@@ -77,13 +96,18 @@ internal sealed partial class ConductorDriver
 
         if (!acceptance.Passed && (acceptance.SoloFailureReceipt is not null || acceptance.RequiresSoloFailureReceipt))
         {
-            // Prepared solo attribution can prove every failure is inherited. Keep
-            // the existing excluded hold and main-suspect evidence before routing
-            // actionable findings through the solo receipt consumer.
-            var retryDisposition = ClassifyAcceptanceRetry(acceptance.RequiredUnmetCriteria);
+            // Earlier inherited failures can make a post-repair candidate failure look
+            // recurrent. Let the repair coordinator validate the new receipt first.
+            var preferSoloRepair = _soloBaselineRepair is not null && acceptance.SoloFailureReceipt is not null &&
+                (_soloBaselineRepair.HasObligations(goal) || acceptance.RequiredUnmetCriteria.Any(check =>
+                    check.FailingTestAttributions is not { Count: > 0 } attributions ||
+                    attributions.Any(test => test.Origin is AcceptanceTestFailureOrigin.Inherited or AcceptanceTestFailureOrigin.Unattributed))) &&
+                ReadSoloAcceptanceContext(goal) is not null;
+
+            var retryDisposition = AcceptanceRetryClassifier.Classify(acceptance.RequiredUnmetCriteria);
             var attemptedAllFlakyDisposition = false;
             if (acceptance.RequiredUnmetCriteria.Count > 0 && retryDisposition.ActionableCriteria.Count == 0 &&
-                TryDisposeExcludedAcceptanceFailures(
+                acceptance.SoloFailureReceipt is null && TryDisposeExcludedAcceptanceFailures(
                     goal, goalPrefix, policy, acceptance, apparatusRedReading,
                     ref retryDisposition, out attemptedAllFlakyDisposition) is { } excludedResult)
                 return excludedResult;
@@ -91,14 +115,18 @@ internal sealed partial class ConductorDriver
             // Attempt IDs also identify legacy and background completions. Only
             // producer-owned solo evidence selects this path; keep that obligation
             // when a captured receipt is subsequently lost during transport.
-            // Preserve the existing apparatus disposition before admitting solo evidence.
-            if (!attemptedAllFlakyDisposition &&
+            // Retained repair obligations own matching completions ahead of apparatus routing.
+            if (!preferSoloRepair && !attemptedAllFlakyDisposition &&
                 TryDisposeApparatusRed(goal, goalPrefix, policy, acceptance, apparatusRedReading) is { } soloApparatus)
                 return soloApparatus;
 
             // A solo test finding must use the evidence route, never the generic
             // criterion feedback retry (which cannot establish attribution).
-            return SoloAcceptanceFailure.Complete(goal, goalPrefix, policy, acceptance);
+            return SoloAcceptanceFailure.Complete(goal, goalPrefix, policy, acceptance,
+                afterRecord: acceptance.SoloFailureReceipt is not null && retryDisposition.ActionableCriteria.Count == 0
+                    ? () => TryRecordSoloMainSuspect(goal, goalPrefix, acceptance, retryDisposition.ExcludedFailures,
+                        acceptance.BranchHeadSha, acceptance.MainHeadSha, apparatusRedReading?.ChangedPaths, preferSoloRepair)
+                    : null);
         }
 
         if (!acceptance.Passed && acceptance.RequiredUnmetCriteria.Count == 0)
@@ -136,7 +164,7 @@ internal sealed partial class ConductorDriver
             if (TryHoldForOwnerReview(goal, goalPrefix, policy, acceptance) is { } ownerReviewHold)
                 return ownerReviewHold;
 
-            var retryDisposition = ClassifyAcceptanceRetry(acceptance.RequiredUnmetCriteria);
+            var retryDisposition = AcceptanceRetryClassifier.Classify(acceptance.RequiredUnmetCriteria);
             var attemptedAllFlakyDisposition = false;
             if (retryDisposition.ActionableCriteria.Count == 0 &&
                 TryDisposeExcludedAcceptanceFailures(
@@ -403,69 +431,6 @@ internal sealed partial class ConductorDriver
         }
 
         return scopes.Order(StringComparer.OrdinalIgnoreCase).ToArray();
-    }
-
-    private static AcceptanceRetryDisposition ClassifyAcceptanceRetry(
-        IReadOnlyList<AcceptanceCheckResult> criteria)
-    {
-        var actionable = new List<AcceptanceCheckResult>();
-        var excluded = new List<ExcludedAcceptanceFailure>();
-        foreach (var criterion in criteria)
-        {
-            var failingIdentities = criterion.FailingTestIdentities?
-                .Where(identity => !string.IsNullOrWhiteSpace(identity))
-                .Distinct(StringComparer.Ordinal)
-                .ToArray();
-            if (failingIdentities is not { Length: > 0 })
-            {
-                // Check-level same-name co-failure is not proof that this exact failure existed at the
-                // merge base. Identity-less failures therefore remain actionable.
-                actionable.Add(criterion);
-                continue;
-            }
-
-            var actionableIdentities = new List<string>();
-            if (criterion.FailingTestAttributions is { Count: > 0 } testAttributions &&
-                failingIdentities is { Length: > 0 })
-            {
-                var byIdentity = testAttributions
-                    .GroupBy(attribution => attribution.TestIdentity, StringComparer.Ordinal)
-                    .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
-                foreach (var identity in failingIdentities)
-                {
-                    if (byIdentity.TryGetValue(identity, out var attribution) &&
-                        (attribution.Origin == AcceptanceTestFailureOrigin.Inherited ||
-                         (attribution.Origin == AcceptanceTestFailureOrigin.UnconfirmedIntroduced &&
-                          attribution.CandidateRerun?.Outcome == "Passed" &&
-                          !string.IsNullOrWhiteSpace(attribution.CandidateRerun.ReceiptPointer))))
-                    {
-                        excluded.Add(new ExcludedAcceptanceFailure(
-                            identity,
-                            attribution.Origin == AcceptanceTestFailureOrigin.Inherited
-                                ? AcceptanceRetryExclusionKind.Inherited
-                                : AcceptanceRetryExclusionKind.UnconfirmedIntroduced,
-                            attribution.CandidateRerun?.ReceiptPointer));
-                    }
-                    else
-                    {
-                        actionableIdentities.Add(identity);
-                    }
-                }
-            }
-            else
-            {
-                // Only per-identity merge-base attribution can suppress a retry. Check-level baseline
-                // co-failure does not establish that these identities are inherited.
-                actionableIdentities.AddRange(failingIdentities);
-            }
-
-            if (actionableIdentities.Count > 0)
-            {
-                actionable.Add(criterion with { FailingTestIdentities = actionableIdentities });
-            }
-        }
-
-        return new AcceptanceRetryDisposition(actionable, excluded);
     }
 
     private static string BuildUnattributableAcceptanceIdentity(

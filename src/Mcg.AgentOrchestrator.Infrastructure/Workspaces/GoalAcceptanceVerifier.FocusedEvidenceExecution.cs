@@ -315,6 +315,12 @@ internal static class FocusedEvidenceExecution
         var checks = GoPackageFocusedEvidence.AnnotateResults(focusedChecks, await runFocusedEvidenceChecks(
             worktreePath, focusedChecks, goalId, stableSlotIndex, stableSlotLease,
             executionEnvironment, cancellationToken, continueAfterFailure, executionOwner).ConfigureAwait(false));
+        var checksByName = focusedChecks.ToLookup(check => check.Name, StringComparer.Ordinal);
+        checks = checks.Select(AcceptanceMissingToolClassifier.Attach).ToArray();
+        checks = checks.Select(check =>
+            check.TestProjectPath is null && checksByName[check.Name].ToArray() is [{ Project: { } project }]
+                ? check with { TestProjectPath = project }
+                : check).ToArray();
         var disposition = ClassifyFocusedEvidenceArm(checks);
         var notRun = FocusedEvidenceNotRunPlan.Compare(focusedChecks, checks, coverage, continueAfterFailure);
         if (notRun.Checks.Count > 0 && disposition == FindingEvidenceArmDisposition.Green)
@@ -463,10 +469,7 @@ internal static class FocusedEvidenceExecution
     private static FindingEvidenceArmDisposition ClassifyFocusedEvidenceArm(
         IReadOnlyList<AcceptanceCheckResult> checks)
     {
-        if (checks.Any(check => check.FailureClassification is
-                AcceptanceFailureClassifications.FocusedSelectionApparatusFailure or
-                AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable or
-                AcceptanceFailureClassifications.BuildPhaseTimeout))
+        if (checks.Any(IsFocusedEvidenceApparatusFailure))
         {
             return FindingEvidenceArmDisposition.ApparatusFailure;
         }
@@ -482,6 +485,11 @@ internal static class FocusedEvidenceExecution
                 ? FindingEvidenceArmDisposition.Red
                 : FindingEvidenceArmDisposition.Inconclusive;
     }
+
+    internal static bool IsFocusedEvidenceApparatusFailure(AcceptanceCheckResult check) =>
+        check.FailureClassification is AcceptanceFailureClassifications.FocusedSelectionApparatusFailure or
+            AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable or
+            AcceptanceFailureClassifications.MissingTool or AcceptanceFailureClassifications.BuildPhaseTimeout;
 
     internal static FindingEvidenceOutcomeReason ClassifyFocusedEvidenceExperiment(
         FocusedEvidenceArmRunResult candidate,

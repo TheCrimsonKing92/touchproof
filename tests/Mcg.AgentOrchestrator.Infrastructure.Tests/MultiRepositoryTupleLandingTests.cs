@@ -48,13 +48,7 @@ public sealed class MultiRepositoryTupleLandingTests
         var homeCandidate = GoalRepositoryWorktreeProvisionerFixture.Run(fixture.HomeWorktree, "rev-parse", "HEAD");
         var otherCandidate = GoalRepositoryWorktreeProvisionerFixture.Run(fixture.SecondaryWorktree, "rev-parse", "HEAD");
         var order = new List<string>();
-        using var git = LandingExecutor.UseGitRunner((root, args) =>
-        {
-            var result = GitCli.Run(root, args);
-            if (result.Succeeded && args.Length >= 2 && args[0] == "update-ref" && args[1] == "refs/heads/main")
-                order.Add(root == home.CheckoutPath ? "default" : "crosswalk");
-            return result;
-        });
+        using var git = fixture.ObserveLandingOrder(order);
 
         var driver = fixture.Driver();
         var result = driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Conservative);

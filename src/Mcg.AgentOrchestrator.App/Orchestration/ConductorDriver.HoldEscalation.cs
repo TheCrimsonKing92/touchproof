@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -17,13 +18,16 @@ internal sealed partial class ConductorDriver
     private void RecordEscalation(Goal goal, GoalLifecycleState state, string reason) =>
         WriteEscalation(goal, state, reason);
 
-    private LandingEscalationWriteResult WriteEscalation(Goal goal, GoalLifecycleState state, string reason)
+    private LandingEscalationWriteResult WriteEscalation(Goal goal, GoalLifecycleState state, string reason) =>
+        WriteEscalation(goal, state, reason, null);
+
+    private LandingEscalationWriteResult WriteEscalation(Goal goal, GoalLifecycleState state, string reason, string? deliveryId)
     {
         var escalationClock = Stopwatch.StartNew();
         var sinkResult = LandingEscalationWriteResult.Error;
         try
         {
-            sinkResult = _writeEscalation(goal, state, reason);
+            sinkResult = _writeEscalation(goal, state, reason, deliveryId);
         }
         finally
         {
@@ -37,6 +41,17 @@ internal sealed partial class ConductorDriver
         }
         return sinkResult;
     }
+
+    private static Func<Goal, GoalLifecycleState, string, string?, LandingEscalationWriteResult> CreateEscalationWriter(
+        OrchestratorWorkspace workspace, GoalLifecycleEventWriter eventWriter) => (goal, state, reason, deliveryId) =>
+    {
+        var source = $"conductor:{state}";
+        var result = OperatorInbox.RecordLandingEscalation(workspace, goal, reason, source);
+        if (deliveryId is null) eventWriter.AppendGoalEscalated(goal.Id, state, goal.Status, reason, source);
+        else eventWriter.AppendIdempotent(goal.Id, deliveryId,
+            writer => writer.AppendGoalEscalated(goal.Id, state, goal.Status, reason, source));
+        return result;
+    };
 
     private ConductorAdvanceResult EscalateFailedGoalRecovery(
         Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, GoalLifecycleState state,
