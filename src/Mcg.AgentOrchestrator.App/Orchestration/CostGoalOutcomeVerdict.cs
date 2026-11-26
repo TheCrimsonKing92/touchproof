@@ -98,19 +98,26 @@ internal static class CostGoalOutcomeVerdict
         IEnumerable<OutcomeGateObservation> gates, string landedHomeCommit, Func<string, string, bool> containsCommit,
         DateTimeOffset adoptedAt, DateTimeOffset evaluatedAt, CostGoalOutcomeReplay? replay = null,
         IEnumerable<TickStepObservation>? ticks = null,
-        Func<OutcomeMetricLine, (OutcomeMetricSample Before, OutcomeMetricSample After)?>? measureWorkerUsage = null)
+        Func<OutcomeMetricLine, (OutcomeMetricSample Before, OutcomeMetricSample After)?>? measureWorkerUsage = null,
+        Action<string, IEnumerable<string>>? prefetchAncestry = null)
     {
         if (record.FinalVerdicts.Count == record.Filing.Baselines.Count) return record.FinalVerdicts;
         ArgumentException.ThrowIfNullOrWhiteSpace(landedHomeCommit);
         if (evaluatedAt < adoptedAt) throw new ArgumentOutOfRangeException(nameof(evaluatedAt));
         var deadline = adoptedAt.AddDays(7);
-        var eligible = gates.Where(gate => gate.StartedAt >= adoptedAt && gate.StartedAt < deadline &&
+        var inWindow = gates.Where(gate => gate.StartedAt >= adoptedAt && gate.StartedAt < deadline &&
                 gate.StartedAt <= evaluatedAt && gate.RecordedAt <= evaluatedAt)
             .OrderBy(gate => gate.StartedAt).ThenBy(gate => gate.Id, StringComparer.Ordinal)
             .DistinctBy(gate => gate.Id, StringComparer.Ordinal)
-            .Where(gate => !string.IsNullOrWhiteSpace(gate.LaunchMainCommit) &&
-                (string.Equals(landedHomeCommit, gate.LaunchMainCommit, StringComparison.OrdinalIgnoreCase) ||
-                 containsCommit(landedHomeCommit, gate.LaunchMainCommit)))
+            .Where(gate => !string.IsNullOrWhiteSpace(gate.LaunchMainCommit));
+        if (prefetchAncestry is not null)
+        {
+            inWindow = inWindow.ToArray();
+            prefetchAncestry(landedHomeCommit, inWindow.Select(gate => gate.LaunchMainCommit!));
+        }
+        var eligible = inWindow
+            .Where(gate => string.Equals(landedHomeCommit, gate.LaunchMainCommit, StringComparison.OrdinalIgnoreCase) ||
+                containsCommit(landedHomeCommit, gate.LaunchMainCommit!))
             .ToArray();
         var eligibleTicks = (ticks ?? []).Where(tick => tick.Timestamp >= adoptedAt &&
                 tick.Timestamp < deadline && tick.Timestamp <= evaluatedAt)
