@@ -124,6 +124,7 @@ internal static partial class FocusedEvidenceRequestResolver
 
         validated = FocusedEvidenceTraitExcludedSelection.Apply(worktreePath, engineSettings, validated, out var dropped);
         validated = FocusedEvidenceTestlessClassSelection.Apply(worktreePath, validated, dropped, out dropped);
+        validated = FocusedEvidenceNestedProjectClassSelection.Apply(worktreePath, validated, dropped, out dropped);
         // Historical rule: more than four focused targets collapsed to one whole-project check per
         // project (and 18 Infrastructure lanes). It optimized process/check count and replaced the
         // earlier hard rejection of mappings over four targets; no filter-length or runner failure
@@ -269,7 +270,7 @@ internal static partial class FocusedEvidenceRequestResolver
             .Select(invocation => NormalizePath(invocation.Project))
             .Where(project => IsExtractedInfrastructureProject(project!))
             .Where(project => classNames.All(className =>
-                ProjectContainsFocusedEvidenceClass(worktreePath, project!, className)))
+                FocusedEvidenceNestedProjectClassSelection.ProjectContainsClass(worktreePath, project!, className)))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
@@ -313,7 +314,7 @@ internal static partial class FocusedEvidenceRequestResolver
         foreach (var token in positiveTokens)
         {
             var matchingProjects = extractedProjects
-                .Where(project => ProjectContainsFocusedEvidenceClass(
+                .Where(project => FocusedEvidenceNestedProjectClassSelection.ProjectContainsClass(
                     worktreePath,
                     project!,
                     token.ContainingClass))
@@ -355,12 +356,6 @@ internal static partial class FocusedEvidenceRequestResolver
             .ToArray();
         return true;
     }
-
-    private static bool ProjectContainsFocusedEvidenceClass(
-        string worktreePath,
-        string project,
-        string className) =>
-        FindFocusedEvidenceClassFiles(worktreePath, project, className).Count > 0;
 
     internal static IReadOnlyList<string> FindFocusedEvidenceClassFiles(
         string worktreePath,
