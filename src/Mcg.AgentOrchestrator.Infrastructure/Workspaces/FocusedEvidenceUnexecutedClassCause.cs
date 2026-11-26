@@ -9,7 +9,7 @@ internal sealed record FocusedEvidenceUnexecutedClassCause(string Kind, string? 
     internal string Label => OwningProject is null ? Kind : $"{Kind}:{OwningProject}";
 
     internal static FocusedEvidenceUnexecutedClassCause Classify(
-        string? worktreePath, string selectedProject, string selector, string? checkProject = null)
+        string? worktreePath, string selectedProject, string className, string? checkProject = null)
     {
         if (string.IsNullOrWhiteSpace(worktreePath) || !Directory.Exists(worktreePath))
             return new(NoResultRecorded);
@@ -25,11 +25,10 @@ internal sealed record FocusedEvidenceUnexecutedClassCause(string Kind, string? 
 
         try
         {
-            var className = SelectorValue(selector);
             if (FocusedEvidenceNestedProjectClassSelection.ProjectContainsClass(worktreePath, project, className))
                 return new(NoResultRecorded);
 
-            var otherProjects = Directory.EnumerateDirectories(worktreePath, "tests")
+            var owner = Directory.EnumerateDirectories(worktreePath, "tests")
                 .SelectMany(root => Directory.EnumerateFiles(root, "*.csproj", new EnumerationOptions
                 {
                     RecurseSubdirectories = true,
@@ -41,23 +40,11 @@ internal sealed record FocusedEvidenceUnexecutedClassCause(string Kind, string? 
                     !path.Equals(project, StringComparison.OrdinalIgnoreCase) &&
                     !path.Split('/').Any(part => part.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
                         part.Equals("obj", StringComparison.OrdinalIgnoreCase)))
-                .Order(StringComparer.Ordinal).ToArray();
-
-            var owner = FindOwner(className);
-            var separator = className.LastIndexOf('.');
-            if (owner is null && separator > 0)
-            {
-                // A method selector names its containing type followed by the method.
-                var containingClass = className[..separator];
-                if (FocusedEvidenceNestedProjectClassSelection.ProjectContainsClass(worktreePath, project, containingClass))
-                    return new(NoResultRecorded);
-                owner = FindOwner(containingClass);
-            }
+                .Order(StringComparer.Ordinal)
+                .FirstOrDefault(otherProject =>
+                    FocusedEvidenceNestedProjectClassSelection.ProjectContainsClass(worktreePath, otherProject, className));
 
             return owner is null ? new(NotFound) : new(WrongProject, owner);
-
-            string? FindOwner(string name) => otherProjects.FirstOrDefault(otherProject =>
-                FocusedEvidenceNestedProjectClassSelection.ProjectContainsClass(worktreePath, otherProject, name));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

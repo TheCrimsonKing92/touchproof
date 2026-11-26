@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static Mcg.AgentOrchestrator.Infrastructure.AcceptancePolicyShardPlanner;
 using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
+using FocusedEvidenceTokenKind = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.FocusedEvidenceTokenKind;
 using TestResult = Mcg.AgentOrchestrator.Infrastructure.TestResult;
 using Worktree = FocusedEvidenceUnexecutedClassCauseTests.Worktree;
 
@@ -67,6 +68,29 @@ public sealed class FocusedEvidenceNotRunPlanRemainderTests
         Assert.Equal(new FindingEvidenceSelection("Infrastructure.Tests", "AlphaTests"), Assert.Single(plan.Selections));
         Assert.EndsWith("undemonstrated Infrastructure.Tests:AlphaTests not-run:execution-not-demonstrated cause=no-result-recorded",
             plan.AppendSummary(""));
+    }
+
+    [Fact]
+    public void UnexecutedMethod_ReportsTheContainingClassProject()
+    {
+        using var worktree = new Worktree();
+        worktree.Declare(CoreTestsProject, "GammaTests");
+        const string containingClass = "Fixture.GammaTests";
+        const string method = containingClass + ".Runs";
+        const string filter = "FullyQualifiedName~" + method;
+        var check = new AcceptanceManifestCheck
+        {
+            Name = "method selection", Type = "dotnet-test", Runner = "vstest", Project = InfrastructureTestsProject,
+            FocusedEvidenceTokens = [new(filter, filter, FocusedEvidenceTokenKind.Method, method, containingClass)]
+        };
+        var expected = new FindingEvidenceSelection("Infrastructure.Tests", filter);
+        var coverage = new FocusedEvidenceCoverage([new($"{expected.TestProject}:{expected.TestClass}", [check.Name])]);
+
+        var plan = FocusedEvidenceNotRunPlan.Compare([check], [], coverage, true, worktree.Root);
+
+        var missingCheck = Assert.Single(plan.Checks);
+        Assert.Equal(expected, Assert.Single(missingCheck.UndemonstratedSelections!));
+        Assert.Equal(new FocusedEvidenceUnexecutedClassCause("wrong-project", CoreTestsProject), missingCheck.Causes![expected]);
     }
 
     private static AcceptanceManifestCheck VstestCheck(string name) =>

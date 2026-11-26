@@ -5,11 +5,14 @@ public sealed class FocusedEvidenceUnexecutedClassCauseTests
 {
     [Theory]
     [InlineData("CoreOwnedTests", "wrong-project", CoreTestsProject)]
-    [InlineData("FullyQualifiedName~CoreOwnedTests.Example", "wrong-project", CoreTestsProject)]
+    [InlineData("Fixture.CoreOwnedTests", "wrong-project", CoreTestsProject)]
+    [InlineData("Fixture.CoreOwnedTests.MissingTests", "not-found", null)]
     [InlineData("NowhereTests", "not-found", null)]
     [InlineData("SharedTests", "no-result-recorded", null)]
+    [InlineData("Fixture.SharedTests", "no-result-recorded", null)]
+    [InlineData("Fixture.SharedTests.MissingTests", "not-found", null)]
     [InlineData("NestedTests", "wrong-project", NestedProject)]
-    public void Classify_UsesProjectThatOwnsTheDeclaration(string selector, string kind, string? owner)
+    public void Classify_UsesProjectThatOwnsTheDeclaration(string className, string kind, string? owner)
     {
         using var worktree = new Worktree();
         worktree.Declare(CoreTestsProject, "CoreOwnedTests", "SharedTests");
@@ -19,7 +22,7 @@ public sealed class FocusedEvidenceUnexecutedClassCauseTests
         Directory.CreateDirectory(generated);
         File.WriteAllText(Path.Combine(generated, "Generated.cs"), "public class NowhereTests { }");
 
-        var cause = FocusedEvidenceUnexecutedClassCause.Classify(worktree.Root, "Infrastructure.Tests", selector);
+        var cause = FocusedEvidenceUnexecutedClassCause.Classify(worktree.Root, "Infrastructure.Tests", className);
 
         Assert.Equal(kind, cause.Kind);
         Assert.Equal(owner, cause.OwningProject);
@@ -50,7 +53,7 @@ public sealed class FocusedEvidenceUnexecutedClassCauseTests
             Directory.CreateDirectory(directory);
             File.WriteAllText(projectPath, """<Project Sdk="Microsoft.NET.Sdk" />""");
             File.WriteAllLines(Path.Combine(directory, "Declarations.cs"),
-                classes.Select(name => $"public class {name} {{ }}"));
+                ["namespace Fixture;", .. classes.Select(name => $"public class {name} {{ }}")]);
         }
 
         public void Dispose() => Directory.Delete(Root, recursive: true);
