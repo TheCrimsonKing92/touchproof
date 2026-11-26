@@ -164,7 +164,7 @@ public sealed class UnstoredGoalBuildRootLeaseAbsentTests : IDisposable
     private sealed class EmptyOwnedRoots : IOwnedRunRootStore
     {
         public IReadOnlySet<string> ReadRegisteredPaths(IReadOnlyList<string> canonicalPaths) => new HashSet<string>();
-        public IReadOnlyList<OwnedRunRootEntry> ReadBatch(long afterId, int maxCount, DateTimeOffset now) =>
+        public IReadOnlyList<OwnedRunRootEntry> ReadBatch(long afterId, int maxCount, DateTimeOffset now, DotnetBuildStorageRoot? storageRoot = null) =>
             throw new NotSupportedException();
         public void Register(string canonicalPath, OwnedRunRootPurpose purpose, SpawnProcessIdentity owner,
             string? goalId, string? dispatchId, DateTimeOffset now) => throw new NotSupportedException();
