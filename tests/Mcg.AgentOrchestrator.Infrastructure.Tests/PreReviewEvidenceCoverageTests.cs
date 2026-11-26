@@ -48,16 +48,48 @@ public sealed class PreReviewEvidenceCoverageTests
             check => Assert.Equal(selection, check.Command));
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(null)]
+    [Xunit.InlineData("declares-no-tests")]
+    public void TraitExcludedDropCoversSelectedClass(string? additionalReason)
+    {
+        const string selection = "Infrastructure.Tests: FullyQualifiedName~RanTests|FullyQualifiedName~HostOnlyTests";
+        const string traitReason = "excluded-by-trait:Category=HostIntegration";
+        var context = Context(selection);
+        var evidence = Evidence(context, Check("reviewer focused evidence: Infrastructure.Tests FullyQualifiedName~RanTests"))
+            with
+            {
+                Coverage = additionalReason is null
+                    ? DroppedSelectionCoverage("HostOnlyTests", traitReason)
+                    : DroppedSelectionCoverage("HostOnlyTests", additionalReason, traitReason)
+            };
+
+        Assert.True(PreReviewEvidenceReceipts.ValidateCoverage(context, evidence, out var failure), failure);
+        Assert.Equal(string.Empty, failure);
+    }
+
     [Xunit.Fact]
-    public void MissingSelectedClassNamesItemAndClass()
+    public void MissingSelectedClassNamesItemAndClassDespiteUnrelatedTraitDrop()
     {
         const string selection = "Infrastructure.Tests: FullyQualifiedName~RanTests|FullyQualifiedName~MissingTests";
         var context = Context(selection);
-        var evidence = Evidence(context, Check("reviewer focused evidence: Infrastructure.Tests FullyQualifiedName~RanTests"));
+        var evidence = Evidence(context, Check("reviewer focused evidence: Infrastructure.Tests FullyQualifiedName~RanTests"))
+            with { Coverage = DroppedSelectionCoverage("OtherTests", "excluded-by-trait:Category=HostIntegration") };
 
         Assert.False(PreReviewEvidenceReceipts.ValidateCoverage(context, evidence, out var failure));
-        Assert.Contains(selection, failure, StringComparison.Ordinal);
-        Assert.Contains("MissingTests", failure, StringComparison.Ordinal);
+        Assert.Equal($"focused evidence missing selected classes: item '{selection}' uncovered MissingTests", failure);
+    }
+
+    [Xunit.Fact]
+    public void NonTraitDropDoesNotCoverSelectedClass()
+    {
+        const string selection = "Infrastructure.Tests: FullyQualifiedName~RanTests|FullyQualifiedName~MissingTests";
+        var context = Context(selection);
+        var evidence = Evidence(context, Check("reviewer focused evidence: Infrastructure.Tests FullyQualifiedName~RanTests"))
+            with { Coverage = DroppedSelectionCoverage("MissingTests", "declares-no-tests") };
+
+        Assert.False(PreReviewEvidenceReceipts.ValidateCoverage(context, evidence, out var failure));
+        Assert.Equal($"focused evidence missing selected classes: item '{selection}' uncovered MissingTests", failure);
     }
 
     [Xunit.Fact]
@@ -101,4 +133,7 @@ public sealed class PreReviewEvidenceCoverageTests
         new(context.FocusedRequest!, true, true, "focused evidence", checks);
 
     private static AcceptanceCheckResult Check(string name) => new(name, true, 0, null);
+
+    private static FocusedEvidenceCoverage DroppedSelectionCoverage(string className, params string[] reasons) =>
+        new([], DroppedSelections: [new("Infrastructure.Tests", "Infrastructure.Tests.csproj", className, reasons)]);
 }
