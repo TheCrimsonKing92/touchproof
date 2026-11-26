@@ -72,7 +72,7 @@ internal static class SourceSizeRatchet
             // Goal ebfd52d3 integration retains the extracted manifest identity and binds pool settings; measured, no headroom.
             // Goal 0bc1199a: one line binds build receipt recording; logic lives in BuildReceiptSite.
             // Goal e7e044fe: four net lines bind the attempt session and lane transform; selection logic is extracted.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 3911),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 3908),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             // Goal 402c1005 moved TRX completion inspection and shard decisions into AcceptanceShardCompletionAdjudicator.
             // Goal ad3fafc0 extracted run ownership publication and stale-receipt clearing into AcceptanceTestRunPreparation.
@@ -161,7 +161,7 @@ internal static class SourceSizeRatchet
             // Goal eade84cb preserves published cohort receipts while holder cleanup still reserves capacity.
             // Custody remains separately owned; after integrating main f34678bcb, measured 645 lines, with no extra headroom.
             // Goal f608f29b: two admission call-site lines; probe/cache/hold logic lives in EnvironmentContractGate.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs", 624),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs", 595),
             // Goal 5a07b0d6 retains three orchestration lines carrying reattached receipt ids to the
             // closure-first route; the reused-green branch owns this delivery handoff, not receipt selection.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 638),
@@ -586,7 +586,7 @@ internal static class SourceSizeRatchet
             // Goal 35c35d6d: three delegation lines connect diagnosis owned by a separate coordinator.
             // Goal 7ca0990d: two wiring lines carry the exact train plan and scoped admission reservation; same partials.
             // Goal ed4b8637 wires the explicit inventory execution hold into failed-goal recovery (+3 lines).
-            new SourceClassCeiling("ConductorDriver", 13372, 67),
+            new SourceClassCeiling("ConductorDriver", 13366, 67),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -662,7 +662,7 @@ internal static class SourceSizeRatchet
             // Goal 6a75c73d captures host settings at the single configuration read and reports invalid local overrides.
             // Goal 0bc1199a: one added receipt-site binding line across the existing partials.
             // Goal e7e044fe: four net integration lines, no additional partial type.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 6595, 17),
+            new SourceClassCeiling("GoalAcceptanceVerifier", 6593, 17),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
