@@ -56,6 +56,39 @@ public sealed class ProviderHoldSeedConductorStartupTests(ITestOutputHelper test
             Assert.Equal(1, command.ExecuteNonQuery());
         }
 
+        AssertTimelineFailure(fixture, goalId, "unparseable entry at 0");
+    }
+
+    [Theory]
+    [InlineData(true, "expected 1 rows, found 0")]
+    [InlineData(false, "unparseable entry at 0")]
+    public async Task ShadowStart_InvalidRecoveryArchiveTimeline_FailsBeforeReadyAndLoop(
+        bool missingRow, string defect)
+    {
+        using var fixture = new ProviderHoldSeedFixture();
+        // The archived success has no indexed outcome or provider marker. Its task history
+        // nominates it as a recovery witness after the separate refusal is discovered.
+        await fixture.PopulateArchivedRecoveryTimelineAsync(1);
+        var goalId = ProviderHoldSeedFixture.Id(805);
+        using (var connection = new SqliteConnection($"Data Source={fixture.Database};Pooling=False"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = missingRow
+                ? "DELETE FROM goal_timeline WHERE goal_id = $id AND sequence = 0"
+                : """
+                    UPDATE goal_timeline SET entry_json = json_set(entry_json, '$.OccurredAt', 'invalid date')
+                    WHERE goal_id = $id AND sequence = 0
+                    """;
+            command.Parameters.AddWithValue("$id", goalId);
+            Assert.Equal(1, command.ExecuteNonQuery());
+        }
+
+        AssertTimelineFailure(fixture, goalId, defect);
+    }
+
+    private void AssertTimelineFailure(ProviderHoldSeedFixture fixture, string goalId, string defect)
+    {
         using var output = new StringWriter(CultureInfo.InvariantCulture);
         using var error = new StringWriter(CultureInfo.InvariantCulture);
         var exit = CliShadowStartCommand.Run(
@@ -66,7 +99,7 @@ public sealed class ProviderHoldSeedConductorStartupTests(ITestOutputHelper test
         testOutput.WriteLine(receipt);
         Assert.Contains("SHADOW_START result=fail assertion=loop-start", receipt, StringComparison.Ordinal);
         Assert.Contains("PROVIDER_HOLD_HISTORY seed-failed: InvalidDataException:", receipt, StringComparison.Ordinal);
-        Assert.Contains($"Goal '{goalId}' timeline: unparseable entry at 0.", receipt, StringComparison.Ordinal);
+        Assert.Contains($"Goal '{goalId}' timeline: {defect}.", receipt, StringComparison.Ordinal);
         Assert.NotEqual(0, exit);
         Assert.DoesNotContain(ProviderHoldHistoryStartupSeed.CompletedLinePrefix, receipt, StringComparison.Ordinal);
         Assert.DoesNotContain("LOOP_READY ", receipt, StringComparison.Ordinal);

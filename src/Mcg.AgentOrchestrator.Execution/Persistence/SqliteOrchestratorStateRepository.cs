@@ -2424,10 +2424,13 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         var witnesses = recoveries.Select(attempt => attempt.GoalId).ToHashSet(StringComparer.Ordinal);
         var replay = evidence.Concat(recoveryEvidence.Where(row => witnesses.Contains(row.GoalId)))
             .ToDictionary(row => row.GoalId, StringComparer.Ordinal);
+        // A sparse archive can nominate a recovery from task history alone. Validate its
+        // deferred sidecar before allowing that witness to affect the replay.
         foreach (var id in selection.Sources.Concat(selection.Dependencies).Concat(witnesses)
-            .Concat(candidates.MarkerGoals.Select(id => id.Value)))
+            .Concat(candidates.MarkerGoals.Select(id => id.Value)).Distinct(StringComparer.Ordinal))
             if (candidates.ArchiveEvidence.TryGetValue(new GoalId(id), out var archived))
-                replay.TryAdd(id, archived);
+                replay[id] = await ProviderHoldSeedEvidenceReader.CompleteArchiveProjectionAsync(
+                    connection, archived, SerializerOptions, cancellationToken, _readObserver);
         RecordElapsed("historyRecoveryMatchMs");
         return new(rows, attempts, candidates.MarkerGoals, replay.Values.ToArray())
         {
@@ -2451,7 +2454,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             try
             {
                 projected = ids.Where(candidates.ArchiveEvidence.ContainsKey)
-                    .Select(id => candidates.ArchiveEvidence[id]).ToArray();
+                    .Select(id => candidates.ArchiveEvidence[id].Evidence).ToArray();
                 var remaining = ids.Where(id => !candidates.ArchiveEvidence.ContainsKey(id)).ToArray();
                 if (remaining.Length != 0)
                     projected = projected.Concat(await ReadProviderHoldSeedEvidenceAsync(remaining, cancellationToken) ?? []).ToArray();

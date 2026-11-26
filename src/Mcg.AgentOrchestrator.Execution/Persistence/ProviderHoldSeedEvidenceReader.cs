@@ -60,7 +60,8 @@ internal static class ProviderHoldSeedEvidenceReader
         using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(payload)!;
         var row = await GoalSnapshotByteAccounting.DeserializeAsync<GoalFields>(stream, options, cancellationToken)
             ?? throw new InvalidDataException("Missing provider seed goal evidence.");
-        return await ProjectDocumentAsync(id, row, options, cancellationToken, connection, observer);
+        var projection = await ProjectDocumentAsync(id, row, options, cancellationToken, connection, observer);
+        return projection.Evidence;
     }
 
     internal static GoalFields? TryReadArchiveDocument(object payload, JsonSerializerOptions options,
@@ -78,7 +79,7 @@ internal static class ProviderHoldSeedEvidenceReader
         }
     }
 
-    internal static async Task<ProviderUsageGoalEvidence> ProjectDocumentAsync(string id, GoalFields row,
+    internal static async Task<ArchiveProjection> ProjectDocumentAsync(string id, GoalFields row,
         JsonSerializerOptions options, CancellationToken cancellationToken, SqliteConnection? connection,
         Action<GoalSnapshotReadObservation>? observer, Action? foundMarker = null, bool validateArchiveTimeline = true)
     {
@@ -103,25 +104,43 @@ internal static class ProviderHoldSeedEvidenceReader
                 history?.Verifications ?? task.VerificationHistory ?? [],
                 task.LatestProviderBudgetRecoveryAt) { LastProcess = task.LastProcess });
         }
-        var timeline = row.IsMetadataOnly ? [] : row.TimelineInTable.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
-            ? row.Timeline ?? [] : SkipSidecarTimeline() ? [] : (await new GoalTimelineStore(options).ReadAsync(
-                connection, id, default, row.TimelineInTable, cancellationToken, TimelineSelectionSql,
-                observer is null ? null : size => observer(new("provider-seed-timeline-entry", id, size))))
-                .Select(entry => entry.Deserialize<EventFields>(options)!).ToArray();
-        if (foundMarker is not null && timeline.Any(evt => evt.Message?.StartsWith("PROVIDER_BUDGET_", StringComparison.Ordinal) == true))
-            foundMarker();
-        return new(id, row.Status, tasks,
-            timeline.Select(evt => new ProgressEvent(new GoalId(id),
-                evt.TaskId is { } taskId ? new TaskId(taskId) : null, evt.Kind, evt.Message, evt.OccurredAt,
-                OperatorIntentCreatedAt: evt.OperatorIntentCreatedAt)).Where(Relevant).ToArray());
-
-        // A transition can affect a probe only in the timeline that owns its marker.
-        // Refusals still require canonical timeline validation before startup is ready.
-        bool SkipSidecarTimeline() => !validateArchiveTimeline &&
+        // Discovery can defer marker-free sidecars until their archive is selected for replay.
+        var deferredTimeline = !row.IsMetadataOnly && !validateArchiveTimeline &&
             row.TimelineInTable.ValueKind == JsonValueKind.Number && row.TimelineInTable.TryGetInt32(out var count) &&
             count >= 0 && !tasks.Any(task => task.VerificationHistory.Append(task.LastVerification)
                 .Any(ProviderHoldSeedDiscovery.IsRefusal));
+        var timeline = row.IsMetadataOnly || deferredTimeline ? []
+            : row.TimelineInTable.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null ? row.Timeline ?? []
+            : await ReadSidecarTimelineAsync(connection, id, row.TimelineInTable, options, cancellationToken, observer);
+        if (foundMarker is not null && timeline.Any(evt => evt.Message?.StartsWith("PROVIDER_BUDGET_", StringComparison.Ordinal) == true))
+            foundMarker();
+        return new(new(id, row.Status, tasks, ProjectTimeline(id, timeline)),
+            deferredTimeline ? row.TimelineInTable : null);
     }
+
+    internal static async Task<ProviderUsageGoalEvidence> CompleteArchiveProjectionAsync(
+        SqliteConnection connection, ArchiveProjection archive, JsonSerializerOptions options,
+        CancellationToken cancellationToken, Action<GoalSnapshotReadObservation>? observer)
+    {
+        if (archive.DeferredTimeline is not { } marker) return archive.Evidence;
+        var id = archive.Evidence.GoalId;
+        var timeline = await ReadSidecarTimelineAsync(connection, id, marker, options, cancellationToken, observer);
+        return archive.Evidence with { Timeline = ProjectTimeline(id, timeline) };
+    }
+
+    private static async Task<EventFields[]> ReadSidecarTimelineAsync(SqliteConnection? connection, string id,
+        JsonElement marker, JsonSerializerOptions options, CancellationToken cancellationToken,
+        Action<GoalSnapshotReadObservation>? observer) =>
+        (await new GoalTimelineStore(options).ReadAsync(connection, id, default, marker, cancellationToken,
+            TimelineSelectionSql, observer is null ? null : size => observer(new("provider-seed-timeline-entry", id, size))))
+            .Select(entry => entry.Deserialize<EventFields>(options)!).ToArray();
+
+    private static ProgressEvent[] ProjectTimeline(string id, IEnumerable<EventFields> timeline) =>
+        timeline.Select(evt => new ProgressEvent(new GoalId(id),
+            evt.TaskId is { } taskId ? new TaskId(taskId) : null, evt.Kind, evt.Message, evt.OccurredAt,
+            OperatorIntentCreatedAt: evt.OperatorIntentCreatedAt)).Where(Relevant).ToArray();
+
+    internal sealed record ArchiveProjection(ProviderUsageGoalEvidence Evidence, JsonElement? DeferredTimeline);
 
     private static TaskDispatchSnapshot ProjectDispatch(TaskDispatchSnapshot dispatch) =>
         new(dispatch.WorkerName, dispatch.Command, dispatch.WorkingDirectory, dispatch.DispatchedAt,

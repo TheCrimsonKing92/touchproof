@@ -82,12 +82,12 @@ public sealed class ProviderHoldSeedWorkBoundTests
     }
 
     [Fact]
-    public async Task Seed_ArchivedRecovery_DoesNotVisitUnrelatedTimelineRows()
+    public async Task Seed_ArchivedRecovery_ValidatesSelectedTimelineOnceWithoutScanningForMarkers()
     {
         var small = await ReadArchiveAsync(1);
         var large = await ReadArchiveAsync(2048);
-        Assert.Equal(small, large);
-        Assert.Equal((0, 0), large);
+        Assert.Equal((1, 0), small);
+        Assert.Equal((2048, 0), large);
 
         static async Task<(int RecoveryTimelineReads, int MarkerScanSteps)> ReadArchiveAsync(int timelineRows)
         {
@@ -100,10 +100,10 @@ public sealed class ProviderHoldSeedWorkBoundTests
             var history = await repository.ReadProviderHoldSeedHistoryAsync(token);
             Assert.Equal(ProviderHoldSeedFixture.Id(0), Assert.Single(history.Attempts).GoalId);
             Assert.Equal(ProviderHoldSeedFixture.Id(805), Assert.Single(history.Recoveries).GoalId);
-            var seeded = Seed(repository, new());
-            Assert.Null(Assert.Single(seeded.Index.Evaluations).Value.Schedule);
             var recoveryReads = observations.Count(row => row.GoalId == ProviderHoldSeedFixture.Id(805) &&
                 row.Operation == "provider-seed-timeline-entry");
+            var seeded = Seed(repository, new());
+            Assert.Null(Assert.Single(seeded.Index.Evaluations).Value.Schedule);
 
             using var connection = new SqliteConnection($"Data Source={fixture.Database};Mode=ReadOnly;Pooling=False");
             connection.Open();
@@ -257,6 +257,21 @@ public sealed class ProviderHoldSeedWorkBoundTests
         Assert.Equal(now, expected.Schedule?.NextProbeAt);
         Assert.Equal(unrelatedArchives, observations.Count(item => item.Operation == "provider-seed-archive-projection" &&
             item.GoalId is { } id && unrelatedIds.Contains(id)));
+
+        using (var connection = new SqliteConnection($"Data Source={fixture.Database};Mode=ReadOnly;Pooling=False"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT COUNT(*) FROM json_each($ids) ids
+                JOIN goal_snapshot_archive a ON a.goal_id = ids.value
+                JOIN goals g ON g.id = a.goal_id
+                WHERE a.provider_hold_empty_version = $version AND g.provider_hold_archive_empty_version = $version
+                """;
+            command.Parameters.AddWithValue("$ids", JsonSerializer.Serialize(unrelatedIds));
+            command.Parameters.AddWithValue("$version", GoalSnapshotArchive.ProviderHoldEmptyVersion);
+            Assert.Equal((long)unrelatedArchives, command.ExecuteScalar());
+        }
 
         observations.Clear();
         var restarted = new SqliteOrchestratorStateRepository(fixture.Database, statementObserver: null,
@@ -887,7 +902,7 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
         var marker = ProviderBudgetHoldSchedules.FormatReset(new(
             "anthropic::c:/profiles/held", At.AddDays(2), "fixture-reset"));
         goal = goal with { Timeline = [new(goal.Id, goal.Tasks[0].Id, ProgressKind.TaskNote, marker, At.AddDays(1))] };
-        List<GoalSnapshot> archives = [goal, .. Enumerable.Range(1000, unrelatedArchives).Select(MakeUnrelated)];
+        List<GoalSnapshot> archives = [goal, .. Enumerable.Range(1000, unrelatedArchives).Select(MakeUnrelatedArchive)];
         List<GoalSnapshot> sources = [MakeHold(799)];
         if (archiveRecovery)
         {
@@ -936,6 +951,15 @@ internal sealed class ProviderHoldSeedFixture : IDisposable
             VALUES ($id, 0, json_object('Message', 'Ordinary stale sidecar row'))
             """;
         Assert.Equal(1, command.ExecuteNonQuery());
+
+        static GoalSnapshot MakeUnrelatedArchive(int index)
+        {
+            var unrelated = MakeUnrelated(index);
+            // Exercise both dispatch-only history and a non-provider verification failure.
+            return index % 2 == 0
+                ? unrelated with { Tasks = [unrelated.Tasks[0] with { LastVerification = null, VerificationHistory = [] }] }
+                : unrelated;
+        }
     }
 
     internal Task PopulateProbeCaseAsync()

@@ -14,7 +14,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
 
     internal HashSet<GoalId> FailureGoals { get; } = [];
     internal HashSet<GoalId> MarkerGoals { get; } = [];
-    internal Dictionary<GoalId, ProviderUsageGoalEvidence> ArchiveEvidence { get; } = [];
+    internal Dictionary<GoalId, ProviderHoldSeedEvidenceReader.ArchiveProjection> ArchiveEvidence { get; } = [];
 
     internal static async Task<ProviderHoldSeedDiscovery> ReadAsync(SqliteConnection connection,
         JsonSerializerOptions options, CancellationToken token, Action<GoalSnapshotReadObservation>? observe = null,
@@ -47,7 +47,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
         var hasArchiveDiscovery = !indexed && hasArchive &&
             await GoalSnapshotArchive.HasProviderHoldDiscoveryColumnAsync(connection, token);
         command.CommandText = DocumentDiscoverySql(hasArchive, hasTimeline, hasHistory, hasArchiveDiscovery, indexed,
-            filterTextCandidates, sparseArchiveTimelines);
+            filterTextCandidates, sparseArchiveTimelines, backfillArchiveDiscovery);
         if (sparseArchiveTimelines)
             command.Parameters.AddWithValue("$holdRules", JsonSerializer.Serialize(ProviderHoldHistory.HoldOutcomeRules));
         using (var reader = await command.ExecuteReaderAsync(token))
@@ -173,7 +173,8 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
     }
 
     internal static string DocumentDiscoverySql(bool hasArchive, bool hasTimeline, bool hasHistory,
-        bool hasArchiveDiscovery, bool indexed, bool filterTextCandidates, bool sparseArchiveTimelines = false)
+        bool hasArchiveDiscovery, bool indexed, bool filterTextCandidates, bool sparseArchiveTimelines = false,
+        bool backfillArchiveDiscovery = false)
     {
         var archiveJoin = hasArchive ? "LEFT JOIN goal_snapshot_archive a ON a.goal_id = g.id" : "";
         var goalIndex = indexed ? $"INDEXED BY {GoalSnapshotArchive.ProviderHoldDiscoveryIndex}" : "";
@@ -189,8 +190,9 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
             : "g.snapshot_json";
         // Sidecar row presence cannot establish authority over an archived inline timeline.
         // Only a negative projection from the archive's authoritative evidence can exclude it.
+        var includeUnclassifiedArchives = backfillArchiveDiscovery ? "WHEN archived_at IS NOT NULL THEN 1" : "";
         var textCandidates = filterTextCandidates ? $"""
-            AND CASE WHEN typeof(payload) = 'blob' THEN 1 ELSE (
+            AND CASE {includeUnclassifiedArchives} WHEN typeof(payload) = 'blob' THEN 1 ELSE (
                 {SidecarCandidatesSql(hasTimeline, hasHistory)}
                 EXISTS (SELECT 1 FROM json_each(payload, '$.Timeline') e
                     WHERE json_extract(e.value, '$.Message') GLOB 'PROVIDER_BUDGET_*') OR
@@ -252,10 +254,10 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
         JsonSerializerOptions options, CancellationToken token, Action<GoalSnapshotReadObservation>? observe,
         bool validateTimeline)
     {
-        ProviderUsageGoalEvidence evidence;
+        ProviderHoldSeedEvidenceReader.ArchiveProjection projection;
         try
         {
-            evidence = await ProviderHoldSeedEvidenceReader.ProjectDocumentAsync(id, document, options, token, connection,
+            projection = await ProviderHoldSeedEvidenceReader.ProjectDocumentAsync(id, document, options, token, connection,
                 observe, () => MarkerGoals.Add(new(id)), validateTimeline);
         }
         catch (Exception exception) when (exception is InvalidDataException or JsonException or SqliteException)
@@ -265,7 +267,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
             return null;
         }
         var hasReplayEvidence = MarkerGoals.Contains(new(id));
-        foreach (var task in evidence.Tasks)
+        foreach (var task in projection.Evidence.Tasks)
         {
             var key = (id, task.TaskId);
             foreach (var verification in task.VerificationHistory.Append(task.LastVerification))
@@ -276,7 +278,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             if (providers.Length > 0) _inlineProviders[key] = providers;
         }
-        if (hasReplayEvidence) ArchiveEvidence.Add(new(id), evidence);
+        if (hasReplayEvidence) ArchiveEvidence.Add(new(id), projection);
         observe?.Invoke(new("provider-seed-archive-projection", id));
         return hasReplayEvidence;
     }
