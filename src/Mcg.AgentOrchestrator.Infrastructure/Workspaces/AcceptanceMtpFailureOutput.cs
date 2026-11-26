@@ -7,16 +7,20 @@ internal static class AcceptanceMtpFailureOutput
     internal static AcceptanceCheckResult AttachResultEvidence(
         CommandResult result, TrxCompletionEvidence trxEvidence, AcceptanceCheckResult check)
     {
+        if (!check.Passed && trxEvidence.FailedPredicate == AcceptanceShardCompletionPredicates.MissingTrx)
+        {
+            // The telemetry path is planned. A failed run with no TRX has no file to retain.
+            check = check with { TestResultPaths = [] };
+        }
+
         if (result.ExitCode != 0 && !IsInterrupted(result) &&
             trxEvidence.FailedPredicate == AcceptanceShardCompletionPredicates.MissingTrx)
         {
-            // A missing-tool diagnostic can explain why the planned TRX was never written.
-            // Keep that diagnostic and only offer actual artifacts for baseline retention.
+            // Prefer the launch diagnostic when it explains the missing receipt.
             var launchFailure = AcceptanceMissingToolClassifier.Attach(check with
             {
                 OutputTail = TailOutput(result.Output),
-                FailureClassification = null,
-                TestResultPaths = []
+                FailureClassification = null
             });
             if (launchFailure.FailureClassification == AcceptanceFailureClassifications.MissingTool)
             {

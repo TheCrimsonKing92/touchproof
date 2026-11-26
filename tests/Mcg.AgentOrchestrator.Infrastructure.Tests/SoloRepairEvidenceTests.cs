@@ -75,14 +75,12 @@ public sealed class SoloRepairEvidenceTests
     [InlineData("unexecuted")]
     [InlineData("reused-attempt")]
     [InlineData("apparatus")]
-    [InlineData("mixed-apparatus")]
     [InlineData("sibling-case")]
     public async Task UntrustedRow_RemainsUnresolved(string defect)
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
         var firstIdentity = defect == "sibling-case" ? First + FirstCase : First;
-        await fixture.Produce(baselineFails: true, firstCase: defect == "sibling-case" ? FirstCase : null,
-            mixed: defect == "mixed-apparatus", baselineMissingToolFor: defect == "mixed-apparatus" ? Unknown : null);
+        await fixture.Produce(baselineFails: true, firstCase: defect == "sibling-case" ? FirstCase : null);
         var summary = fixture.Summary;
         var receipt = summary.SoloFailureReceipt!;
         var context = fixture.Context;
@@ -136,23 +134,6 @@ public sealed class SoloRepairEvidenceTests
                 });
                 summary = fixture.Summary;
                 break;
-            case "mixed-apparatus":
-                fixture.ReplaceProof(proof =>
-                {
-                    var name = Assert.Single(proof.Bindings.Where(binding => binding.TestIdentity == Long)).BaselineCheckName;
-                    var check = Assert.Single(proof.Baseline.Checks.Where(candidate => candidate.Name == name)) with
-                    {
-                        Passed = false,
-                        FailureClassification = AcceptanceFailureClassifications.BuildPhaseTimeout
-                    };
-                    Assert.Contains(proof.Baseline.Checks,
-                        baseline => baseline.FailureClassification == AcceptanceFailureClassifications.MissingTool);
-                    var checks = proof.BaselineChecks.Select(item => item.Check.Name == name ? item with { Check = check } : item).ToArray();
-                    return proof with { Baseline = proof.Baseline with { Checks = checks.Select(item => item.Check).ToArray() },
-                        BaselineChecks = checks };
-                });
-                summary = fixture.Summary;
-                break;
             case "sibling-case":
                 var sibling = Path.Combine(receipt.ResultsRoot, "sibling.trx");
                 WriteTrx(sibling, false, First + "(value: 2)");
@@ -183,6 +164,95 @@ public sealed class SoloRepairEvidenceTests
         {
             Assert.Equal(partition.Findings.Count, unresolved.Length);
         }
+    }
+
+    [Theory]
+    [InlineData(AcceptanceFailureClassifications.BuildPhaseTimeout)]
+    [InlineData(AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable)]
+    public async Task BaselineApparatusFailure_OnlyPartitionsKnownToolAndBuildFaults(string classification)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce(mixed: true);
+        fixture.ReplaceProof(proof =>
+        {
+            var name = Assert.Single(proof.Bindings.Where(binding => binding.TestIdentity == Unknown)).BaselineCheckName;
+            var checks = proof.BaselineChecks.Select(item => item.Check.Name == name
+                ? item with { Check = item.Check with { FailureClassification = classification } }
+                : item).ToArray();
+            return proof with
+            {
+                Baseline = proof.Baseline with
+                {
+                    Disposition = FindingEvidenceArmDisposition.ApparatusFailure,
+                    Checks = checks.Select(item => item.Check).ToArray()
+                },
+                BaselineChecks = checks
+            };
+        });
+        fixture.Record(fixture.Summary);
+
+        var retained = fixture.Proof();
+        var binding = Assert.Single(retained.Bindings.Where(binding => binding.TestIdentity == Unknown));
+        var attribution = Assert.Single(AcceptanceFailureAttributionPlanner.ClassifyBaselineFailures(
+            [Unknown], [Unknown], new Dictionary<string, string> { [Unknown] = binding.BaselineCheckName }, retained.Baseline));
+        Assert.Equal(AcceptanceTestFailureOrigin.Unattributed, attribution.Origin);
+        Assert.Equal(SoloHoldReasons.BaselineUnavailable,
+            SoloAcceptanceFailureReceiptReader.Read(fixture.Goal, fixture.Context).Reason);
+        var partition = Read(fixture);
+        if (classification == AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable)
+        {
+            Assert.Null(partition.Introduced);
+            Assert.Equal(3, partition.Findings.Count);
+            Assert.All(partition.Findings, row => Assert.Equal(SoloHoldReasons.BaselineUnavailable, row.Reason));
+            return;
+        }
+
+        Assert.Equal(First, Assert.Single(partition.Findings.Where(row => row.Inherited)).Identity);
+        Assert.Equal(Long, Assert.Single(partition.Introduced!.FailingTests));
+        var unresolved = Assert.Single(partition.Findings.Where(row => row.Reason is not null));
+        Assert.Equal(Unknown, unresolved.Identity);
+        Assert.Equal($"{Project}: FullyQualifiedName~{Unknown}", unresolved.Request);
+        Assert.Equal(SoloHoldReasons.BaselineApparatusOrUnknown, unresolved.Reason);
+    }
+
+    [Theory]
+    [InlineData("tests/Other.Tests/Other.Tests.csproj")]
+    [InlineData(null)]
+    public async Task IntroducedRow_RequiresExecutedProjectOnInitialReadAndReplay(string? observedProject)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce();
+        fixture.Record(fixture.Summary);
+        var original = Assert.Single(Read(fixture).Findings.Where(row => row.Identity == First));
+        Assert.Null(original.Reason);
+        Assert.NotNull(original.Feedback);
+
+        fixture.ReplaceProof(proof =>
+        {
+            var name = Assert.Single(proof.Bindings.Where(binding => binding.TestIdentity == First)).BaselineCheckName;
+            var checks = proof.BaselineChecks.Select(item => item.Check.Name == name
+                ? item with { Check = item.Check with { TestProjectPath = observedProject } }
+                : item).ToArray();
+            return proof with
+            {
+                Baseline = proof.Baseline with { Checks = checks.Select(item => item.Check).ToArray() },
+                BaselineChecks = checks
+            };
+        });
+        fixture.Record(fixture.Summary);
+
+        var strict = SoloAcceptanceFailureReceiptReader.Read(fixture.Goal, fixture.Context);
+        Assert.Null(strict.Failure);
+        Assert.Equal(SoloHoldReasons.BaselineResultMismatch, strict.Reason);
+        var partition = Read(fixture);
+        Assert.Equal(Long, Assert.Single(partition.Introduced!.FailingTests));
+        var unresolved = Assert.Single(partition.Findings.Where(row => row.Reason is not null));
+        Assert.Equal(First, unresolved.Identity);
+        Assert.Equal($"{Project}: FullyQualifiedName~{First}", unresolved.Request);
+        Assert.Equal(SoloHoldReasons.BaselineResultMismatch, unresolved.Reason);
+        var replayError = Assert.Throws<InvalidDataException>(() => SoloAcceptanceFailureReceiptReader.VerifyRetainedRepairProof(
+            fixture.Goal.Id.Value, original with { Proof = fixture.Summary.SoloFailureReceipt!.Evidence }));
+        Assert.Equal(SoloHoldReasons.BaselineResultMismatch, replayError.Message);
     }
 
     [Fact]

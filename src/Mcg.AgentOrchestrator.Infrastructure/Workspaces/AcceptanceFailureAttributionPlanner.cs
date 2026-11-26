@@ -326,8 +326,7 @@ internal static class AcceptanceFailureAttributionPlanner
                     $"focused baseline result was missing at merge-base {baseline.Sha}");
             }
 
-            if (check.FailureClassification is AcceptanceFailureClassifications.FocusedSelectionApparatusFailure or
-                AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable or AcceptanceFailureClassifications.MissingTool ||
+            if (FocusedEvidenceExecution.IsFocusedEvidenceApparatusFailure(check) ||
                 check.LaneToolResolution?.MissingTool is not null)
             {
                 return Attribution(identity, AcceptanceTestFailureOrigin.Unattributed,

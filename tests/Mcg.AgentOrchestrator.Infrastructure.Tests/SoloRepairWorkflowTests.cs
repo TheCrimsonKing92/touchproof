@@ -1344,9 +1344,10 @@ public sealed class SoloRepairWorkflowTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task MixedCompletion_LinksRepairRoutesOnlyIntroducedFeedbackAndRetainsUnresolvedRow(bool toolFault)
+    [InlineData("unbound")]
+    [InlineData("missing-tool")]
+    [InlineData("missing-trx")]
+    public async Task MixedCompletion_LinksRepairRoutesOnlyIntroducedFeedbackAndRetainsUnresolvedRow(string fault)
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
         fixture.Git("checkout", "main");
@@ -1357,22 +1358,33 @@ public sealed class SoloRepairWorkflowTests
         var goal = NewCandidate(fixture, fixture.Kernel);
         await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(fixture.Kernel);
         await fixture.Produce(mixed: true, attemptId: goal.Id.Value, candidateWorktree: Worktree(fixture, goal), goal: goal,
-            baselineMissingToolFor: toolFault ? Unknown : null);
-        if (toolFault)
-        {
-            var proof = fixture.Proof();
-            var binding = Assert.Single(proof.Bindings.Where(binding => binding.TestIdentity == Unknown));
-            var failed = Assert.Single(proof.BaselineChecks.Where(check => check.Check.Name == binding.BaselineCheckName));
-            Assert.Equal(AcceptanceFailureClassifications.MissingTool, failed.Check.FailureClassification);
-            Assert.Equal("dotnet", failed.Check.LaneToolResolution?.MissingTool);
-            Assert.Equal(FindingEvidenceArmDisposition.ApparatusFailure, proof.Baseline.Disposition);
-        }
-        else
+            baselineMissingToolFor: fault == "missing-tool" ? Unknown : null,
+            baselineCrashFor: fault == "missing-trx" ? Unknown : null);
+        if (fault == "unbound")
         {
             fixture.ReplaceProof(proof => proof with
             {
                 Bindings = proof.Bindings.Where(binding => binding.TestIdentity != Unknown).ToArray()
             });
+        }
+        else
+        {
+            var proof = fixture.Proof();
+            var binding = Assert.Single(proof.Bindings.Where(binding => binding.TestIdentity == Unknown));
+            var failed = Assert.Single(proof.BaselineChecks.Where(check => check.Check.Name == binding.BaselineCheckName));
+            if (fault == "missing-tool")
+            {
+                Assert.Equal(AcceptanceFailureClassifications.MissingTool, failed.Check.FailureClassification);
+                Assert.Equal("dotnet", failed.Check.LaneToolResolution?.MissingTool);
+                Assert.Equal(FindingEvidenceArmDisposition.ApparatusFailure, proof.Baseline.Disposition);
+            }
+            else
+            {
+                Assert.False(failed.Check.Passed);
+                Assert.Equal("missing", failed.Check.CompletionDecision?.TrxOutcome);
+                Assert.Null(failed.Check.LaneToolResolution?.MissingTool);
+                Assert.Empty(failed.Artifacts);
+            }
         }
         var request = $"{Project}: FullyQualifiedName~{Unknown}";
         var verifier = new ControlledVerifier(fixture.Root) { UnresolvedAttributionRequests = [request] };

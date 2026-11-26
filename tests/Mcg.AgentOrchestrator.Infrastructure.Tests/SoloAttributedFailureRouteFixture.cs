@@ -81,7 +81,7 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
     internal GoalAcceptanceVerifier CreateVerifier(string checkout, bool baselineThrows = false, bool baselineFails = false,
         bool collidingPassedRows = false, bool mixed = false, bool singleRow = false, string? firstCase = null,
         Action? onFailedBuild = null, bool captureFails = false, Exception? baselineException = null,
-        string? baselineMissingToolFor = null)
+        string? baselineMissingToolFor = null, string? baselineCrashFor = null)
     {
         string? candidateTrx = null;
         return new(new GoalAcceptanceVerifierTestOverrides
@@ -113,6 +113,9 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
             if (baseline && baselineMissingToolFor is not null && names.SequenceEqual([baselineMissingToolFor]))
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(9009,
                     "'dotnet' is not recognized as an internal or external command") { LaneToolResolution = new() });
+            if (baseline && baselineCrashFor is not null && names.SequenceEqual([baselineCrashFor]))
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1,
+                    "Test host exited before writing results.") { LaneToolResolution = new() });
             if (firstCase is not null)
                 names = names.Select(name => name == First ? name + firstCase : name).ToArray();
             Directory.CreateDirectory(args[results + 1]);
@@ -138,14 +141,14 @@ internal sealed class SoloAttributedFailureRouteFixture : IDisposable
     internal async Task Produce(bool baselineThrows = false, bool buildFails = false, bool baselineFails = false,
         bool collidingPassedRows = false, string? attemptId = null, bool mixed = false,
         string? candidateWorktree = null, Goal? goal = null, bool singleRow = false, string? firstCase = null,
-        Exception? baselineException = null, string? baselineMissingToolFor = null)
+        Exception? baselineException = null, string? baselineMissingToolFor = null, string? baselineCrashFor = null)
     {
         var checkout = candidateWorktree ?? Repo;
         var checkedGoal = goal ?? Goal;
         var failedBuilds = 0;
         var verifier = CreateVerifier(checkout, baselineThrows, baselineFails, collidingPassedRows, mixed,
             singleRow, firstCase, buildFails ? () => failedBuilds++ : null, baselineException: baselineException,
-            baselineMissingToolFor: baselineMissingToolFor);
+            baselineMissingToolFor: baselineMissingToolFor, baselineCrashFor: baselineCrashFor);
         var baselineDidNotExecute = baselineThrows || baselineException is not null;
         await using var owner = AcceptanceExecutionOwners.CreateAttempt(checkout, checkedGoal.Id,
             options: new(RunId: attemptId ?? "solo-attempt", ResultsPrefix: attemptId is null

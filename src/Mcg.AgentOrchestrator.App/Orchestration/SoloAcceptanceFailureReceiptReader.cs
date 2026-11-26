@@ -89,6 +89,8 @@ internal static partial class SoloAcceptanceFailureReceiptReader
                     else
                     {
                         if (!Usable(baseline.Check)) return Refuse(SoloHoldReasons.BaselineApparatusOrUnknown);
+                        if (!MatchesRepairProject(check.TestProjectPath, baseline.Check.TestProjectPath))
+                            return Refuse(SoloHoldReasons.BaselineResultMismatch);
                         var baselineRows = ReadRows(baseline, receipt.ResultsRoot).ValidateRows();
                         var selected = baselineRows.Where(row => AcceptanceFailureAttributionPlanner.NormalizeIdentity(row.Key) == selector).ToArray();
                         if (selected.Length == 0 || selected.Any(row => row.Key == identity && row.Value.Outcome == "Failed"))
