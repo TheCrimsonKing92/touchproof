@@ -809,6 +809,7 @@ public sealed class AssemblyTempRedirectTests
         }
         startInfo.Environment["HOME"] = root;
         startInfo.Environment["USERPROFILE"] = root;
+        startInfo.Environment["DOTNET_ADD_GLOBAL_TOOLS_TO_PATH"] = "0";
         startInfo.Environment["APPDATA"] = Path.Combine(root, "appdata");
         startInfo.Environment["LOCALAPPDATA"] = Path.Combine(root, "localappdata");
         startInfo.Environment["TEMP"] = Path.Combine(root, "inherited-temp");
