@@ -24,7 +24,7 @@ internal sealed record ShadowStartRun(Guid Id, ShadowScratchRetention Intent, st
 
 internal sealed record ShadowStartMeasurement(string? Assertion, string? Detail, long? WallMs = null,
     long? PeakWorkingSetBytes = null, long? FirstTickMs = null, string[]? OutputTail = null,
-    bool ReleaseVerified = false);
+    bool ReleaseVerified = false, string[]? StartupLines = null);
 
 internal sealed record ShadowStartCleanup(string Status, string? Reason, long Milliseconds, string Receipt);
 

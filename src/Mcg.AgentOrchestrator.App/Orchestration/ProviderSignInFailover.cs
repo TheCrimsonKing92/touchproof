@@ -24,11 +24,9 @@ internal sealed class ProviderSignInFailover(AgentOrchestratorKernel kernel, IRe
         if (assigned is null)
             return false;
         var excluded = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var evt in goal.Timeline.Where(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRedelegated))
+        foreach (var evt in PriorFailovers(goal, task.Id))
         {
             var markerIndex = evt.Message.IndexOf(Marker, StringComparison.Ordinal);
-            if (markerIndex < 0)
-                continue;
             foreach (var token in evt.Message[(markerIndex + Marker.Length)..].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
                 if (token.StartsWith("from=", StringComparison.Ordinal))
                     excluded.Add(token["from=".Length..]);
@@ -44,6 +42,10 @@ internal sealed class ProviderSignInFailover(AgentOrchestratorKernel kernel, IRe
         retry(goal.Id, task.Id, message, null, RetryCause.ProviderInterruption);
         return true;
     }
+
+    internal static IEnumerable<ProgressEvent> PriorFailovers(Goal goal, TaskId taskId) =>
+        goal.Timeline.Where(evt => evt.TaskId == taskId && evt.Kind == ProgressKind.TaskRedelegated &&
+            evt.Message.Contains(Marker, StringComparison.Ordinal));
 
     internal static ProviderSignInFailover? ForWorkspace(AgentOrchestratorKernel? kernel, OrchestratorWorkspace? workspace)
     {

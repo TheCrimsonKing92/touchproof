@@ -2375,33 +2375,161 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         ReadModelFitHistoryAsync(providerHoldRule: null, cancellationToken);
 
     public Task<IReadOnlyList<ModelFitHistoryRow>> ListProviderHoldHistoryAsync(string exhaustionRule,
-        CancellationToken cancellationToken = default) => ReadModelFitHistoryAsync(exhaustionRule, cancellationToken);
+        CancellationToken cancellationToken = default) => ReadModelFitHistoryAsync([exhaustionRule], cancellationToken);
 
-    private async Task<IReadOnlyList<ModelFitHistoryRow>> ReadModelFitHistoryAsync(string? providerHoldRule,
+    public Task<IReadOnlyList<ModelFitHistoryRow>> ListProviderHoldHistoryAsync(
+        CancellationToken cancellationToken = default) => ReadModelFitHistoryAsync(ProviderHoldHistory.HoldOutcomeRules, cancellationToken);
+
+    public Task<ProviderHoldSeedHistory> ReadProviderHoldSeedHistoryAsync(CancellationToken cancellationToken = default) =>
+        ReadProviderHoldHistoryAsync(forStatus: false, cancellationToken);
+
+    internal Task<ProviderHoldSeedHistory> ReadProviderHoldStatusHistoryAsync(CancellationToken cancellationToken = default) =>
+        ReadProviderHoldHistoryAsync(forStatus: true, cancellationToken);
+
+    private async Task<ProviderHoldSeedHistory> ReadProviderHoldHistoryAsync(
+        bool forStatus, CancellationToken cancellationToken)
+    {
+        var timings = forStatus ? null : new Dictionary<string, long>(StringComparer.Ordinal);
+        await using var connection = OpenConnection();
+        var candidates = await ProviderHoldSeedDiscovery.ReadAsync(
+            connection, SerializerOptions, cancellationToken, _readObserver, filterTextCandidates: true,
+            backfillArchiveDiscovery: !forStatus && _connectionProfile == StateDbConnectionProfile.ReadWrite,
+            timings, sparseArchiveTimelines: !forStatus);
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var (evidence, goals) = await ReadAttemptsAsync(candidates.FailureGoals);
+        RecordElapsed("historyFailureReadMs");
+        var failureHistory = evidence.Select(ProviderHoldSeedPruning.Adapt).Concat(goals).ToArray();
+        var dispatchMatchingVisits = 0;
+        void RecordDispatchVisits(int visits) => dispatchMatchingVisits += visits;
+        var attempts = failureHistory.SelectMany(goal => ProviderHoldHistory.SeedAttempts(goal, RecordDispatchVisits))
+            .Distinct().ToArray();
+        RecordElapsed("historyFailureMatchMs");
+        var rows = await ReadModelFitHistoryAsync(connection, ProviderHoldHistory.HoldOutcomeRules,
+            cancellationToken, attempts);
+        RecordElapsed("historyModelFitReadMs");
+        var selection = ProviderHoldHistory.SelectSeedEvidence(rows, attempts, new HashSet<string>(StringComparer.Ordinal));
+        var recoveryIds = await candidates.FindRecoveryCandidatesAsync(connection, selection, cancellationToken);
+        RecordElapsed("historyRecoverySelectMs");
+        recoveryIds.ExceptWith(candidates.FailureGoals);
+        var (recoveryEvidence, recoveryGoals) = await ReadAttemptsAsync(recoveryIds);
+        RecordElapsed("historyRecoveryReadMs");
+        // An orphan refusal may have selected a goal that supplies an unindexed recovery.
+        var unindexedFailureHistory = failureHistory.Where(goal =>
+            !selection.Sources.Contains(goal.Id.Value) && !selection.Dependencies.Contains(goal.Id.Value));
+        var recoveries = unindexedFailureHistory.Concat(recoveryEvidence.Select(ProviderHoldSeedPruning.Adapt))
+            .Concat(recoveryGoals)
+            .SelectMany(goal => ProviderHoldHistory.SeedRecoveryAttempts(goal, RecordDispatchVisits)).Where(attempt =>
+                selection.LowerBounds.TryGetValue(attempt.ProviderName, out var first) && attempt.Timestamp >= first)
+            .Distinct().ToArray();
+        var witnesses = recoveries.Select(attempt => attempt.GoalId).ToHashSet(StringComparer.Ordinal);
+        var replay = evidence.Concat(recoveryEvidence.Where(row => witnesses.Contains(row.GoalId)))
+            .ToDictionary(row => row.GoalId, StringComparer.Ordinal);
+        // A sparse archive can nominate a recovery from task history alone. Validate its
+        // deferred sidecar before allowing that witness to affect the replay.
+        foreach (var id in selection.Sources.Concat(selection.Dependencies).Concat(witnesses)
+            .Concat(candidates.MarkerGoals.Select(id => id.Value)).Distinct(StringComparer.Ordinal))
+            if (candidates.ArchiveEvidence.TryGetValue(new GoalId(id), out var archived))
+                replay[id] = await ProviderHoldSeedEvidenceReader.CompleteArchiveProjectionAsync(
+                    connection, archived, SerializerOptions, cancellationToken, _readObserver);
+        RecordElapsed("historyRecoveryMatchMs");
+        return new(rows, attempts, candidates.MarkerGoals, replay.Values.ToArray())
+        {
+            Recoveries = recoveries,
+            DispatchMatchingVisits = dispatchMatchingVisits,
+            Timings = timings ?? new()
+        };
+
+        void RecordElapsed(string phase)
+        {
+            if (timings is null) return;
+            timings[phase] = (long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            started = System.Diagnostics.Stopwatch.GetTimestamp();
+        }
+
+        async Task<(IReadOnlyList<ProviderUsageGoalEvidence> Evidence, Goal[] Goals)> ReadAttemptsAsync(
+            IReadOnlyCollection<GoalId> ids)
+        {
+            if (ids.Count == 0) return ([], []);
+            IReadOnlyList<ProviderUsageGoalEvidence> projected = [];
+            try
+            {
+                projected = ids.Where(candidates.ArchiveEvidence.ContainsKey)
+                    .Select(id => candidates.ArchiveEvidence[id].Evidence).ToArray();
+                var remaining = ids.Where(id => !candidates.ArchiveEvidence.ContainsKey(id)).ToArray();
+                if (remaining.Length != 0)
+                    projected = projected.Concat(await ReadProviderHoldSeedEvidenceAsync(remaining, cancellationToken) ?? []).ToArray();
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                // Fall back to the same canonical load used when sparse seed evidence is unavailable.
+            }
+            var missing = ids.Except(projected.Where(row => row.Tasks.Count != 0)
+                .Select(row => new GoalId(row.GoalId))).ToHashSet();
+            Goal[] canonical = [];
+            if (missing.Count != 0)
+            {
+                var loaded = await LoadGoalsAsync(missing, cancellationToken);
+                canonical = loaded.Goals.Where(goal => missing.Contains(goal.Id) && !goal.IsMetadataOnly).ToArray();
+                if (canonical.Length != missing.Count)
+                    throw new InvalidDataException("Required provider hold attempt history is unavailable.");
+            }
+            return (projected.Where(row => !missing.Contains(new GoalId(row.GoalId))).ToArray(), canonical);
+        }
+    }
+
+    private async Task<IReadOnlyList<ModelFitHistoryRow>> ReadModelFitHistoryAsync(IReadOnlyList<string>? providerHoldRule,
         CancellationToken cancellationToken)
     {
-        await using var conn = OpenConnection();
+        await using var connection = OpenConnection();
+        return await ReadModelFitHistoryAsync(connection, providerHoldRule, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<ModelFitHistoryRow>> ReadModelFitHistoryAsync(SqliteConnection connection,
+        IReadOnlyList<string>? providerHoldRule, CancellationToken cancellationToken,
+        IReadOnlyCollection<ProviderHoldSeedAttempt>? seedAttempts = null)
+    {
         var results = new List<ModelFitHistoryRow>();
 
-        await using var cmd = conn.CreateCommand();
+        await using var cmd = connection.CreateCommand();
         // SQLite NOCASE only folds ASCII. For a non-ASCII provider retain the full read,
         // leaving canonical OrdinalIgnoreCase matching to SeedCandidates. For ASCII names
         // the SQL is a conservative superset (julianday rounds sub-millisecond instants).
-        var prefix = providerHoldRule is not null ? """
-            WITH exhausted AS MATERIALIZED (
+        var ruleParameters = providerHoldRule?.Select((rule, index) =>
+        {
+            var name = $"$holdRule{index}";
+            cmd.Parameters.AddWithValue(name, rule);
+            return name;
+        }).ToArray();
+        var rules = ruleParameters is null ? "" : string.Join(", ", ruleParameters);
+        var attempts = seedAttempts is { Count: > 0 } ? """
+            UNION ALL
+            SELECT json_extract(value, '$.ProviderName'), json_extract(value, '$.Timestamp')
+            FROM json_each($seedAttempts)
+            """ : "";
+        if (attempts.Length != 0)
+            cmd.Parameters.AddWithValue("$seedAttempts", JsonSerializer.Serialize(seedAttempts!
+                .GroupBy(attempt => attempt.ProviderName, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.MinBy(attempt => attempt.Timestamp)!), SerializerOptions));
+        var prefix = providerHoldRule is not null ? $"""
+            WITH hold_events AS (
+                SELECT provider_name, timestamp FROM model_fit_history WHERE outcome_rule IN ({rules})
+                {attempts}
+            ), exhausted AS MATERIALIZED (
                 SELECT provider_name, CASE WHEN count(*) != count(julianday(timestamp)) THEN NULL
                     ELSE min(julianday(timestamp)) END AS first_at
-                FROM model_fit_history WHERE outcome_rule = $exhausted
+                FROM hold_events
                 GROUP BY provider_name COLLATE NOCASE)
             """ : string.Empty;
-        var restriction = providerHoldRule is not null ? """
-            WHERE outcome_rule = $exhausted OR EXISTS (
+        var recovery = seedAttempts is not null ? "(outcome = 'Completed' OR outcome_class = 'success') AND" : "";
+        var restriction = providerHoldRule is not null ? $"""
+            WHERE outcome_rule IN ({rules}) OR ({recovery} (EXISTS (
                 SELECT 1 FROM model_fit_history e
                 WHERE e.provider_name GLOB '*[^ -~]*') OR EXISTS (
+                SELECT 1 FROM exhausted e WHERE e.provider_name GLOB '*[^ -~]*') OR EXISTS (
                 SELECT 1 FROM exhausted e
                 WHERE e.provider_name = model_fit_history.provider_name COLLATE NOCASE
                     AND (e.first_at IS NULL OR julianday(model_fit_history.timestamp) IS NULL
-                        OR julianday(model_fit_history.timestamp) >= e.first_at))
+                        OR julianday(model_fit_history.timestamp) >= e.first_at))))
             """ : string.Empty;
         cmd.CommandText = $"""
             {prefix}
@@ -2410,7 +2538,6 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             {restriction}
             ORDER BY timestamp DESC
             """;
-        if (providerHoldRule is not null) cmd.Parameters.AddWithValue("$exhausted", providerHoldRule);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
         long characters = 0;

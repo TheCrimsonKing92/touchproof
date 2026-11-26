@@ -32,11 +32,9 @@ internal sealed class ProviderHoldAgentSubstitution(
 
         var assigned = preflight(goal, task, kernel.ProviderHoldScope);
         var hold = assigned.ErrorCode == WorkerProfileDispatcher.ProviderBudgetExhaustionErrorCode
-            ? FindHold(assigned.Findings) : null;
-        var agent = agents.First(candidate => candidate.Id == task.AssignedAgentId);
+            ? assigned.BlockedProviderHold : null;
         var now = UtcNow;
-        var cooldown = TryGetSubscriptionCooldown(goal, task, agent, now, out var observed)
-            ? observed : null;
+        var cooldown = assigned.BlockedSubscriptionCooldown;
         if (assigned.Allowed || (hold is null && cooldown is null)) return new Result.None(assigned.Findings);
         if (IsPinned(goal, task.Id)) return new Result.WaitOnPin(assigned.Findings);
 
@@ -55,7 +53,8 @@ internal sealed class ProviderHoldAgentSubstitution(
             var view = scratch.ReassignTaskAgent(goal.Id, task.Id, candidate);
             var check = preflight(scratch.GetGoal(goal.Id), view, scratch.ProviderHoldScope);
             if (check.Allowed)
-                return hold is not null
+                return hold is not null && (cooldown is null ||
+                        (hold.BindingIdentity with { Model = null }) != cooldown.BindingIdentity)
                     ? new Result.Substitute(candidate, hold.BindingKey, hold.EvidenceReceipt, null, rejections, holdIdentity)
                     : new Result.Substitute(candidate, cooldown!.BindingKey, cooldown.EvidenceReceipt, cooldown, rejections, holdIdentity);
             var blocked = check.Findings.Where(finding => finding.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -73,6 +72,10 @@ internal sealed class ProviderHoldAgentSubstitution(
             var revision = task.ConductorRoutingRevision;
             if (DispatchReadinessRules.BuildIncompleteEarlierStageDependencies(goal, task).Length > 0) continue;
             var result = Resolve(goal, task);
+            if (result is Result.Substitute { SubscriptionCooldown: { } selected } &&
+                (selected.RetryAfter <= UtcNow ||
+                 preflight(kernel.GetGoal(goal.Id), kernel.GetTask(goal.Id, taskId), kernel.ProviderHoldScope)
+                     .BlockedSubscriptionCooldown != selected)) continue;
             goal = kernel.GetGoal(goal.Id);
             if (!ReferenceEquals(task, kernel.GetTask(goal.Id, taskId)) ||
                 task.Status != WorkTaskStatus.Assigned || task.LastProcess is { IsRunning: true } ||
@@ -81,11 +84,9 @@ internal sealed class ProviderHoldAgentSubstitution(
                 continue;
             if (result is Result.None none)
                 RecordCandidateFindings(goal, taskId, none.HoldIdentity, none.Rejections, substituted: false);
-            if (result is Result.Substitute substitute && (substitute.SubscriptionCooldown is null ||
-                 (TryGetSubscriptionCooldown(goal, task, agents.First(agent => agent.Id == task.AssignedAgentId),
-                     UtcNow, out var currentCooldown) &&
-                  currentCooldown == substitute.SubscriptionCooldown)))
+            if (result is Result.Substitute substitute)
             {
+                if (substitute.SubscriptionCooldown is { } cooldown && cooldown.RetryAfter <= UtcNow) continue;
                 kernel.SubstituteProviderHeldTaskAgent(goal.Id, taskId, substitute.Agent,
                     substitute.HeldBindingKey, substitute.EvidenceReceipt, substitute.SubscriptionCooldown);
                 RecordCandidateFindings(goal, taskId, substitute.HoldIdentity, substitute.Rejections, substituted: true);
@@ -131,26 +132,12 @@ internal sealed class ProviderHoldAgentSubstitution(
             (assigned.Id == task.AssignedAgentId ||
              cooldown.AppliesToModel(ProviderLimitSignals.GetSubscriptionModelName(assigned))))
             return true;
-        // An inherited hold can cover a routed model absent from the assigned profile too.
-        // The real preflight checks that scope before Resolve considers any substitute.
+        // Planning and offline repair use this as a preliminary hint. Substitution uses
+        // the cooldown selected by preflight for the actual provider, model and credential.
         return ProviderLimitSignals.TryGetProviderSubscriptionCooldown(goal, task.Id,
             assigned.Model.ProviderName,
             assigned.Id == task.AssignedAgentId ? null : ProviderLimitSignals.GetSubscriptionModelName(assigned),
             now, out cooldown);
-    }
-
-    private ProviderBudgetExhaustionHold? FindHold(IReadOnlyList<string> findings)
-    {
-        var bindings = kernel.ProviderHoldScope.SelectMany(goal => goal.Tasks).SelectMany(task => task.DispatchHistory)
-            .Select(dispatch => (Provider: dispatch.ProviderName ?? dispatch.WorkerName,
-                Credential: dispatch.ClaudeCredentialSourceDirectory)).Distinct();
-        foreach (var binding in bindings)
-            if (ProviderLimitSignals.TryGetProviderBudgetExhaustionHold(kernel.ProviderHoldScope,
-                    binding.Provider, binding.Credential, out var hold) &&
-                findings.Any(finding => finding.StartsWith("blocked:", StringComparison.OrdinalIgnoreCase) &&
-                    finding.Contains($"binding {hold.BindingKey} (", StringComparison.OrdinalIgnoreCase)))
-                return hold;
-        return null;
     }
 
     private static bool IsPinned(Goal goal, TaskId taskId) => OfflineAssignedAgentRedelegation.IsOperatorPin(goal, taskId);

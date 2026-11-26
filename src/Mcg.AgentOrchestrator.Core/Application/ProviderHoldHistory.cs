@@ -1,13 +1,24 @@
 namespace Mcg.AgentOrchestrator.Core;
 
+public sealed record ProviderHoldSeedAttempt(string GoalId, string ProviderName, DateTimeOffset Timestamp);
+
 /// <summary>Read-only goal history retained while it changes a hold, diagnosis or probe schedule.</summary>
 public sealed class ProviderHoldHistory
 {
     internal delegate ProviderBudgetHoldSchedule? Evaluator(
         IReadOnlyCollection<Goal> scope, string provider, string? credential);
 
-    private readonly SortedDictionary<string, Goal> _retained = new(StringComparer.Ordinal);
+    private SortedDictionary<string, Goal> _retained = new(StringComparer.Ordinal);
     private readonly Evaluator _evaluate;
+
+    internal static IReadOnlyList<string> HoldOutcomeRules { get; } =
+    [
+        TaskOutcomeRules.ProviderBudgetExhausted.Token,
+        TaskOutcomeRules.ProviderAuthentication.Token,
+        TaskOutcomeRules.SubscriptionLimit.Token,
+        TaskOutcomeRules.ProviderRateLimit.Token,
+        "recoverable-subscription-limit"
+    ];
 
     public ProviderHoldHistory() : this(Answer) { }
 
@@ -36,7 +47,7 @@ public sealed class ProviderHoldHistory
             if (!ids.Contains(goal.Id.Value)) _retained[goal.Id.Value] = goal;
 
         var scope = Scope(working);
-        var answers = new Dictionary<(string Provider, string? Credential), ProviderBudgetHoldSchedule?>();
+        var answers = new Dictionary<SubscriptionLimitEvidence.ProviderBindingKey, ProviderBudgetHoldSchedule?>();
         var exhaustedBindings = ExhaustedBindings(scope);
         bool dropped;
         do
@@ -66,17 +77,84 @@ public sealed class ProviderHoldHistory
 
     public void CopyFrom(ProviderHoldHistory other)
     {
-        var goals = other.Retained.ToArray();
-        _retained.Clear();
-        foreach (var goal in goals) _retained.Add(goal.Id.Value, goal);
+        Replace(other.Retained.ToArray());
+    }
+
+    internal void Replace(IReadOnlyCollection<Goal> goals)
+    {
+        var retained = new SortedDictionary<string, Goal>(StringComparer.Ordinal);
+        foreach (var goal in goals) retained.Add(goal.Id.Value, goal);
+        _retained = retained;
+    }
+
+    internal sealed record SeedSelection(IReadOnlySet<string> Sources, IReadOnlySet<string> Dependencies, int RowsRead,
+        IReadOnlyDictionary<string, DateTimeOffset> LowerBounds);
+
+    internal static SeedSelection SelectSeedEvidence(
+        IReadOnlyList<ModelFitHistoryRow> rows, IReadOnlyList<ProviderHoldSeedAttempt> attempts,
+        IReadOnlySet<string> workingGoalIds, IReadOnlyList<ProviderHoldSeedAttempt>? recoveries = null)
+    {
+        var lowerBounds = new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
+        var sources = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            if (!HoldOutcomeRules.Contains(row.OutcomeRule, StringComparer.Ordinal)) continue;
+            AddSource(row.GoalId, row.ProviderName, row.Timestamp);
+        }
+        foreach (var attempt in attempts) AddSource(attempt.GoalId, attempt.ProviderName, attempt.Timestamp);
+
+        var dependencies = rows.Where(row => row.IsCompleted || row.OutcomeClass == TaskOutcomeClass.Success)
+            .Select(row => new ProviderHoldSeedAttempt(row.GoalId, row.ProviderName, row.Timestamp))
+            .Concat(recoveries ?? []).Where(attempt =>
+                lowerBounds.TryGetValue(attempt.ProviderName, out var first) && attempt.Timestamp >= first &&
+                !sources.Contains(attempt.GoalId) && !workingGoalIds.Contains(attempt.GoalId))
+            .Select(attempt => attempt.GoalId).ToHashSet(StringComparer.Ordinal);
+        return new(sources, dependencies, rows.Count, lowerBounds);
+
+        void AddSource(string goalId, string provider, DateTimeOffset at)
+        {
+            if (!lowerBounds.TryGetValue(provider, out var first) || at < first) lowerBounds[provider] = at;
+            if (!workingGoalIds.Contains(goalId)) sources.Add(goalId);
+        }
+    }
+
+    internal static IEnumerable<ProviderHoldSeedAttempt> SeedAttempts(Goal goal, Action<int>? recordDispatchVisits = null)
+    {
+        foreach (var task in goal.Tasks)
+        {
+            ProviderHoldBinding.DispatchIndex? attempts = null;
+            foreach (var verification in task.VerificationHistory)
+            {
+                if (!ProviderHoldEvidence.Read(verification).Confirmed) continue;
+                if (attempts is null)
+                {
+                    attempts = new();
+                    foreach (var dispatch in task.DispatchHistory) attempts.Add(dispatch);
+                }
+                if (attempts.MatchVerification(verification) is { } matched)
+                    yield return new(goal.Id.Value, matched.ProviderName ?? matched.WorkerName, verification.CompletedAt);
+            }
+            if (attempts is not null) recordDispatchVisits?.Invoke(attempts.Visits);
+        }
+    }
+
+    internal static IEnumerable<ProviderHoldSeedAttempt> SeedRecoveryAttempts(Goal goal, Action<int>? recordDispatchVisits = null)
+    {
+        var recoveries = new List<ProviderHoldSeedAttempt>();
+        ProviderHoldBindingHistory.Populate([goal], _ => null, observe: observation =>
+        {
+            if (ProviderLimitSignals.HasAvailabilityEvidence(observation.Verification))
+                recoveries.Add(new(goal.Id.Value, observation.Dispatch.ProviderName ?? observation.Dispatch.WorkerName,
+                    observation.Verification.CompletedAt));
+        }, recordDispatchVisits: recordDispatchVisits);
+        return recoveries;
     }
 
     public static IReadOnlyList<string> SeedCandidates(
         IEnumerable<ModelFitHistoryRow> rows, IReadOnlySet<string> workingGoalIds)
     {
         var history = rows.ToArray();
-        var exhaustions = history.Where(row => string.Equals(
-            row.OutcomeRule, TaskOutcomeRules.ProviderBudgetExhausted.Token, StringComparison.Ordinal)).ToArray();
+        var exhaustions = history.Where(row => HoldOutcomeRules.Contains(row.OutcomeRule, StringComparer.Ordinal)).ToArray();
         var candidates = exhaustions.Select(row => row.GoalId).ToHashSet(StringComparer.Ordinal);
         foreach (var provider in exhaustions.GroupBy(row => row.ProviderName, StringComparer.OrdinalIgnoreCase))
         {
@@ -92,43 +170,54 @@ public sealed class ProviderHoldHistory
     }
 
     private bool SameAnswers(Goal goal, IReadOnlyCollection<Goal> scope, IReadOnlyCollection<Goal> without,
-        Dictionary<(string Provider, string? Credential), ProviderBudgetHoldSchedule?> answers,
-        HashSet<SubscriptionLimitEvidence.ProviderBindingKey> exhaustedBindings,
-        out Dictionary<(string Provider, string? Credential), ProviderBudgetHoldSchedule?> withoutAnswers)
+        Dictionary<SubscriptionLimitEvidence.ProviderBindingKey, ProviderBudgetHoldSchedule?> answers,
+        IReadOnlyCollection<ProviderHoldBinding> exhaustedBindings,
+        out Dictionary<SubscriptionLimitEvidence.ProviderBindingKey, ProviderBudgetHoldSchedule?> withoutAnswers)
     {
         withoutAnswers = new();
-        var bindings = goal.Tasks.SelectMany(task => task.DispatchHistory)
-            .Select(dispatch => (Provider: dispatch.ProviderName ?? dispatch.WorkerName,
-                Credential: dispatch.ClaudeCredentialSourceDirectory)).Distinct();
-        foreach (var binding in bindings)
+        var dispatches = goal.Tasks.SelectMany(task => task.DispatchHistory).ToArray();
+        var markers = goal.Timeline.Select(ProviderBudgetHoldSchedules.ReadMarkerBinding)
+            .Where(marker => marker.HasValue).Select(marker => marker.GetValueOrDefault()).ToArray();
+        // Removing a dispatch can make a legacy marker resolve to a different scope with the same text.
+        var affectedTexts = exhaustedBindings.Where(binding => dispatches.Any(dispatch =>
+                ProviderHoldBinding.Matches(dispatch, binding.ScopedKey)))
+            .Select(binding => binding.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var binding in exhaustedBindings)
         {
-            // TryGetProviderBudgetExhaustionHold requires a matched exhaustion verification.
-            // Without one on this binding, neither this scope nor any subset can hold it.
-            if (!exhaustedBindings.Contains(SubscriptionLimitEvidence.BuildProviderBindingKey(
-                    binding.Provider, binding.Credential))) continue;
-            if (!answers.TryGetValue(binding, out var answer))
+            var identity = binding.ScopedKey;
+            if (!affectedTexts.Contains(binding.Key) &&
+                !markers.Any(marker => marker.Identity is { } scoped ? scoped == identity :
+                    marker.Text.Equals(binding.Key, StringComparison.OrdinalIgnoreCase))) continue;
+            if (!answers.TryGetValue(identity, out var answer))
             {
-                answer = _evaluate(scope, binding.Provider, binding.Credential);
-                answers.Add(binding, answer);
+                answer = Evaluate(scope, binding);
+                answers.Add(identity, answer);
             }
-            var withoutAnswer = _evaluate(without, binding.Provider, binding.Credential);
-            withoutAnswers.Add(binding, withoutAnswer);
+            var withoutAnswer = Evaluate(without, binding);
+            withoutAnswers.Add(identity, withoutAnswer);
             if (answer != withoutAnswer) return false;
         }
         return true;
     }
 
-    private static HashSet<SubscriptionLimitEvidence.ProviderBindingKey> ExhaustedBindings(
+    private ProviderBudgetHoldSchedule? Evaluate(IReadOnlyCollection<Goal> scope, ProviderHoldBinding binding) =>
+        binding.Model is null ? _evaluate(scope, binding.Provider, binding.Credential) :
+            ProviderLimitSignals.TryGetExactHold(scope, binding, out var hold)
+                ? ProviderBudgetHoldSchedules.Evaluate(scope, hold, hold.PlacedAt) : null;
+
+    internal static IReadOnlyCollection<ProviderHoldBinding> ExhaustedBindings(
         IReadOnlyCollection<Goal> scope)
     {
-        var bindings = new HashSet<SubscriptionLimitEvidence.ProviderBindingKey>();
+        var bindings = new Dictionary<SubscriptionLimitEvidence.ProviderBindingKey, ProviderHoldBinding>();
         foreach (var task in scope.SelectMany(goal => goal.Tasks))
             foreach (var verification in task.VerificationHistory)
-                if (verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
-                    SubscriptionLimitEvidence.FindDispatchForVerification(task, verification) is { } dispatch)
-                    bindings.Add(SubscriptionLimitEvidence.BuildProviderBindingKey(
-                        dispatch.ProviderName ?? dispatch.WorkerName, dispatch.ClaudeCredentialSourceDirectory));
-        return bindings;
+                if (ProviderHoldEvidence.Read(verification) is { Confirmed: true } evidence &&
+                    ProviderHoldBinding.FindDispatch(task, verification) is { } dispatch)
+                {
+                    var binding = ProviderHoldBinding.From(dispatch, evidence.ScopedModel(dispatch));
+                    bindings.TryAdd(binding.ScopedKey, binding);
+                }
+        return bindings.Values;
     }
 
     internal static ProviderBudgetHoldSchedule? Answer(

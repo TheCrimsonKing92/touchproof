@@ -9,6 +9,13 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// by the streaming serializer, including briefs, execution output and acceptance evidence.</summary>
 internal static class ProviderHoldSeedEvidenceReader
 {
+    internal static JsonSerializerOptions ArchiveReplayOptions(JsonSerializerOptions options)
+    {
+        var replay = new JsonSerializerOptions(options);
+        replay.Converters.Insert(0, new ArchiveVerificationConverter(options));
+        return replay;
+    }
+
     internal static async Task<IReadOnlyList<ProviderUsageGoalEvidence>> ReadAsync(SqliteConnection connection,
         IReadOnlyCollection<GoalId> ids, JsonSerializerOptions options, CancellationToken cancellationToken)
         => await ReadSnapshotsAsync(connection, ids, options, cancellationToken);
@@ -39,7 +46,7 @@ internal static class ProviderHoldSeedEvidenceReader
             var payload = reader.IsDBNull(2) ? reader.GetValue(1) : reader.GetValue(2);
             var id = reader.GetString(0);
             observer?.Invoke(new("provider-seed-snapshot-decode", id));
-            var evidence = await ProjectAsync(id, payload, options, cancellationToken, connection);
+            var evidence = await ProjectAsync(id, payload, options, cancellationToken, connection, observer);
             result.Add(evidence);
             projected?.Invoke(evidence, reader.GetString(3));
         }
@@ -47,64 +54,190 @@ internal static class ProviderHoldSeedEvidenceReader
     }
 
     internal static async Task<ProviderUsageGoalEvidence> ProjectAsync(string id, object payload,
-        JsonSerializerOptions options, CancellationToken cancellationToken = default, SqliteConnection? connection = null)
+        JsonSerializerOptions options, CancellationToken cancellationToken = default, SqliteConnection? connection = null,
+        Action<GoalSnapshotReadObservation>? observer = null)
     {
         using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(payload)!;
         var row = await GoalSnapshotByteAccounting.DeserializeAsync<GoalFields>(stream, options, cancellationToken)
             ?? throw new InvalidDataException("Missing provider seed goal evidence.");
+        var projection = await ProjectDocumentAsync(id, row, options, cancellationToken, connection, observer);
+        return projection.Evidence;
+    }
+
+    internal static GoalFields? TryReadArchiveDocument(object payload, JsonSerializerOptions options,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(payload)!;
+            return GoalSnapshotByteAccounting.Deserialize<GoalFields>(stream, options);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    internal static async Task<ArchiveProjection> ProjectDocumentAsync(string id, GoalFields row,
+        JsonSerializerOptions options, CancellationToken cancellationToken, SqliteConnection? connection,
+        Action<GoalSnapshotReadObservation>? observer, Action? foundMarker = null, bool validateArchiveTimeline = true)
+    {
         if (row.Id != id) throw new InvalidDataException("Provider seed evidence goal identity mismatch.");
         var tasks = new List<ProviderUsageTaskEvidence>();
         var store = new GoalTaskHistoryStore(options);
-        foreach (var task in row.IsMetadataOnly ? [] : row.Tasks ?? [])
+        var fields = row.IsMetadataOnly ? [] : row.Tasks ?? [];
+        var histories = await store.ReadProjectionAsync(connection, id, fields.Select(task =>
+            (task.Id, task.HistoryInTable)).ToArray(), cancellationToken);
+        for (var index = 0; index < fields.Count; index++)
         {
-            var history = await store.ReadAsync(connection, id, task.Id, task.VerificationEntries,
-                task.DispatchEntries, task.HistoryInTable, cancellationToken);
+            var task = fields[index];
+            var history = histories[index];
             tasks.Add(new ProviderUsageTaskEvidence(
                 task.Id, task.RequiredRole, task.Status, task.AssignedAgentId,
-                history.LatestDispatch.ValueKind != JsonValueKind.Undefined
-                    ? history.LatestDispatch.Deserialize<DispatchFields>(options)!.Snapshot() : task.LastDispatch?.Snapshot(),
-                history.Dispatch.Entries.Select(dispatch => dispatch.Deserialize<DispatchFields>(options)!.Snapshot()).ToArray(),
-                history.LatestVerification.ValueKind != JsonValueKind.Undefined
-                    ? history.LatestVerification.Deserialize<TaskVerificationSnapshot>(options) : task.LastVerification,
-                history.Verification.Entries.Select(entry => entry.Deserialize<TaskVerificationSnapshot>(options)!).ToArray(),
-                task.LatestProviderBudgetRecoveryAt));
+                history is { LatestDispatchInTable: true }
+                    ? ProjectDispatch(history.Dispatches[^1]) : task.LastDispatch?.Snapshot(),
+                history is null ? (task.DispatchHistory ?? []).Select(dispatch => dispatch.Snapshot()).ToArray()
+                    : history.Dispatches.Select(ProjectDispatch).ToArray(),
+                history is { LatestVerificationInTable: true }
+                    ? history.Verifications[^1] : task.LastVerification,
+                history?.Verifications ?? task.VerificationHistory ?? [],
+                task.LatestProviderBudgetRecoveryAt) { LastProcess = task.LastProcess });
         }
-        var timeline = row.IsMetadataOnly ? [] : row.TimelineInTable.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
-            ? row.Timeline ?? [] : (await new GoalTimelineStore(options).ReadAsync(
-                connection, id, default, row.TimelineInTable, cancellationToken))
-                .Select(entry => entry.Deserialize<EventFields>(options)!).ToArray();
-        return new(id, row.Status, tasks,
-            timeline.Select(evt => new ProgressEvent(new GoalId(id),
-                evt.TaskId is { } taskId ? new TaskId(taskId) : null, evt.Kind, evt.Message, evt.OccurredAt,
-                OperatorIntentCreatedAt: evt.OperatorIntentCreatedAt)).Where(Relevant).ToArray());
+        // Discovery can defer marker-free sidecars until their archive is selected for replay.
+        var deferredTimeline = !row.IsMetadataOnly && !validateArchiveTimeline &&
+            row.TimelineInTable.ValueKind == JsonValueKind.Number && row.TimelineInTable.TryGetInt32(out var count) &&
+            count >= 0 && !tasks.Any(task => task.VerificationHistory.Append(task.LastVerification)
+                .Any(ProviderHoldSeedDiscovery.IsRefusal));
+        var timeline = row.IsMetadataOnly || deferredTimeline ? []
+            : row.TimelineInTable.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null ? row.Timeline ?? []
+            : await ReadSidecarTimelineAsync(connection, id, row.TimelineInTable, options, cancellationToken, observer);
+        if (foundMarker is not null && timeline.Any(evt => evt.Message?.StartsWith("PROVIDER_BUDGET_", StringComparison.Ordinal) == true))
+            foundMarker();
+        return new(new(id, row.Status, tasks, ProjectTimeline(id, timeline)),
+            deferredTimeline ? row.TimelineInTable : null);
     }
 
+    internal static async Task<ProviderUsageGoalEvidence> CompleteArchiveProjectionAsync(
+        SqliteConnection connection, ArchiveProjection archive, JsonSerializerOptions options,
+        CancellationToken cancellationToken, Action<GoalSnapshotReadObservation>? observer)
+    {
+        if (archive.DeferredTimeline is not { } marker) return archive.Evidence;
+        var id = archive.Evidence.GoalId;
+        var timeline = await ReadSidecarTimelineAsync(connection, id, marker, options, cancellationToken, observer);
+        return archive.Evidence with { Timeline = ProjectTimeline(id, timeline) };
+    }
+
+    private static async Task<EventFields[]> ReadSidecarTimelineAsync(SqliteConnection? connection, string id,
+        JsonElement marker, JsonSerializerOptions options, CancellationToken cancellationToken,
+        Action<GoalSnapshotReadObservation>? observer) =>
+        (await new GoalTimelineStore(options).ReadAsync(connection, id, default, marker, cancellationToken,
+            TimelineSelectionSql, observer is null ? null : size => observer(new("provider-seed-timeline-entry", id, size))))
+            .Select(entry => entry.Deserialize<EventFields>(options)!).ToArray();
+
+    private static ProgressEvent[] ProjectTimeline(string id, IEnumerable<EventFields> timeline) =>
+        timeline.Select(evt => new ProgressEvent(new GoalId(id),
+            evt.TaskId is { } taskId ? new TaskId(taskId) : null, evt.Kind, evt.Message, evt.OccurredAt,
+            OperatorIntentCreatedAt: evt.OperatorIntentCreatedAt)).Where(Relevant).ToArray();
+
+    internal sealed record ArchiveProjection(ProviderUsageGoalEvidence Evidence, JsonElement? DeferredTimeline);
+
+    private static TaskDispatchSnapshot ProjectDispatch(TaskDispatchSnapshot dispatch) =>
+        new(dispatch.WorkerName, dispatch.Command, dispatch.WorkingDirectory, dispatch.DispatchedAt,
+            ProviderName: dispatch.ProviderName, ModelName: dispatch.ModelName,
+            ClaudeCredentialSourceDirectory: dispatch.ClaudeCredentialSourceDirectory,
+            ClaudeApiHoldIdentity: dispatch.ClaudeApiHoldIdentity);
+
+    private static readonly ProgressKind[] ReplayTransitions =
+        [ProgressKind.TaskRedelegated, ProgressKind.ProviderHoldSubstituted, ProgressKind.ProviderCapabilitySubstituted, ProgressKind.TaskCancelled];
+
+    private static readonly string TimelineSelectionSql = $"""
+        json_extract(entry_json, '$.Message') GLOB 'PROVIDER_BUDGET_*'
+        OR trim(json_extract(entry_json, '$.Kind')) COLLATE NOCASE IN ({string.Join(", ",
+            ReplayTransitions.SelectMany(kind => new[] { $"'{kind}'", $"'{(int)kind}'" }))})
+        """;
+
     private static bool Relevant(ProgressEvent evt) =>
-        evt.Kind is ProgressKind.TaskRedelegated or ProgressKind.ProviderHoldSubstituted or
-            ProgressKind.ProviderCapabilitySubstituted or ProgressKind.TaskCancelled ||
+        ReplayTransitions.Contains(evt.Kind) ||
         ProviderBudgetHoldSchedules.TryParseProbe(evt, out _) || ProviderBudgetHoldSchedules.TryParseReset(evt, out _) ||
         ProviderBudgetHoldSchedules.TryParseStandaloneResult(evt, out _);
 
-    private sealed record GoalFields(string Id, GoalStatus Status, bool IsMetadataOnly,
+    internal sealed record GoalFields(string Id, GoalStatus Status, bool IsMetadataOnly,
         IReadOnlyList<TaskFields>? Tasks, IReadOnlyList<EventFields>? Timeline, JsonElement TimelineInTable);
 
-    private sealed record EventFields(string? TaskId, ProgressKind Kind, string Message,
+    internal sealed record EventFields(string? TaskId, ProgressKind Kind, string Message,
         DateTimeOffset OccurredAt, DateTimeOffset? OperatorIntentCreatedAt);
 
     // Verification records remain intact: TaskSpec owns bounded history retention and same-round
     // enrichment. Stripping their identity/enrichment fields could merge different observations.
-    private sealed record TaskFields(string Id, AgentRole RequiredRole, WorkTaskStatus Status, string? AssignedAgentId,
+    internal sealed record TaskFields(string Id, AgentRole RequiredRole, WorkTaskStatus Status, string? AssignedAgentId,
         DispatchFields? LastDispatch,
-        [property: JsonPropertyName(GoalTaskHistoryStore.DispatchProperty)] JsonElement DispatchEntries,
+        IReadOnlyList<DispatchFields>? DispatchHistory,
         TaskVerificationSnapshot? LastVerification,
-        [property: JsonPropertyName(GoalTaskHistoryStore.VerificationProperty)] JsonElement VerificationEntries,
+        IReadOnlyList<TaskVerificationSnapshot>? VerificationHistory,
         JsonElement HistoryInTable,
-        DateTimeOffset? LatestProviderBudgetRecoveryAt);
+        DateTimeOffset? LatestProviderBudgetRecoveryAt, TaskProcessSnapshot? LastProcess);
 
-    private sealed record DispatchFields(string WorkerName, string Command, string WorkingDirectory,
-        DateTimeOffset DispatchedAt, string? ProviderName, string? ClaudeCredentialSourceDirectory)
+    internal sealed record DispatchFields(string WorkerName, string Command, string WorkingDirectory,
+        DateTimeOffset DispatchedAt, string? ProviderName, string? ClaudeCredentialSourceDirectory,
+        string? ModelName, string? ClaudeApiHoldIdentity)
     {
         internal TaskDispatchSnapshot Snapshot() => new(WorkerName, Command, WorkingDirectory, DispatchedAt,
-            ProviderName: ProviderName, ClaudeCredentialSourceDirectory: ClaudeCredentialSourceDirectory);
+            ProviderName: ProviderName, ModelName: ModelName, ClaudeCredentialSourceDirectory: ClaudeCredentialSourceDirectory,
+            ClaudeApiHoldIdentity: ClaudeApiHoldIdentity);
+    }
+
+    // Availability replay uses the verdict and attempt identity. A zero-exit receipt
+    // cannot be a refusal, and authoritative text is outside its same-round identity.
+    private sealed class ArchiveVerificationConverter(JsonSerializerOptions options) : JsonConverter<TaskVerificationSnapshot>
+    {
+        public override TaskVerificationSnapshot? Read(ref Utf8JsonReader reader, Type typeToConvert,
+            JsonSerializerOptions serializerOptions)
+        {
+            var probe = reader;
+            while (probe.Read() && probe.TokenType == JsonTokenType.PropertyName)
+            {
+                var isExitCode = probe.ValueTextEquals(nameof(TaskVerificationSnapshot.ExitCode));
+                if (!probe.Read()) break;
+                if (isExitCode && probe.TokenType == JsonTokenType.Number &&
+                    probe.TryGetInt32(out var exitCode) && exitCode == 0)
+                {
+                    var compact = reader;
+                    var verification = JsonSerializer.Deserialize<AvailabilityFields>(ref compact, options);
+                    if (verification is { ExitCode: 0 })
+                    {
+                        reader = compact;
+                        return verification.Snapshot();
+                    }
+                    break;
+                }
+                if (isExitCode || !probe.TrySkip()) break;
+            }
+            return JsonSerializer.Deserialize<TaskVerificationSnapshot>(ref reader, options);
+        }
+
+        public override void Write(Utf8JsonWriter writer, TaskVerificationSnapshot value,
+            JsonSerializerOptions serializerOptions) => JsonSerializer.Serialize(writer, value, options);
+    }
+
+    // Keep the round identity, dispatch match, and verdict of a zero-exit receipt.
+    // Finding-evidence receipts also protect the round when TaskSpec caps its history.
+    private sealed record AvailabilityFields(
+        string Command, string WorkingDirectory, int ExitCode, string StandardOutput, string StandardError,
+        DateTimeOffset CompletedAt, string? StandardOutputPath, string? StandardErrorPath,
+        ProviderFailureKind ProviderFailureKind, string? ReviewedCommit, bool WorkerResultPresent,
+        DateTimeOffset? DispatchStartedAt, int? ChildProcessId, int? ChildExitCode,
+        IReadOnlyList<FindingEvidenceReceipt>? FindingEvidenceReceipts,
+        bool CompletionVerdictVerifiedSuccess, string? CompletionVerdictRule,
+        VerificationEvidenceSource EvidenceSource, DateTimeOffset? DispatchAttemptAt, string? OrchestratorFailureReason)
+    {
+        internal TaskVerificationSnapshot Snapshot() =>
+            new(Command, WorkingDirectory, ExitCode, StandardOutput, StandardError, CompletedAt,
+                StandardOutputPath: StandardOutputPath, StandardErrorPath: StandardErrorPath,
+                ProviderFailureKind: ProviderFailureKind, ReviewedCommit: ReviewedCommit, WorkerResultPresent: WorkerResultPresent,
+                DispatchStartedAt: DispatchStartedAt, ChildProcessId: ChildProcessId, ChildExitCode: ChildExitCode,
+                FindingEvidenceReceipts: FindingEvidenceReceipts,
+                CompletionVerdictVerifiedSuccess: CompletionVerdictVerifiedSuccess, CompletionVerdictRule: CompletionVerdictRule,
+                EvidenceSource: EvidenceSource, DispatchAttemptAt: DispatchAttemptAt, OrchestratorFailureReason: OrchestratorFailureReason);
     }
 }
