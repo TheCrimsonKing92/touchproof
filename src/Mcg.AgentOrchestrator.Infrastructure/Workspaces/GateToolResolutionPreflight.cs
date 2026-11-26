@@ -7,9 +7,9 @@ internal static class GateToolResolutionPreflight
 {
     internal const string MissingToolsReasonCode = "gate-tool-resolution-missing";
     private static readonly string[] RequiredTools = ["powershell", "cmd", "chcp", "git", "dotnet"];
-    private static readonly AsyncLocal<GateToolResolutionResult?> AttemptResult = new();
+    private static readonly AsyncLocal<AttemptContext?> Attempt = new();
 
-    internal static GateToolResolutionResult? Current => AttemptResult.Value;
+    internal static GateToolResolutionResult? Current => Attempt.Value?.Result;
 
     internal static GateToolResolutionResult? Evaluate(
         IEnumerable<KeyValuePair<string, string?>> environment, string workingDirectory)
@@ -59,12 +59,28 @@ internal static class GateToolResolutionPreflight
     {
         if (!OperatingSystem.IsWindows()) return null;
 
+        workingDirectory = Path.GetFullPath(workingDirectory);
         var environment = createEnvironment?.Invoke() ?? new ProcessStartInfo().Environment;
         AcceptanceHermeticEnvironment.ConfigureHermeticVerificationEnvironment(environment, workingDirectory);
-        return EnterAttempt(EnsureToolsResolve(environment, Path.GetFullPath(workingDirectory)));
+        return new AttemptScope(new(createEnvironment, workingDirectory, EnsureToolsResolve(environment, workingDirectory)));
     }
 
-    internal static IDisposable EnterAttempt(GateToolResolutionResult? result) => new AttemptScope(result);
+    // A focused arm supplies its working directory once its checkout is ready.
+    internal static IDisposable? BeginFocusedAttempt(Func<IDictionary<string, string?>>? createEnvironment) =>
+        OperatingSystem.IsWindows() ? new AttemptScope(new(createEnvironment, null, null)) : null;
+
+    internal static IDisposable? EnterFocusedArm(string workingDirectory)
+    {
+        if (Attempt.Value is not { } attempt) return null;
+        if (string.Equals(attempt.WorkingDirectory, Path.GetFullPath(workingDirectory), StringComparison.OrdinalIgnoreCase))
+            return null;
+        return EnterHermeticAttempt(workingDirectory, attempt.CreateEnvironment);
+    }
+
+    internal static bool IsMissingToolsFailure(Exception exception) =>
+        exception is AcceptanceInfrastructureDeferredException { ReasonCode: MissingToolsReasonCode };
+
+    internal static IDisposable EnterAttempt(GateToolResolutionResult? result) => new AttemptScope(new(null, null, result));
 
     private static string? ReadVariable(IEnumerable<KeyValuePair<string, string?>> environment, string name) =>
         environment.LastOrDefault(pair => pair.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Value;
@@ -77,16 +93,21 @@ internal static class GateToolResolutionPreflight
         return directory[..Math.Max(rootLength, directory.TrimEnd('\\', '/').Length)];
     }
 
+    private sealed record AttemptContext(
+        Func<IDictionary<string, string?>>? CreateEnvironment,
+        string? WorkingDirectory,
+        GateToolResolutionResult? Result);
+
     private sealed class AttemptScope : IDisposable
     {
-        private readonly GateToolResolutionResult? _previous = Current;
+        private readonly AttemptContext? _previous = Attempt.Value;
 
-        internal AttemptScope(GateToolResolutionResult? result)
+        internal AttemptScope(AttemptContext context)
         {
-            AttemptResult.Value = result;
+            Attempt.Value = context;
         }
 
-        public void Dispose() => AttemptResult.Value = _previous;
+        public void Dispose() => Attempt.Value = _previous;
     }
 }
 

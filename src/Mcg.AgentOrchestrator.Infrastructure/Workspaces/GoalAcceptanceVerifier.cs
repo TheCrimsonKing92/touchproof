@@ -1059,11 +1059,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 cancellationToken,
                 classifyMissingSelectionsAsAbsent: true).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException && !GateToolResolutionPreflight.IsMissingToolsFailure(ex))
         {
             foreach (var item in prepared)
             {

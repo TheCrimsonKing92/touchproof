@@ -1747,10 +1747,12 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             Timeout.InfiniteTimeSpan);
         try
         {
-            var workingDirectory = !string.IsNullOrWhiteSpace(attempt.ExecutionDirectory)
+            var executionDirectory = !string.IsNullOrWhiteSpace(attempt.ExecutionDirectory)
                 ? attempt.ExecutionDirectory : _executionDirectory ?? _rootDirectory;
-            using var toolResolution = GateToolResolutionPreflight.EnterHermeticAttempt(
-                workingDirectory, _createGateToolEnvironmentForTests);
+            using var toolResolution = string.Equals(attempt.Kind, PreReviewEvidenceDispatchKind, StringComparison.Ordinal)
+                ? GateToolResolutionPreflight.BeginFocusedAttempt(_createGateToolEnvironmentForTests)
+                : GateToolResolutionPreflight.EnterHermeticAttempt(
+                    GoalWorktreeLayout.WorktreePath(executionDirectory, candidate.Goal.Id), _createGateToolEnvironmentForTests);
             WriteHeartbeat(attempt, "running");
             heartbeatTimer.Change(_heartbeatInterval, _heartbeatInterval);
             run = string.Equals(attempt.Kind, GateDispatchKind, StringComparison.Ordinal)
