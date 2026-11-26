@@ -66,7 +66,7 @@ internal interface IOwnedRunRootRegistrar
 
 internal interface IOwnedRunRootStore : IOwnedRunRootRegistrar
 {
-    IReadOnlyList<OwnedRunRootEntry> ReadBatch(long afterId, int maxCount, DateTimeOffset now);
+    IReadOnlyList<OwnedRunRootEntry> ReadBatch(long afterId, int maxCount, DateTimeOffset now, DotnetBuildStorageRoot? storageRoot = null);
     IReadOnlySet<string> ReadRegisteredPaths(IReadOnlyList<string> canonicalPaths);
 }
 
@@ -218,11 +218,15 @@ internal sealed class OwnedRunRootRegistry(string dbPath) : IOwnedRunRootStore
         });
     }
 
-    public IReadOnlyList<OwnedRunRootEntry> ReadBatch(long afterId, int maxCount, DateTimeOffset now)
+    public IReadOnlyList<OwnedRunRootEntry> ReadBatch(long afterId, int maxCount, DateTimeOffset now, DotnetBuildStorageRoot? storageRoot = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(afterId);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxCount, 1);
         using var connection = OpenReadConnection();
+        // A shared registry can contain other storage namespaces. Filter before LIMIT so
+        // foreign due retries cannot displace this reaper's eligible work.
+        connection.CreateFunction<string, bool>("in_storage_root",
+            path => storageRoot is null || storageRoot.ContainsPath(path), isDeterministic: true);
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT id, canonical_path, purpose, owner_process_id, owner_process_started_at,
@@ -233,6 +237,7 @@ internal sealed class OwnedRunRootRegistry(string dbPath) : IOwnedRunRootStore
             WHERE cleanup_state <> $removed
               AND (id > $after_id OR cleanup_state = $blocked)
               AND (next_attempt_after IS NULL OR next_attempt_after <= $now)
+              AND in_storage_root(canonical_path)
             ORDER BY CASE WHEN cleanup_state = $blocked THEN 0 ELSE 1 END,
                      CASE WHEN cleanup_state = $blocked THEN next_attempt_after END,
                      id
