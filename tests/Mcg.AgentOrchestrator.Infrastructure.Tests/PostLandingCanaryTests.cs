@@ -841,6 +841,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             root, "src", "Mcg.AgentOrchestrator.App", "Orchestration", "ConductorBatchLoop.cs"));
         var acceptance = File.ReadAllText(Path.Combine(
             root, "src", "Mcg.AgentOrchestrator.App", "Cli", "CliCommandHandlers.Goals.Acceptance.cs"));
+        var workspaceMerge = File.ReadAllText(Path.Combine(
+            root, "src", "Mcg.AgentOrchestrator.App", "Cli", "CliWorkspaceMerge.cs"));
         var workspace = File.ReadAllText(Path.Combine(
             root, "src", "Mcg.AgentOrchestrator.App", "Cli", "CliCommandHandlers.Goals.Workspace.cs"));
         var goals = File.ReadAllText(Path.Combine(
@@ -850,16 +852,21 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
 
         Assert.Contains("_postLandingCanary.LaunchLandingAsync(receipt)", conductor, StringComparison.Ordinal);
         Assert.Contains("driver.LandingMutationBlocker", conductor, StringComparison.Ordinal);
-        Assert.Contains("RunPostLandingCanary(context, goal, landingChangedFiles)", acceptance, StringComparison.Ordinal);
-        Assert.Contains("BuildMutationBlockReason(context.Workspace)", acceptance, StringComparison.Ordinal);
-        Assert.Contains("PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(", workspace, StringComparison.Ordinal);
+        Assert.Contains("CliWorkspaceMerge.RunPostLandingCanary(", acceptance, StringComparison.Ordinal);
+        Assert.Contains("CliWorkspaceMerge.FinalizeAcceptance(context, goal,", acceptance, StringComparison.Ordinal);
+        Assert.Matches(
+            @"MergeWithPublication\(context, goal, out publication,\s*" +
+            @"\(\) => PostLandingCanaryFactory\.BuildMutationBlockReason\(context\.Workspace\),",
+            workspaceMerge);
+        Assert.Contains("CliWorkspaceMerge.CompleteWorkspaceMerge(context, goal, merge, publication)", workspace, StringComparison.Ordinal);
+        Assert.Contains("RunPostLandingCanary(context, goal, mergeChangedFiles, merge.FastForwardReceipt)", workspaceMerge, StringComparison.Ordinal);
         Assert.Contains("BuildMutationBlockReason(context.Workspace)", workspace, StringComparison.Ordinal);
-        Assert.Contains("var mergeChangedFiles = merge.ChangedFiles", workspace, StringComparison.Ordinal);
+        Assert.Contains("var mergeChangedFiles = merge.ChangedFiles", workspaceMerge, StringComparison.Ordinal);
         Assert.Contains("return CliLandCommand.Execute(parts, context);", goals, StringComparison.Ordinal);
         Assert.Contains("mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason", land, StringComparison.Ordinal);
         Assert.Contains("var landChangedFiles = landResult.ChangedFiles", land, StringComparison.Ordinal);
         Assert.Contains("PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(", land, StringComparison.Ordinal);
-        Assert.Contains("PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(", acceptance, StringComparison.Ordinal);
+        Assert.Contains("PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(", workspaceMerge, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Post-main factory failure is nonblocking, fails closed, and raises an operator item")]

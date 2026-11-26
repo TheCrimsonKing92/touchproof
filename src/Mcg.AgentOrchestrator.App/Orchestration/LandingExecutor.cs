@@ -43,20 +43,24 @@ internal static partial class LandingExecutor
     private const string MutationHoldReasonPrefix = "landing mutation blocked:";
     private const string PostLandingConfirmationReasonPrefix =
         "goal landed previously, then post-landing confirmation failed:";
-    private static readonly AsyncLocal<Func<string, string[], GitCli.GitResult>?> GitRunnerOverride = new();
+    private static readonly AsyncLocal<LandingGitRunner?> GitRunnerOverride = new();
 
-    internal static Func<string, string[], GitCli.GitResult> GitRunner => GitRunnerOverride.Value ?? GitCli.Run;
+    internal static Func<string, string[], GitCli.GitResult> GitRunner => GitRunnerOverride.Value?.Run ?? GitCli.Run;
 
     // Scopes follow normal ExecutionContext inheritance and are disposed in reverse creation order in the owning flow.
-    internal static IDisposable UseGitRunner(Func<string, string[], GitCli.GitResult> runner)
+    internal static IDisposable UseGitRunner(Func<string, string[], GitCli.GitResult> runner,
+        Func<string, string, string[], GitCli.GitResult>? standardInputRunner = null)
     {
         ArgumentNullException.ThrowIfNull(runner);
         var scope = new GitRunnerScope(GitRunnerOverride.Value);
-        GitRunnerOverride.Value = runner;
+        GitRunnerOverride.Value = new(runner, standardInputRunner);
         return scope;
     }
 
-    private sealed class GitRunnerScope(Func<string, string[], GitCli.GitResult>? previous) : IDisposable
+    private sealed record LandingGitRunner(Func<string, string[], GitCli.GitResult> Run,
+        Func<string, string, string[], GitCli.GitResult>? RunWithInput);
+
+    private sealed class GitRunnerScope(LandingGitRunner? previous) : IDisposable
     {
         private int disposed;
 
@@ -196,6 +200,30 @@ internal static partial class LandingExecutor
 
         var evidenceCandidateSha = ResolveRef(executionDirectory, goalBranch);
         var boundMainRevision = ResolveRef(executionDirectory, workspace.IntegrationBranch);
+        var repairStorePath = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        SoloBaselineRepairStore? repairStore = null;
+        const string staleRepairEvidence = "the revision pair changed after baseline repair validation or normal acceptance";
+        string? RepairAdmissionBlocker(string staleEvidenceReason)
+        {
+            if (repairStore is null && File.Exists(repairStorePath)) repairStore = new SoloBaselineRepairStore(repairStorePath);
+            if (repairStore is null) return null;
+            var findings = SoloBaselineRepairCoordinator.SoloRepairFindings(repairStore, goal, evidenceCandidateSha, boundMainRevision);
+            if (findings.Count == 0) return null;
+            if (!repairStore.IsEvidenceCurrent(goal.Id.Value, findings, evidenceCandidateSha, boundMainRevision))
+                return staleEvidenceReason;
+
+            var normalGate = SoloBaselineRepairCoordinator.ReadNormalGate(executionDirectory, repairStore, goal,
+                new(evidenceCandidateSha, boundMainRevision));
+            if (!normalGate.Acknowledged)
+                return normalGate.Blocker ?? "normal acceptance is pending for the current revision pair";
+
+            return ResolveRef(executionDirectory, goalBranch) == evidenceCandidateSha &&
+                ResolveRef(executionDirectory, workspace.IntegrationBranch) == boundMainRevision
+                ? null : staleEvidenceReason;
+        }
+        if (RepairAdmissionBlocker("the current revision pair needs baseline repair validation and normal acceptance") is { } repairBlocker)
+            return BuildMutationBlockedResult(goal, goalPrefix, repairBlocker);
+
         if (MultiRepositoryGoal.Applies(goal))
         {
             var tupleReceipt = new MultiRepositoryAcceptanceReceiptStore(workspace.OrchestratorDirectory).TryRead(goal.Id);
@@ -267,7 +295,9 @@ internal static partial class LandingExecutor
 
         if (PullRequestLandingDelivery.Applies(workspace))
             return PullRequestLandingDelivery.Deliver(kernel, goal, workspace, evidenceCandidateSha,
-                pullRequestPublisher ?? new GitHubPullRequestPublisher(new ForgeProcessRunner()), eventWriter, mutationBlocker, promotionClock ?? new SystemClock());
+                pullRequestPublisher ?? new GitHubPullRequestPublisher(new ForgeProcessRunner()), eventWriter, mutationBlocker,
+                promotionClock ?? new SystemClock(),
+                () => RepairAdmissionBlocker(staleRepairEvidence));
 
         var previousIntegrationRevision = TryResolveBranch(executionDirectory, IntegrationBranchName);
         var integrationDiverged = previousIntegrationRevision is not null &&
@@ -318,6 +348,7 @@ internal static partial class LandingExecutor
                     executionDirectory,
                     tempPath,
                     boundMainRevision,
+                    evidenceCandidateSha,
                     goalBranch,
                     out candidateRevision,
                     out var preparationFailure))
@@ -375,6 +406,8 @@ internal static partial class LandingExecutor
 
         var publicationBlockReason = mutationBlocker?.Invoke();
         if (string.IsNullOrWhiteSpace(publicationBlockReason))
+            publicationBlockReason = RepairAdmissionBlocker(staleRepairEvidence);
+        if (string.IsNullOrWhiteSpace(publicationBlockReason))
             publicationBlockReason = EvaluatePendingHumanInput(
                 kernel, goal, workspace, evidenceCandidateSha).HoldDescription;
         if (!string.IsNullOrWhiteSpace(publicationBlockReason))
@@ -402,7 +435,9 @@ internal static partial class LandingExecutor
                 false, $"Parked on {IntegrationBranchName}: {reason}");
         }
 
-        var mainWrite = UpdateRef(executionDirectory, workspace.IntegrationBranch, candidateRevision!, boundMainRevision);
+        var publishRefs = $"verify refs/heads/{goalBranch} {evidenceCandidateSha}\n" +
+            $"update refs/heads/{workspace.IntegrationBranch} {candidateRevision} {boundMainRevision}\n";
+        var mainWrite = RunGitWithStandardInput(executionDirectory, publishRefs, "update-ref", "--stdin");
         if (mainWrite.ExitCode != 0)
         {
             var rollback = UpdateRef(executionDirectory, IntegrationBranchName, previousIntegrationRevision, candidateRevision!);
@@ -416,6 +451,10 @@ internal static partial class LandingExecutor
             if (rollback.ExitCode == 0)
             {
                 DeleteLandingAnchor(executionDirectory, goal, candidateRevision!);
+                if (ResolveRef(executionDirectory, goalBranch) != evidenceCandidateSha ||
+                    ResolveRef(executionDirectory, workspace.IntegrationBranch) != boundMainRevision)
+                    return BuildMutationBlockedResult(goal, goalPrefix,
+                        "the revision pair changed after baseline repair validation or normal acceptance");
             }
             var reason = $"main ref update failed: {FormatGitFailure(mainWrite)}; {rollbackDetail}";
             OperatorInbox.RecordLandingEscalation(workspace, goal, reason, IntegrationBranchName);
@@ -558,7 +597,7 @@ internal static partial class LandingExecutor
             Message: reason);
     }
 
-    private static bool HasAdmittedGoalLandedEvent(OrchestratorWorkspace workspace, GoalId goalId, string candidateSha)
+    internal static bool HasAdmittedGoalLandedEvent(OrchestratorWorkspace workspace, GoalId goalId, string candidateSha)
     {
         var path = Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{goalId.Value}.jsonl");
         if (!File.Exists(path)) return false;
@@ -570,6 +609,8 @@ internal static partial class LandingExecutor
                 using var document = JsonDocument.Parse(line);
                 var root = document.RootElement;
                 if (root.ValueKind == JsonValueKind.Object &&
+                    root.TryGetProperty("goalId", out var recordedGoal) && recordedGoal.ValueKind == JsonValueKind.String &&
+                    recordedGoal.GetString() == goalId.Value &&
                     root.TryGetProperty("eventType", out var eventType) &&
                     eventType.ValueKind == JsonValueKind.String &&
                     string.Equals(eventType.GetString(), "GoalLanded", StringComparison.OrdinalIgnoreCase) &&
@@ -1054,7 +1095,8 @@ internal static partial class LandingExecutor
         string executionDirectory,
         string tempPath,
         string boundMainRevision,
-        string goalBranch,
+        string acceptedCandidateRevision,
+        string integrationSubject,
         out string? candidateRevision,
         out string? failure)
     {
@@ -1067,7 +1109,7 @@ internal static partial class LandingExecutor
             return false;
         }
 
-        var mergeArgs = new List<string> { "merge", "--no-ff", goalBranch, "-m", $"Integrate {goalBranch}" };
+        var mergeArgs = new List<string> { "merge", "--no-ff", acceptedCandidateRevision, "-m", $"Integrate {integrationSubject}" };
         var goalTitleBody = OrchestratorCommitMessage.GoalTitleBody(goal);
         if (goalTitleBody is not null)
         {
@@ -1314,9 +1356,12 @@ internal static partial class LandingExecutor
         path.Replace('\\', '/').Trim().TrimStart('/');
 
     private static GitCli.GitResult RunGit(string workingDirectory, params string[] args) =>
-        GitRunnerOverride.Value is { } runner
-            ? runner(workingDirectory, args)
-            : GitCli.Run(workingDirectory, args);
+        GitRunner(workingDirectory, args);
+
+    private static GitCli.GitResult RunGitWithStandardInput(string workingDirectory, string input, params string[] args) =>
+        GitRunnerOverride.Value?.RunWithInput is { } runner
+            ? runner(workingDirectory, input, args)
+            : GitCli.RunWithStandardInput(workingDirectory, GitCli.DefaultTimeoutMilliseconds, input, args);
 
     // Counts DISTINCT tasks with genuine verification failures. A task whose only failures were
     // transient empty-output dispatch flakes and whose latest verification passed was auto-recovered

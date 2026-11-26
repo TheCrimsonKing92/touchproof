@@ -49,7 +49,12 @@ public sealed class PreReviewFocusedEvidenceVerifierTests : GoalAcceptanceVerifi
 
             Assert.True(result.Accepted);
             Assert.True(result.Passed);
-            Assert.Equal(FindingEvidenceArm.Candidate, Assert.Single(result.Arms!).Arm);
+            var candidate = Assert.Single(result.Arms!);
+            Assert.Equal(FindingEvidenceArm.Candidate, candidate.Arm);
+            Assert.Contains(candidate.Checks, check => check.TestProjectPath ==
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj");
+            Assert.Contains(candidate.Checks, check => check.TestProjectPath ==
+                "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj");
             var coreCall = calls.Single(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests"));
             Assert.DoesNotContain("--filter-class", coreCall);
             var infrastructureCall = calls.Single(call =>
