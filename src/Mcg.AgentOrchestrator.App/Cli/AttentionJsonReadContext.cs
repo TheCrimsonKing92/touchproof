@@ -10,7 +10,7 @@ internal sealed record AttentionJsonReadContext(
     IReadOnlyList<OwnerQuestionHoldBlocker> OwnerQuestions,
     IReadOnlyList<AttentionPostLandingDuty>? PostLandingDuties = null,
     IReadOnlyCollection<Goal>? Goals = null,
-    IReadOnlyList<PlannerBriefAmendmentRevisionPendingHold>? AmendmentHolds = null,
+    IReadOnlyList<PlannerBriefAmendmentHoldAttentionView.Wait>? AmendmentHolds = null,
     IReadOnlyList<AttentionGoalReadFacts>? GoalFacts = null)
 {
     internal static async Task<AttentionJsonReadContext> ReadAsync(IOrchestratorStateQueries queries,
@@ -88,10 +88,8 @@ internal sealed record AttentionJsonReadContext(
         var selection = AttentionReadGoalSelection.Select(metadataForSelection, currentWaits, [], items);
         // Kernel restore can repair a missing persisted request from a WaitingForHuman task.
         // Such owners are potential actionable evidence even with no request-table row.
-        var ids = selection.GoalIds.Concat(projection.Goals.Where(goal => goal.HasWaitingTasks &&
-                goal.Status is not (GoalStatus.Parked or GoalStatus.Completed or GoalStatus.Failed or
-                    GoalStatus.Cancelled or GoalStatus.Superseded))
-            .Select(goal => new GoalId(goal.GoalId))).Distinct().OrderBy(id => id.Value, StringComparer.Ordinal).ToArray();
+        var ids = selection.GoalIds.Concat(PlannerBriefAmendmentHoldAttentionView.CandidateGoalIds(projection))
+            .Distinct().OrderBy(id => id.Value, StringComparer.Ordinal).ToArray();
         var kernel = ids.Length == 0 ? new AgentOrchestratorKernel()
             : await queries.LoadGoalsAsync(ids, cancellationToken);
         IReadOnlyCollection<Goal> goals = kernel.Goals;
@@ -113,7 +111,7 @@ internal sealed record AttentionJsonReadContext(
                 facts.TryGetValue(hold.GoalId, out var owner) && owner.Status is not
                     (GoalStatus.Parked or GoalStatus.Failed or GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded))
                 .Select(ReadOwnerQuestion).ToArray(), projection.PostLandingDuties, goals,
-            PlannerBriefAmendmentHoldAttentionView.Holds(kernel, kernel.Goals), projection.Goals);
+            PlannerBriefAmendmentHoldAttentionView.Waits(kernel), projection.Goals);
         cancellationToken.ThrowIfCancellationRequested();
         return result;
     }
@@ -130,7 +128,7 @@ internal sealed record AttentionJsonReadContext(
             .Select(OwnerQuestionHoldBlocker.TryRead).OfType<OwnerQuestionHoldBlocker>().ToArray(),
         kernel.Goals.SelectMany(goal => goal.OutstandingPostLandingDuties
             .Select(item => new AttentionPostLandingDuty(goal.Id.Value, item))).ToArray(), kernel.Goals,
-        PlannerBriefAmendmentHoldAttentionView.Holds(kernel, kernel.Goals),
+        PlannerBriefAmendmentHoldAttentionView.Waits(kernel),
         kernel.Goals.Select(goal => new AttentionGoalReadFacts(goal.Id.Value, goal.Status,
             goal.AuthoritativeBrief.Version, SourceBacklogItemId: goal.SourceBacklogItemId, Title: goal.Objective)).ToArray());
 
