@@ -6,9 +6,10 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class AttentionShowDecisionsTextView
 {
-    internal static void PrintThenDuties(OrchestratorWorkspace workspace, IReadOnlyCollection<Goal> goals)
+    internal static void PrintThenDuties(OrchestratorWorkspace workspace, IReadOnlyCollection<Goal> goals,
+        IReadOnlySet<string>? parkedGoalIds)
     {
-        var decisions = OwnerDecisionReader.ReadAsync(OwnerQuestionReadModelFactory.ForWorkspace(workspace))
+        var decisions = OwnerDecisionReader.ReadAsync(OwnerQuestionReadModelFactory.ForWorkspace(workspace, parkedGoalIds))
             .GetAwaiter().GetResult();
         var now = TimeProvider.System.GetUtcNow();
         Console.WriteLine($"Decisions ({decisions.Entries.Count}):");

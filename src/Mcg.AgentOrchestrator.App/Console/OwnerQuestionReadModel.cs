@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class OwnerQuestionReadModel(
     IOrchestratorStateQueries state, string orchestratorDirectory,
     OwnerConsoleRefreshGoalSnapshots? snapshots = null, Func<string?>? changeMarker = null,
-    Func<string?>? stateMarker = null) : IOwnerQuestionSource
+    Func<string?>? stateMarker = null, IReadOnlySet<string>? excludedCollaborationGoalIds = null) : IOwnerQuestionSource
 {
     private readonly OwnerQuestionReadModelState _stateReader = new(state, snapshots);
     private OwnerQuestionSnapshot? _snapshot;
@@ -79,7 +79,8 @@ internal sealed class OwnerQuestionReadModel(
         {
             var store = CollaborationItemStore.OpenExisting(orchestratorDirectory);
             var items = await store.GetAttentionQueueAsync(cancellationToken);
-            foreach (var item in items.Where(item => !CollaborationItemLifecycle.IsTerminal(item.Status)))
+            foreach (var item in items.Where(item => !CollaborationItemLifecycle.IsTerminal(item.Status) &&
+                (item.GoalId is null || excludedCollaborationGoalIds?.Contains(item.GoalId) != true)))
             {
                 if (item.GoalId is not null &&
                     item.CorrelationKey?.StartsWith(PassedGateHoldAttention.Prefix, StringComparison.Ordinal) == true)

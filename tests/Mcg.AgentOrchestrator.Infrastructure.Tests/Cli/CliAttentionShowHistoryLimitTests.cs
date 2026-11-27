@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -107,18 +108,37 @@ public sealed class CliAttentionShowHistoryLimitTests : CliTaskQueryTestSupport,
     [InlineData("--all", "--limit", "5", "--limit", "6")]
     [InlineData("--all", "--limit=5")]
     [InlineData("--limit", "--all")]
-    public void InvalidLimitReportsShowUsage(params string[] args)
+    public async Task InvalidLimitReportsShowUsage(params string[] args)
     {
-        var fixture = CreateFixture();
-        var command = new[] { "attention", "show" }.Concat(args).ToArray();
-        var error = Assert.Throws<ArgumentException>(() =>
+        var start = new ProcessStartInfo("dotnet")
         {
-            CliCommandHelp.ThrowIfInvalidFlags(command);
-            ExecuteCliAndCapture(command, fixture.Kernel, fixture.Workspace);
-        });
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            WorkingDirectory = _root
+        };
+        start.ArgumentList.Add(typeof(CliArgumentParser).Assembly.Location);
+        start.ArgumentList.Add("attention");
+        start.ArgumentList.Add("show");
+        foreach (var arg in args)
+            start.ArgumentList.Add(arg);
+        start.Environment.Clear();
+        foreach (var name in new[] { "PATH", "SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP", "DOTNET_ROOT",
+            "USERPROFILE", "LOCALAPPDATA", "APPDATA" })
+            if (Environment.GetEnvironmentVariable(name) is { } value)
+                start.Environment[name] = value;
+        start.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = _root;
 
-        Assert.Contains("Usage: ", error.Message, StringComparison.Ordinal);
-        Assert.Contains("attention show [--all|--include-parked] [--limit <n>]", error.Message, StringComparison.Ordinal);
+        var result = await CliChildProcessRunner.RunAsync(start);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Empty(result.StandardOutput);
+        Assert.StartsWith("Error: ", result.StandardError);
+        Assert.Contains(Lines(result.StandardError), line =>
+            (line.StartsWith("Error: Usage: ", StringComparison.Ordinal) || line.StartsWith("Usage: ", StringComparison.Ordinal)) &&
+            line.Contains("attention show [--all|--include-parked] [--limit <n>]", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -150,8 +170,10 @@ public sealed class CliAttentionShowHistoryLimitTests : CliTaskQueryTestSupport,
         Assert.Equal(before, await Snapshot(fixture));
     }
 
-    [Fact]
-    public async Task HistoryAndInvalidLimitLeaveLegacyParkedStateUntouched()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ShowAndInvalidLimitLeaveLegacyParkedStateUntouched(bool scoped)
     {
         var fixture = CreateFixture();
         const string legacyQuestion = "Goal parked: stale_resurrected_sweep";
@@ -165,20 +187,21 @@ public sealed class CliAttentionShowHistoryLimitTests : CliTaskQueryTestSupport,
         Assert.Contains("Usage: attention show", error.Message, StringComparison.Ordinal);
         Assert.Equal(before, await Snapshot(fixture));
 
-        string[][] commands =
-        [
-            ["attention", "show", "--all"],
-            ["attention", "show", "--all", "--limit", "5", "--goal", GoalPrefix]
-        ];
-        foreach (var args in commands)
-        {
-            var result = ExecuteCliAndCaptureResult(args, fixture.Kernel, fixture.Workspace);
-            var lines = Lines(result.Output);
-            Assert.Contains(QuestionPrefix + legacyQuestion, lines);
-            Assert.Contains(SubjectPrefix + "Legacy item", lines);
-            Assert.False(result.Changed);
-            Assert.Equal(before, await Snapshot(fixture));
-        }
+        string[] defaultArgs = scoped ? ["attention", "show", "--goal", GoalPrefix] : ["attention", "show"];
+        var defaultResult = ExecuteCliAndCaptureResult(defaultArgs, fixture.Kernel, fixture.Workspace);
+        Assert.DoesNotContain(legacyQuestion, defaultResult.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Legacy item", defaultResult.Output, StringComparison.Ordinal);
+        if (scoped)
+            Assert.Contains($"No open attention items for goal {fixture.Goal.Id.Value}.", Lines(defaultResult.Output));
+        Assert.False(defaultResult.Changed);
+        Assert.Equal(before, await Snapshot(fixture));
+
+        var historyResult = ExecuteCliAndCaptureResult([.. defaultArgs, "--all", "--limit", "5"], fixture.Kernel, fixture.Workspace);
+        var historyLines = Lines(historyResult.Output);
+        Assert.Contains(QuestionPrefix + legacyQuestion, historyLines);
+        Assert.Contains(SubjectPrefix + "Legacy item", historyLines);
+        Assert.False(historyResult.Changed);
+        Assert.Equal(before, await Snapshot(fixture));
 
         Assert.False(wait.IsCompleted);
     }
