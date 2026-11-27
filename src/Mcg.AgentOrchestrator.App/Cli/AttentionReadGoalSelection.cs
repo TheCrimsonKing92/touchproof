@@ -11,26 +11,52 @@ internal static class AttentionReadGoalSelection
         value.Equals("--all", StringComparison.OrdinalIgnoreCase) ||
         value.Equals("--include-parked", StringComparison.OrdinalIgnoreCase);
 
-    internal static (bool IncludeHistory, string? GoalPrefix) ParseShowArgs(IReadOnlyList<string> parts)
+    internal static (bool IncludeHistory, string? GoalPrefix, AttentionHistoryLimit Limit) ParseShowArgs(
+        IReadOnlyList<string> parts)
     {
-        var args = parts.Skip(2).Where(part => !string.IsNullOrWhiteSpace(part)).ToList();
+        var args = new List<string>();
+        AttentionHistoryLimit? overrideLimit = null;
+        for (var index = 2; index < parts.Count; index++)
+        {
+            var arg = parts[index];
+            if (arg.Equals("--limit", StringComparison.OrdinalIgnoreCase))
+            {
+                if (overrideLimit is not null || index + 1 == parts.Count)
+                    throw new ArgumentException(CliCommandHelp.AttentionShowUsage);
+
+                overrideLimit = AttentionHistoryLimit.Parse(parts[++index]);
+            }
+            else if (arg.StartsWith("--limit=", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException(CliCommandHelp.AttentionShowUsage);
+            }
+            else if (!string.IsNullOrWhiteSpace(arg))
+            {
+                args.Add(arg);
+            }
+        }
+
         var includeHistory = args.RemoveAll(IsAttentionAllFlag) > 0;
+        if (overrideLimit is not null && !includeHistory)
+            throw new ArgumentException(CliCommandHelp.AttentionShowUsage);
+
+        var limit = overrideLimit ?? AttentionHistoryLimit.Default;
         if (args.Count == 0)
         {
-            return (includeHistory, null);
+            return (includeHistory, null, limit);
         }
 
         if (args[0].Equals("--goal", StringComparison.OrdinalIgnoreCase))
         {
             if (args.Count < 2)
             {
-                throw new ArgumentException("Usage: attention show [--all|--include-parked] [--goal] <goal-id-prefix>");
+                throw new ArgumentException(CliCommandHelp.AttentionShowUsage);
             }
 
-            return (includeHistory, args[1]);
+            return (includeHistory, args[1], limit);
         }
 
-        return (includeHistory, args[0]);
+        return (includeHistory, args[0], limit);
     }
 
     internal static IReadOnlyList<GoalId>? ReadPostLandingDutyGoalIds(
