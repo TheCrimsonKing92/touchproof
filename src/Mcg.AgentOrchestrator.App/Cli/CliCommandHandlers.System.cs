@@ -52,30 +52,16 @@ internal static partial class CliCommandHandlers
     }
 
     private static (IReadOnlyList<CollaborationItem> Remaining, bool PrintedCrossGoal) PrintCrossGoalAttentionItems(
-        AgentOrchestratorKernel kernel, CollaborationItemStore store)
+        AgentOrchestratorKernel kernel, CollaborationItemStore store, IReadOnlySet<string>? parkedGoalIds = null)
     {
         var queue = CollaborationItemsForAttention(store.GetAttentionQueueAsync().GetAwaiter().GetResult(),
             kernel, null, includeHistory: false);
+        if (parkedGoalIds is { Count: > 0 })
+            queue = queue.Where(item => item.GoalId is null || !parkedGoalIds.Contains(item.GoalId)).ToList();
         var crossGoalItems = queue.Where(item => item.GoalId is null).ToList();
         if (crossGoalItems.Count == 0) return (queue, false);
         CollaborationItemsTextView.PrintAttentionQueue(crossGoalItems);
         return (queue.Where(item => item.GoalId is not null).ToList(), true);
-    }
-
-    private static int ResolveParkedAttentionItems(AgentOrchestratorKernel kernel, CollaborationItemStore store)
-    {
-        var resolved = 0;
-        foreach (var goal in kernel.Goals.Where(goal => goal.Status == GoalStatus.Parked))
-        {
-            var resolution = goal.Timeline
-                .LastOrDefault(evt =>
-                    evt.Kind == ProgressKind.GoalPolicyDecision &&
-                    GoalParkResolution.IsParkResolution(evt.Message))
-                ?.Message ?? GoalParkResolution.Fallback;
-            resolved += store.ResolveOpenForGoalAsync(goal.Id.Value, resolution).GetAwaiter().GetResult();
-        }
-
-        return resolved;
     }
 
     private static CollaborationItem ResolveClarificationByShortId(
@@ -265,6 +251,10 @@ internal static partial class CliCommandHandlers
 
             case "attention":
             {
+                (bool IncludeHistory, string? GoalPrefix, AttentionHistoryLimit Limit)? showArgs =
+                    parts.Count > 1 && parts[1].Equals("show", StringComparison.OrdinalIgnoreCase)
+                        ? AttentionReadGoalSelection.ParseShowArgs(parts)
+                        : null;
                 var store = context.IsReadOnlyQuery
                     ? CollaborationItemStore.OpenExisting(context.Workspace.OrchestratorDirectory)
                     : CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
@@ -277,100 +267,105 @@ internal static partial class CliCommandHandlers
 
                 // `attention show [--goal] <goal-id-prefix>`: list open typed human waits plus the same
                 // nonterminal Decision/Clarification/Verify queue the board counts. Spec-clarification
-                // rows keep short ids so `attention answer` still works. `--all` remains history.
-                if (parts.Count > 1 && parts[1].Equals("show", StringComparison.OrdinalIgnoreCase))
+                // rows keep short ids so `attention answer` still works.
+                if (showArgs is { } parsed)
                 {
-                    var showMigratedHumanWaits = context.IsReadOnlyQuery ? 0 : context.Kernel.SweepParkedGoalHumanWaits();
-                    var showMigratedCollaborationItems = context.IsReadOnlyQuery ? 0 : ResolveParkedAttentionItems(context.Kernel, store);
-                    var (includeHistory, goalPrefix) = AttentionReadGoalSelection.ParseShowArgs(parts);
+                    var (includeHistory, goalPrefix, limit) = parsed;
+                    // Project the writer fallback's legacy park sweep onto display rows only.
+                    var parkedResolutions = context.IsReadOnlyQuery ? [] : AttentionShowParkedState.ReadResolutions(context.Kernel);
+                    var parkedGoalIds = !includeHistory && parkedResolutions.Count > 0
+                        ? parkedResolutions.Keys.ToHashSet(StringComparer.Ordinal) : null;
                     var showNow = DateTimeOffset.UtcNow;
-                    var changed = showMigratedHumanWaits > 0 || showMigratedCollaborationItems > 0;
 
                     if (goalPrefix is null)
                     {
                         (IReadOnlyList<CollaborationItem> remainingShowQueue, bool printedShowCrossGoal) = includeHistory
-                            ? ([], false) : PrintCrossGoalAttentionItems(context.Kernel, store);
-                        AttentionShowDecisionsTextView.PrintThenDuties(context.Workspace, context.Kernel.Goals);
+                            ? ([], false) : PrintCrossGoalAttentionItems(context.Kernel, store, parkedGoalIds);
+                        AttentionShowParkedState.PrintDecisions(context.Workspace, context.Kernel.Goals, store, parkedResolutions, showNow);
                         var environmentHeld = EnvironmentHoldAttentionView.Print(context.Kernel.Goals);
-                        environmentHeld |= PlannerBriefAmendmentHoldAttentionView.Print(context.Kernel, context.Kernel.Goals);
+                        environmentHeld |= PlannerBriefAmendmentHoldAttentionView.Print(context.Kernel,
+                            context.Kernel.Goals.Where(goal => !parkedResolutions.ContainsKey(goal.Id.Value)));
                         environmentHeld |= OwnerQuestionHoldAttentionView.Print(context.Kernel.Goals, showNow);
                         var showWaits = HumanWaitsForAttention(context.Kernel, null, includeHistory);
+                        if (parkedGoalIds is { Count: > 0 })
+                            showWaits = showWaits.Where(wait => !parkedGoalIds.Contains(wait.GoalId.Value)).ToList();
                         if (showWaits.Count > 0 || context.Kernel.Goals.Any(goal => goal.GateTestObligations.Count > 0))
                         {
-                            HumanWaitsTextView.Print(showWaits, showNow, includeHistory, context.Kernel.Goals);
-                        }
-                        if (showWaits.Count > 0)
-                        {
                             if (includeHistory)
-                            {
-                                var allItems = store.ListAsync().GetAwaiter().GetResult();
-                                CollaborationItemsTextView.Print(
-                                    CollaborationItemsForAttention(allItems, context.Kernel, null, includeHistory),
-                                    includeHistory);
-                            }
-
-                            return changed;
+                                limit.PrintWaits(AttentionShowParkedState.ProjectWaits(showWaits, context.Kernel, parkedResolutions, showNow),
+                                    showNow, context.Kernel.Goals);
+                            else
+                                HumanWaitsTextView.Print(showWaits, showNow, includeHistory, context.Kernel.Goals);
                         }
 
-                        var globalQueue = includeHistory
-                            ? CollaborationItemsForAttention(store.ListAsync().GetAwaiter().GetResult(), context.Kernel, null, true)
-                            : remainingShowQueue;
-                        if ((environmentHeld || printedShowCrossGoal) && globalQueue.Count == 0) return changed;
+                        if (includeHistory)
+                        {
+                            var allItems = store.ListAsync().GetAwaiter().GetResult();
+                            var historyItems = CollaborationItemsForAttention(allItems, context.Kernel, null, includeHistory);
+                            if (showWaits.Count == 0 && environmentHeld && historyItems.Count == 0)
+                                return false;
+
+                            var clarificationUniverse = showWaits.Count == 0 ? allItems.Where(IsSpecClarification).ToList() : null;
+                            limit.PrintItems(AttentionShowParkedState.ProjectItems(historyItems, parkedResolutions, showNow),
+                                item => clarificationUniverse is not null && IsSpecClarification(item)
+                                ? ClarificationId(item, clarificationUniverse) : null);
+                            return false;
+                        }
+
+                        if (showWaits.Count > 0) return false;
+
+                        if ((environmentHeld || printedShowCrossGoal) && remainingShowQueue.Count == 0) return false;
                         var allClarifications = AllClarifications(store);
                         CollaborationItemsTextView.Print(
-                            globalQueue,
+                            remainingShowQueue,
                             includeHistory,
                             item => IsSpecClarification(item) ? ClarificationId(item, allClarifications) : null);
-                        return changed;
+                        return false;
                     }
 
                     var goal = ResolveAttentionGoal(context.Kernel, goalPrefix);
+                    var parkedForShow = parkedGoalIds?.Contains(goal.Id.Value) == true;
                     PostLandingDutiesTextView.Print([goal]);
                     var environmentHeldForGoal = EnvironmentHoldAttentionView.Print([goal]);
-                    environmentHeldForGoal |= PlannerBriefAmendmentHoldAttentionView.Print(context.Kernel, [goal]);
+                    if (!parkedResolutions.ContainsKey(goal.Id.Value))
+                        environmentHeldForGoal |= PlannerBriefAmendmentHoldAttentionView.Print(context.Kernel, [goal]);
                     environmentHeldForGoal |= OwnerQuestionHoldAttentionView.Print([goal], showNow);
-                    var clarificationIdentityUniverse = AllClarifications(store)
-                        .Where(item => string.Equals(item.GoalId, goal.Id.Value, StringComparison.OrdinalIgnoreCase))
-                        .ToList();
-                    var waitsForGoal = HumanWaitsForAttention(context.Kernel, goal.Id, includeHistory);
+                    var clarificationIdentityUniverse = AllClarificationsForGoal(store, goal);
+                    var waitsForGoal = parkedForShow ? [] : HumanWaitsForAttention(context.Kernel, goal.Id, includeHistory);
                     if (waitsForGoal.Count > 0 || goal.GateTestObligations.Count > 0)
-                        HumanWaitsTextView.Print(waitsForGoal, showNow, includeHistory, [goal]);
+                    {
+                        if (includeHistory)
+                            limit.PrintWaits(AttentionShowParkedState.ProjectWaits(waitsForGoal, context.Kernel, parkedResolutions, showNow),
+                                showNow, [goal]);
+                        else
+                            HumanWaitsTextView.Print(waitsForGoal, showNow, includeHistory, [goal]);
+                    }
 
                     if (includeHistory)
                     {
                         var allItems = store.ListAsync().GetAwaiter().GetResult();
                         var historyItems = CollaborationItemsForAttention(allItems, context.Kernel, goal.Id, includeHistory);
-                        if (waitsForGoal.Count > 0)
-                        {
-                            CollaborationItemsTextView.Print(
-                                historyItems,
-                                includeHistory,
-                                item => IsSpecClarification(item) ? ClarificationId(item, clarificationIdentityUniverse) : null);
-                            return changed;
-                        }
-
-                        if (historyItems.Count == 0)
+                        if (waitsForGoal.Count == 0 && historyItems.Count == 0)
                         {
                             if (!environmentHeldForGoal)
                                 Console.WriteLine($"No open attention items for goal {goal.Id.Value}.");
-                            return changed;
+                            return false;
                         }
 
-                        CollaborationItemsTextView.Print(
-                            historyItems,
-                            includeHistory,
+                        limit.PrintItems(AttentionShowParkedState.ProjectItems(historyItems, parkedResolutions, showNow),
                             item => IsSpecClarification(item) ? ClarificationId(item, clarificationIdentityUniverse) : null);
-                        return changed;
+                        return false;
                     }
 
                     var scopedItems = store.GetAttentionQueueAsync().GetAwaiter().GetResult()
                         .Where(item => string.Equals(item.GoalId, goal.Id.Value, StringComparison.OrdinalIgnoreCase))
+                        .Where(item => parkedGoalIds?.Contains(item.GoalId!) != true)
                         .ToList();
                     if (scopedItems.Count == 0)
                     {
                         if (waitsForGoal.Count == 0 && !environmentHeldForGoal)
                             Console.WriteLine($"No open attention items for goal {goal.Id.Value}.");
-                        return changed;
+                        return false;
                     }
 
                     var printedClarification = false;
@@ -393,7 +388,7 @@ internal static partial class CliCommandHandlers
                         Console.WriteLine($"Answer with: attention answer {goal.Id.Value[..8]} <id> <answer> or --text-file <path> (ids are stable; answering one does not renumber the rest); for a ruling that needs a code change add --route developer [--cause <cause>] --evidence <ref>");
                     }
 
-                    return changed;
+                    return false;
                 }
 
                 // `attention answer [<goal-id-prefix>] <id> <answer...>` resolves either identity printed by
@@ -404,7 +399,7 @@ internal static partial class CliCommandHandlers
                 }
 
                 var migratedHumanWaits = context.IsReadOnlyQuery ? 0 : context.Kernel.SweepParkedGoalHumanWaits();
-                var migratedCollaborationItems = context.IsReadOnlyQuery ? 0 : ResolveParkedAttentionItems(context.Kernel, store);
+                var migratedCollaborationItems = context.IsReadOnlyQuery ? 0 : AttentionShowParkedState.ResolveOpenItems(context.Kernel, store);
                 var waits = HumanWaitsForAttention(context.Kernel, null, includeHistory: false);
                 var (queue, printedCrossGoal) = PrintCrossGoalAttentionItems(context.Kernel, store);
                 PostLandingDutiesTextView.Print(context.Kernel.Goals);
