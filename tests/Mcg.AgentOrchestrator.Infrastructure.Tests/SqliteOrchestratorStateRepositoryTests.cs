@@ -2108,8 +2108,10 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains("persist it with its human-input requests", error.Message, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact]
-    public async Task TickMerge_InconsistentHumanWait_IsRejected()
+    [Xunit.Theory]
+    [Xunit.InlineData(GoalStatus.Active)]
+    [Xunit.InlineData(GoalStatus.WaitingForHuman)]
+    public async Task TickMerge_InconsistentHumanWait_IsRejected(GoalStatus status)
     {
         var repo = new SqliteOrchestratorStateRepository(TempDb());
         var kernel = new AgentOrchestratorKernel();
@@ -2120,12 +2122,48 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         await repo.SaveAsync(kernel);
         var baseline = kernel.ExportSnapshot().Goals.Single();
         kernel.RequestHumanInput(goal.Id, goal.Tasks.Single().Id, "Proceed?");
-        var waiting = kernel.ExportSnapshot().Goals.Single();
+        var waiting = kernel.ExportSnapshot().Goals.Single() with { Status = status };
 
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             repo.SaveGoalSnapshotsWithMergeAsync([new GoalSnapshotSaveRequest(baseline, waiting, [])]));
 
         Assert.Contains("has no open human-input request", error.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(GoalStatus.Cancelled)]
+    [Xunit.InlineData(GoalStatus.Completed)]
+    [Xunit.InlineData(GoalStatus.Superseded)]
+    public async Task TickMerge_DismissedTerminalTaskRequest_PreservesWaitStatus(GoalStatus status)
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Preserve a terminal task waiting for human input",
+            [new TaskSpec(TaskId.New(), "Ask first", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        var request = kernel.RequestHumanInput(goal.Id, task.Id, "Proceed?", isDismissible: true);
+        var waiting = kernel.ExportSnapshot();
+        kernel = AgentOrchestratorKernel.FromSnapshot(waiting with
+        {
+            Goals = [waiting.Goals.Single() with { Status = status }]
+        });
+        await repo.SaveAsync(kernel);
+        var baseline = kernel.ExportSnapshot().Goals.Single();
+
+        kernel.DismissHumanInput(request.Id);
+        var dismissed = kernel.ExportSnapshot();
+
+        var results = await repo.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(baseline, dismissed.Goals.Single(), dismissed.HumanInputRequests)]);
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Saved, Assert.Single(results).Disposition);
+        var restored = await repo.LoadGoalsAsync([goal.Id]);
+        Assert.Equal(status, restored.GetGoal(goal.Id).Status);
+        Assert.Equal(WorkTaskStatus.WaitingForHuman, restored.GetTask(goal.Id, task.Id).Status);
+        Assert.Empty(restored.GetPendingHumanInput(goal.Id));
+        Assert.True(Assert.Single(restored.HumanInputRequests, current => current.Id == request.Id).WasDismissed);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_never_replaces_newer_dispatch_attempt_with_stale_completion")]
