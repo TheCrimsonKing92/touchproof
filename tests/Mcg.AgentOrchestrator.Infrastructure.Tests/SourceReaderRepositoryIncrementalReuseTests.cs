@@ -2,6 +2,23 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class SourceReaderRepositoryIncrementalReuseTests
 {
+    internal static string[] CopySourcesWithDistinctContents(string repository, string[] originals, string copyRoot)
+    {
+        var hashes = new HashSet<string>(StringComparer.Ordinal);
+        return originals.Select(original =>
+        {
+            var relativePath = Path.GetRelativePath(repository, original);
+            var destination = Path.Combine(copyRoot, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(original, destination);
+            // The checkout includes identical global using files. Give duplicate fixture copies distinct
+            // hashes without changing their syntax, so the deliberate one-file edit is the only Plan miss.
+            if (!hashes.Add(SourceReaderFileFacts.Hash(File.ReadAllText(destination))))
+                File.AppendAllText(destination, $"{Environment.NewLine}// Fixture path: {relativePath}");
+            return destination;
+        }).ToArray();
+    }
+
     [Fact]
     public void AppendedDisposableTest_ReusesRepositoryBaselineAndMatchesFullExtract()
     {
@@ -16,19 +33,20 @@ public sealed class SourceReaderRepositoryIncrementalReuseTests
             var repositoryReuseOriginals = LaneTestSourceRootResolver.SourceFiles(repositoryReuseRoot, repositoryReuseLaneRoots);
             Assert.True(repositoryReuseOriginals.Length > 1000);
             var repositoryReuseCopyRoot = Path.Combine(repositoryReuseTemp.FullName, "sources");
-            var repositoryReuseCopies = repositoryReuseOriginals.Select(original =>
-            {
-                var repositoryReuseDestination = Path.Combine(repositoryReuseCopyRoot, Path.GetRelativePath(repositoryReuseRoot, original));
-                Directory.CreateDirectory(Path.GetDirectoryName(repositoryReuseDestination)!);
-                File.Copy(original, repositoryReuseDestination);
-                return repositoryReuseDestination;
-            }).ToArray();
+            var repositoryReuseCopies = CopySourcesWithDistinctContents(repositoryReuseRoot, repositoryReuseOriginals,
+                repositoryReuseCopyRoot);
             var repositoryReuseCacheRoot = Path.Combine(repositoryReuseTemp.FullName, "cache");
             var repositoryReuseBaseline = new ImpactReplayTestSourceIndex(repositoryReuseCopies, repositoryRoot: repositoryReuseCopyRoot);
             var repositoryReuseBaselineCache = new SourceReaderAnalysisCache(repositoryReuseCacheRoot);
             repositoryReuseBaselineCache.GetOrAnalyze(repositoryReuseBaseline,
                 SourceReadingGuardTestClasses.Extract, SourceReadingGuardTestClasses.Evaluate);
             Assert.Equal(repositoryReuseCopies.Length, repositoryReuseBaselineCache.SemanticFileCount);
+            var baselineKey = SourceReaderAnalysisCache.Key(repositoryReuseBaseline);
+            var envelope = Assert.IsType<string>(repositoryReuseBaselineCache.EntryPath(baselineKey));
+            Assert.True(File.Exists(envelope));
+            File.Delete(envelope);
+            Assert.Empty(Directory.GetFiles(repositoryReuseCacheRoot, "*.json"));
+            Assert.True(File.Exists(new SourceReaderFileFactsStore(repositoryReuseCacheRoot).PublicationPath(baselineKey)));
 
             var repositoryReuseEditedPath = Assert.Single(repositoryReuseCopies,
                 copy => Path.GetFileName(copy) == nameof(SourceReaderRepositoryIncrementalReuseTests) + ".cs");
@@ -54,6 +72,7 @@ public sealed class SourceReaderRepositoryIncrementalReuseTests
             Assert.Contains(Path.GetRelativePath(repositoryReuseCopyRoot, repositoryReuseEditedPath).Replace('\\', '/'), repositoryReusePlan);
             Assert.Equal(1, repositoryReuseIncrementalCache.AnalysisCount);
             Assert.Equal(repositoryReusePlan.Count, repositoryReuseIncrementalCache.SemanticFileCount);
+            Assert.True(repositoryReuseIncrementalCache.SemanticFileCount < repositoryReuseCandidate.Trees.Count);
             Assert.True(repositoryReuseIncrementalCache.SemanticFileCount < 100,
                 $"Expected fewer than 100 semantic files, found {repositoryReuseIncrementalCache.SemanticFileCount}.");
 

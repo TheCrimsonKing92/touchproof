@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.CodeAnalysis;
@@ -40,22 +39,18 @@ public sealed class SourceReaderBaselineReuseTests
         Assert.All(roots, root => Assert.StartsWith("tests/", root));
         var originals = LaneTestSourceRootResolver.SourceFiles(repository, roots);
         Assert.True(originals.Length > 1000, $"Expected repository test sources, found {originals.Length}.");
-        var copied = originals.Select(original =>
-        {
-            var destination = Path.Combine(copy.Path, Path.GetRelativePath(repository, original));
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            File.Copy(original, destination);
-            return destination;
-        }).ToArray();
+        var copied = SourceReaderRepositoryIncrementalReuseTests.CopySourcesWithDistinctContents(repository, originals, copy.Path);
         var sources = new ImpactReplayTestSourceIndex(copied, null, copy.Path);
         var cache = new SourceReaderAnalysisCache(storage.Path);
 
         cache.GetOrAnalyze(sources, SourceReadingGuardTestClasses.Extract, SourceReadingGuardTestClasses.Evaluate);
 
         Assert.Equal(copied.Length, cache.SemanticFileCount);
-        var entry = JsonNode.Parse(File.ReadAllText(cache.EntryPath(SourceReaderAnalysisCache.Key(sources))!))!;
+        var entry = Assert.IsType<JsonObject>(JsonNode.Parse(File.ReadAllText(cache.EntryPath(SourceReaderAnalysisCache.Key(sources))!)));
         Assert.Equal(SourceReaderAnalysisCache.FormatVersion, entry["FormatVersion"]!.GetValue<int>());
-        var files = entry["Files"]!.Deserialize<SourceReaderFileFacts[]>()!;
+        Assert.False(entry.ContainsKey("Files"));
+        Assert.False(entry.ContainsKey("FilesDigest"));
+        var files = ReadBaseline(storage.Path, sources);
         Assert.Equal(copied.Length, files.Length);
         Assert.Equal(copied.Select(path => Path.GetRelativePath(copy.Path, path).Replace('\\', '/'))
             .Order(StringComparer.Ordinal), files.Select(file => file.Path).Order(StringComparer.Ordinal));
@@ -76,8 +71,7 @@ public sealed class SourceReaderBaselineReuseTests
         var baseline = Baseline();
         var baselineCache = new SourceReaderAnalysisCache(storage.Path);
         Analyze(baselineCache, baseline);
-        var stored = JsonNode.Parse(File.ReadAllText(baselineCache.EntryPath(SourceReaderAnalysisCache.Key(Sources(baseline)))!))!;
-        Assert.True(SourceReaderFileFacts.Valid(stored["Files"]!.Deserialize<SourceReaderFileFacts[]>()!));
+        Assert.True(SourceReaderFileFacts.Valid(ReadBaseline(storage.Path, Sources(baseline))));
         var candidate = baseline.Take(sharedCount).ToDictionary(pair => pair.Key, pair => pair.Value);
         for (var index = sharedCount; index < candidateCount; index++)
             candidate.Add($"tests/New{index}.cs", $"public class New{index} {{ public void Added{index}() {{}} }}");
@@ -115,15 +109,23 @@ public sealed class SourceReaderBaselineReuseTests
         var key = SourceReaderAnalysisCache.Key(Sources(baseline));
         var path = cache.EntryPath(key)!;
         var entry = JsonNode.Parse(File.ReadAllText(path))!;
-        Assert.True(SourceReaderFileFacts.Valid(entry["Files"]!.Deserialize<SourceReaderFileFacts[]>()!));
+        Assert.True(SourceReaderFileFacts.Valid(ReadBaseline(storage.Path, Sources(baseline))));
         Assert.True(cache.TryRead(key, out _));
         // Pin the operator's compatibility boundary; a relative version alone cannot detect a reverted bump.
-        Assert.Equal(10, SourceReaderAnalysisCache.FormatVersion);
-        const int previousFormatVersion = 9;
+        Assert.Equal(11, SourceReaderAnalysisCache.FormatVersion);
+        const int previousFormatVersion = 10;
         // Change only the version so the fixture isolates the compatibility check.
         entry["FormatVersion"] = previousFormatVersion;
         File.WriteAllText(path, entry.ToJsonString());
         Assert.False(cache.TryRead(key, out _));
+        var store = new SourceReaderFileFactsStore(storage.Path);
+        foreach (var text in baseline.Values)
+        {
+            var recordPath = store.RecordPath(SourceReaderFileFacts.Hash(text))!;
+            var record = JsonNode.Parse(File.ReadAllText(recordPath))!;
+            record["FormatVersion"] = previousFormatVersion;
+            File.WriteAllText(recordPath, record.ToJsonString());
+        }
         var candidate = new Dictionary<string, string>(baseline)
         {
             ["tests/Stable1.cs"] = "public class Stable1 { public void Changed() {} }"
@@ -196,6 +198,13 @@ public sealed class SourceReaderBaselineReuseTests
 
     private static ImpactReplayTestSourceIndex Sources(IReadOnlyDictionary<string, string> files) =>
         new(files.Select(pair => (SyntaxTree)CSharpSyntaxTree.ParseText(pair.Value, path: pair.Key)));
+
+    private static SourceReaderFileFacts[] ReadBaseline(string storagePath, ImpactReplayTestSourceIndex sources)
+    {
+        var identities = sources.Trees.Select(tree => (SourceReaderFileFacts.RelativePath(sources, tree),
+            SourceReaderFileFacts.Hash(tree.GetText().ToString()))).ToArray();
+        return Assert.IsType<SourceReaderFileFacts[]>(new SourceReaderFileFactsStore(storagePath).FindBaseline(identities, out _));
+    }
 
     private static SourceReaderAnalysisCache.Analysis Analyze(SourceReaderAnalysisCache cache,
         IReadOnlyDictionary<string, string> files, List<HashSet<string>?>? extractions = null) =>

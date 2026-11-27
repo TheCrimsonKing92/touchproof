@@ -14,8 +14,8 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
 {
     // Bump for serialized shape OR analysis semantics changes in SourceReadingGuardTestClasses
     // or WholeTreeSourceReaderDetector.
-    internal const int FormatVersion = 10;
-    private const int RetainedGenerations = 8;
+    internal const int FormatVersion = 11;
+    internal const int RetainedGenerations = 8;
     private const string PublicationLeaseFileName = ".publication.lock";
     private static string? _defaultDirectoryOverride;
     private static readonly Lazy<SourceReaderAnalysisCache> Shared = new(() => new(_defaultDirectoryOverride ?? DefaultDirectory()));
@@ -93,8 +93,18 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
         var key = Key(sources);
         if (TryRead(key, out var hit)) return hit;
         Interlocked.Increment(ref _analysisCount);
-        var candidate = sources.Trees.Select(tree => SourceReaderFileFacts.Describe(sources, tree)).ToArray();
-        var baseline = FindBaseline(candidate);
+        var factsStore = new SourceReaderFileFactsStore(directory);
+        var identities = directory is null ? [] : sources.Trees.Select(tree =>
+            (Path: SourceReaderFileFacts.RelativePath(sources, tree),
+                ContentHash: SourceReaderFileFacts.Hash(tree.GetText().ToString()))).ToArray();
+        var baseline = factsStore.FindBaseline(identities, out var loadedDigests);
+        var previous = baseline?.ToDictionary(file => file.Path, StringComparer.Ordinal);
+        var candidate = baseline is null ? [] : sources.Trees.Select((tree, index) =>
+        {
+            var (path, hash) = identities[index];
+            return previous!.TryGetValue(path, out var file) && file.ContentHash == hash
+                ? file : SourceReaderFileFacts.Describe(sources, tree);
+        }).ToArray();
         var plan = baseline is null ? null : SourceReaderFileFacts.Plan(baseline, candidate);
         SourceReaderFileFacts[] files;
         if (plan is null)
@@ -106,16 +116,16 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
             Interlocked.Add(ref _semanticFileCount, plan.Count);
             var fresh = extract(sources, plan);
             var replacements = fresh.ToDictionary(file => file.Path, StringComparer.Ordinal);
-            var previous = baseline!.ToDictionary(file => file.Path, StringComparer.Ordinal);
             // Plan includes every changed file and every reference to old or new changed names.
             // Only hash-equal, non-invalidated files reach the baseline branch below.
             files = candidate.Select(file => replacements.TryGetValue(file.Path, out var replacement)
-                ? replacement : previous[file.Path]).ToArray();
+                ? replacement : previous![file.Path]).ToArray();
             if (!SourceReaderFileFacts.Valid(files) || LostResolution(baseline!, fresh))
                 files = Full(); // Dangling identities or lost bindings cannot be partially trusted.
         }
         var analysis = evaluate(sources, files);
-        Write(key, analysis, files);
+        Write(key, analysis);
+        factsStore.Publish(key, files, loadedDigests);
         return analysis;
 
         SourceReaderFileFacts[] Full()
@@ -141,47 +151,12 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
         return false;
     }
 
-    private SourceReaderFileFacts[]? FindBaseline(SourceReaderFileFacts[] candidate)
-    {
-        if (directory is null || candidate.Length == 0 || !SourceReaderFileFacts.HasUniquePaths(candidate)) return null;
-        try
-        {
-            var hashes = candidate.ToDictionary(file => file.Path, file => file.ContentHash, StringComparer.Ordinal);
-            SourceReaderFileFacts[]? best = null;
-            var bestOverlap = 0;
-            // Bound JSON reads; newest wins ties. No store or caller changes are needed for baseline discovery.
-            foreach (var path in NewestFirst(new DirectoryInfo(directory).EnumerateFiles("*.json"),
-                         file => file.LastWriteTimeUtc, file => file.Name).Take(RetainedGenerations))
-            {
-                try
-                {
-                    var entry = JsonSerializer.Deserialize<Envelope>(File.ReadAllText(path.FullName));
-                    if (entry is null || entry.FormatVersion != FormatVersion || entry.Key != Path.GetFileNameWithoutExtension(path.Name) ||
-                        entry.ReaderOwners is null || entry.ReaderOwners.Any(string.IsNullOrWhiteSpace) ||
-                        entry.Files is null || entry.FilesDigest != Digest(entry.Key, entry.Files) ||
-                        !SourceReaderFileFacts.Valid(entry.Files)) continue;
-                    var overlap = entry.Files.Count(file => hashes.GetValueOrDefault(file.Path) == file.ContentHash);
-                    if (overlap <= bestOverlap || (long)overlap * 2 < candidate.Length) continue;
-                    best = entry.Files;
-                    bestOverlap = overlap;
-                }
-                catch (Exception error) when (error is not OutOfMemoryException) { }
-            }
-            return best;
-        }
-        catch (Exception error) when (error is not OutOfMemoryException) { return null; }
-    }
-
-    private static string Digest(string key, SourceReaderFileFacts[] files) =>
-        SourceReaderFileFacts.Hash(key + JsonSerializer.Serialize(files));
-
     internal bool TryRead(string key, out Analysis analysis)
     {
         analysis = null!;
         try
         {
             if (EntryPath(key) is not { } path) return false;
-            // Exact hits need only the result; System.Text.Json skips the potentially large facts payload.
             var entry = JsonSerializer.Deserialize<ResultEnvelope>(File.ReadAllText(path));
             if (entry is null || entry.FormatVersion != FormatVersion || entry.Key != key ||
                 entry.ReaderOwners is null || entry.ReaderOwners.Any(string.IsNullOrWhiteSpace) ||
@@ -194,7 +169,7 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
         catch (Exception error) when (error is not OutOfMemoryException) { return false; }
     }
 
-    internal void Write(string key, Analysis analysis, SourceReaderFileFacts[]? files = null)
+    internal void Write(string key, Analysis analysis)
     {
         string? temporary = null;
         try
@@ -202,9 +177,8 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
             if (EntryPath(key) is not { } destination) return;
             var root = Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
             temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            File.WriteAllText(temporary, JsonSerializer.Serialize(new Envelope(FormatVersion, key,
-                analysis.ReaderOwners.ToArray(), analysis.DeclaresSnapshotCache, analysis.AssemblyScans.ToArray(), files,
-                files is null ? null : Digest(key, files))));
+            File.WriteAllText(temporary, JsonSerializer.Serialize(new ResultEnvelope(FormatVersion, key,
+                analysis.ReaderOwners.ToArray(), analysis.DeclaresSnapshotCache, analysis.AssemblyScans.ToArray())));
             // Keep the eviction snapshot valid across processes and directory aliases. Staging and
             // serialization stay outside the lease because temporary files are never pruned.
             using var lease = AcquirePublicationLease(root);
@@ -243,7 +217,7 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
         return true;
     }
 
-    private static FileStream AcquirePublicationLease(DirectoryInfo root)
+    internal static FileStream AcquirePublicationLease(DirectoryInfo root)
     {
         // The lease file stays in place so competing opens always refer to the same file.
         var path = Path.Combine(root.FullName, PublicationLeaseFileName);
@@ -258,11 +232,11 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
         }
     }
 
-    private static IOrderedEnumerable<T> NewestFirst<T>(
+    internal static IOrderedEnumerable<T> NewestFirst<T>(
         IEnumerable<T> entries, Func<T, DateTime> lastWriteTime, Func<T, string> name) =>
         entries.OrderByDescending(lastWriteTime).ThenBy(name, StringComparer.Ordinal);
 
-    private static bool IsOwnedGeneration(FileInfo file) =>
+    internal static bool IsOwnedGeneration(FileInfo file) =>
         IsGenerationName(file.Name) && (file.Attributes & FileAttributes.ReparsePoint) == 0;
 
     private static bool IsGenerationName(string name) =>
@@ -400,15 +374,6 @@ internal sealed class SourceReaderAnalysisCache(string? directory)
         }
         catch (Exception error) when (error is not OutOfMemoryException) { return null; }
     }
-
-    private sealed record Envelope(
-        [property: JsonRequired] int FormatVersion,
-        [property: JsonRequired] string Key,
-        [property: JsonRequired] string[]? ReaderOwners,
-        [property: JsonRequired] bool DeclaresSnapshotCache,
-        [property: JsonRequired] AssemblyScanningGuardTestClasses.ScanFile[]? AssemblyScans,
-        SourceReaderFileFacts[]? Files,
-        string? FilesDigest);
 
     private sealed record ResultEnvelope(
         [property: JsonRequired] int FormatVersion,
