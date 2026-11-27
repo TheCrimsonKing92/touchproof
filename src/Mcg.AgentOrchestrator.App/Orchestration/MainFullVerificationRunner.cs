@@ -40,7 +40,10 @@ internal sealed class MainFullVerificationRunner(
 
             var verification = RunAttempt(verifier, checkout, commit, lease, cancellationToken,
                 workspace.ProjectHomeDirectoryOrNull, workspace.IntegrationBranch);
-            return Interpret(verification, tests => Attribute(tests, checkout, commit, lastPassed));
+            return Conclude(verification, tests => Attribute(tests, checkout, commit, lastPassed),
+                (test, token) => MainFullVerificationConfirmation.RunFocused(verifier, checkout, lease,
+                    workspace.IntegrationBranch, workspace.ProjectHomeDirectoryOrNull, verification.Checks ?? [], test, token),
+                cancellationToken);
         }
         finally
         {
@@ -60,6 +63,22 @@ internal sealed class MainFullVerificationRunner(
             lease?.Environment.BuildPermitIndex, lease, cancellationToken,
             new AcceptanceRunExecutionOptions(RunId: RunId(commit), ProjectHomeDirectory: projectHome,
                 IntegrationBranch: integrationBranch, PinnedMainCommit: commit));
+
+    internal static MainFullVerificationResult Conclude(AcceptanceVerificationResult verification,
+        Func<IReadOnlyList<string>, IReadOnlyList<MainFullVerificationFailure>> attribute,
+        Func<string, CancellationToken, MainFullVerificationRerun> rerun, CancellationToken cancellationToken)
+    {
+        var result = Interpret(verification, attribute);
+        if (result.Failures is not { Count: > 0 } failures)
+            return result;
+
+        var confirmation = MainFullVerificationConfirmation.Confirm(failures, rerun, cancellationToken);
+        if (result.Outcome != "incomplete")
+            return confirmation;
+
+        return new("incomplete", confirmation.Detail is null ? result.Detail : $"{result.Detail}. {confirmation.Detail}",
+            Unconfirmed: confirmation.Unconfirmed);
+    }
 
     internal static MainFullVerificationResult Interpret(AcceptanceVerificationResult verification,
         Func<IReadOnlyList<string>, IReadOnlyList<MainFullVerificationFailure>> attribute)
@@ -84,9 +103,22 @@ internal sealed class MainFullVerificationRunner(
                 ? new("passed") : new("incomplete", "required-test-checks-unproven");
         }
 
-        var tests = failed.SelectMany(ReadFailedTests).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
-        return tests.Length == 0 ? new("incomplete", "fatal-test-identity-unavailable") :
-            new("failed", Failures: attribute(tests));
+        var tests = new SortedSet<string>(StringComparer.Ordinal);
+        var unnamedChecks = new List<string>();
+        foreach (var check in failed)
+        {
+            var names = ReadFailedTests(check).ToArray();
+            if (names.Length == 0)
+                unnamedChecks.Add(check.Name);
+            tests.UnionWith(names);
+        }
+
+        var detail = unnamedChecks.Count > 0
+            ? $"fatal-test-identity-unavailable: {string.Join(", ", unnamedChecks)}" : null;
+        if (tests.Count == 0)
+            return new("incomplete", detail ?? "fatal-test-identity-unavailable");
+
+        return new(detail is null ? "failed" : "incomplete", detail, attribute(tests.ToArray()));
     }
 
     private static IEnumerable<string> ReadFailedTests(AcceptanceCheckResult check)

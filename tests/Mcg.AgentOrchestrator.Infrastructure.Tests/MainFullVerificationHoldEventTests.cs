@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using static Mcg.AgentOrchestrator.App.Orchestration.MainFullVerificationRerunStatus;
 
 // Parallel-safe: private TRX files and databases, injected clock and verifier.
 public sealed class MainFullVerificationHoldEventTests
@@ -10,10 +11,11 @@ public sealed class MainFullVerificationHoldEventTests
     private static readonly DateTimeOffset Now = new(2026, 11, 21, 9, 0, 0, TimeSpan.Zero);
 
     [Theory]
-    [InlineData("matched", "newest", "goal-1")]
-    [InlineData("unmatched", "undetermined", "none")]
-    [InlineData("unreadable", "undetermined", "none")]
-    public async Task FailedTrxProducesOperatorHoldWithPinnedCommitAndTest(string reach, string landing, string goal)
+    [InlineData("matched", "newest", "goal-1", true)]
+    [InlineData("unmatched", "undetermined", "none", true)]
+    [InlineData("unreadable", "undetermined", "none", true)]
+    [InlineData("matched", "newest", "goal-1", false)]
+    public async Task FailedTrxProducesOperatorHoldWithPinnedCommitAndTest(string reach, string landing, string goal, bool tipMoves)
     {
         using var fixture = new ConductorVerbStartTests.Fixture();
         var workspace = fixture.Workspace;
@@ -35,8 +37,9 @@ public sealed class MainFullVerificationHoldEventTests
         var verification = new AcceptanceVerificationResult(false, false, 1, null,
             Checks: [new("tests", false, 1, null, TestResultPaths: [trx])]);
         var visited = new List<string>();
+        var reruns = new List<string>();
         using var coordinator = new MainFullVerificationCoordinator(store, items, 21600, () => tip,
-            (_, _) => new((_, _) => MainFullVerificationRunner.Interpret(verification, tests =>
+            (_, _) => new((_, token) => MainFullVerificationRunner.Conclude(verification, tests =>
                 MainFullVerificationLandingAttribution.Resolve(tests, ["newest", "older"], sha =>
                 {
                     visited.Add(sha);
@@ -47,17 +50,23 @@ public sealed class MainFullVerificationHoldEventTests
                         "unreadable" => null,
                         _ => new HashSet<string> { "OtherTests" }
                     };
-                }, sha => sha == "newest" ? "goal-1" : "goal-2"))), () => Now, lines.Add);
+                }, sha => sha == "newest" ? "goal-1" : "goal-2"), (test, _) =>
+                {
+                    reruns.Add(test);
+                    return new(Confirmed);
+                }, token)), () => Now, lines.Add);
 
         Assert.Equal(MainFullVerificationScheduler.Decision.Admit, coordinator.Service(0, () => true));
-        tip = "later-main-tip";
+        if (tipMoves) tip = "later-main-tip";
         var execution = Assert.IsAssignableFrom<Task>(coordinator.ActiveExecution);
         await execution.WaitAsync(TimeSpan.FromSeconds(30));
         coordinator.Poll();
         coordinator.Poll();
 
         var hold = Assert.Single(lines.Where(line => line.StartsWith("MAIN_FULL_VERIFICATION_HOLD ", StringComparison.Ordinal)));
-        Assert.Equal($"MAIN_FULL_VERIFICATION_HOLD commit={Commit} test={FailingTest} landing={landing} landingGoal={goal} revert=withheld reason=tip-moved", hold);
+        var reason = tipMoves ? "tip-moved" : "confirmed-by-rerun";
+        Assert.Equal($"MAIN_FULL_VERIFICATION_HOLD commit={Commit} test={FailingTest} landing={landing} landingGoal={goal} revert=withheld reason={reason}", hold);
+        Assert.Equal([FailingTest], reruns);
         Assert.Equal("decision", ConductEventOperatorClassifier.Classify("main-full-verification", hold));
         Assert.True(ConductEventDurabilityPolicy.IsRequired("main-full-verification", hold));
         Assert.Equal(reach == "unmatched" ? new[] { "newest", "older" } : ["newest"], visited);
