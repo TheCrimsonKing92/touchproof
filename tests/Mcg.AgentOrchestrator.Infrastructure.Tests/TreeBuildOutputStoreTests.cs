@@ -153,19 +153,27 @@ public sealed class TreeBuildOutputStoreTests : IDisposable
         Assert.False(Directory.Exists(Target));
     }
 
-    [Fact]
-    public async Task EnsureAsync_SameTreeAcrossBuildOrigins_SkipsManagedBuildAndRecordsHit()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EnsureAsync_SameTreeAcrossBuildOrigins_SkipsManagedBuildAndRecordsHit(bool coldBaseCache)
     {
         var store = new TreeBuildOutputStore(StoreRoot);
         var reuse = new TreeBuildOutputReuse(store, (_, _) => Task.FromResult<TreeBuildOutputIdentity?>(Identity));
         var invocations = new List<string>();
         var receipts = new List<string>();
         var ledger = new BuildReceiptLedger((_, line) => receipts.Add(line));
+        var baseCache = new DotnetBaseBuildCache(Path.Combine(_root, "base-cache"));
+        var basePlan = coldBaseCache
+            ? new DotnetBaseBuildCachePlan(new string('c', 40), ["app.csproj"], [], ["app.csproj"])
+            : null;
 
-        var first = await Run(Tree, "pre-review-evidence", Source);
+        var first = await Run(Tree, "pre-review-evidence", Source, basePlan);
         Assert.True(first.Run.Result.Passed);
+        if (coldBaseCache)
+            Assert.Contains("projects=app.csproj=miss", first.Run.Result.ResultSummary, StringComparison.Ordinal);
         Assert.Equal(new[] { Source }, invocations);
-        var second = await Run(Tree, "gate", Target);
+        var second = await Run(Tree, "gate", Target, basePlan);
         Assert.True(second.Run.Result.Passed);
         Assert.True(second.ContributesToCheck);
         Assert.StartsWith("tree-output-reuse status=hit", second.Run.Result.ResultSummary);
@@ -200,21 +208,24 @@ public sealed class TreeBuildOutputStoreTests : IDisposable
                 Assert.Equal("not-found", receipt.RefusalReason);
             });
 
-        Task<DotnetTestBuildPhaseResult> Run(string digest, string origin, string artifacts)
+        Task<DotnetTestBuildPhaseResult> Run(string digest, string origin, string artifacts,
+            DotnetBaseBuildCachePlan? plan = null)
         {
-            var phase = new DotnetTestBuildPhase(Identity.BuildArguments, null);
+            var phase = new DotnetTestBuildPhase(Identity.BuildArguments, plan);
             var environment = new DotnetBuildEnvironment("lease", _root, artifacts,
                 Path.Combine(_root, "lock"), ["--artifacts-path", artifacts], "owner");
             var hooks = new AcceptanceDotnetBuildPhaseHooks(
-                (_, _, _, owned) =>
+                (arguments, _, prepare, owned) =>
                 {
+                    Assert.Equal(Identity.BuildArguments, arguments);
+                    Assert.Null(prepare);
                     Assert.Same(environment, owned);
                     invocations.Add(artifacts);
                     WriteOutputs(artifacts);
                     return Task.FromResult((new AcceptanceCheckResult("build", true, 0, null, artifacts), false));
                 },
-                _ => environment, value => value, () => throw new InvalidOperationException("No base cache expected"),
-                (_, _) => throw new InvalidOperationException("No base cache identity expected"),
+                _ => environment, value => value, () => baseCache,
+                (_, _) => Task.FromResult<DotnetBaseBuildCacheIdentity?>(new("fixture-base")),
                 ReceiptSite: new BuildReceiptSite(_root, "goal", origin, digest, ledger, reuse));
             return AcceptanceDotnetBuildPhase.EnsureAsync(phase, origin, hooks);
         }
