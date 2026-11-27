@@ -70,4 +70,35 @@ public sealed class ConductorDriverTestsLandingRebaseDecision
         AssertFact(decision, "conflictFiles", "src/A.cs\nsrc/B.cs");
         AssertFact(decision, "applySideEffects", "true");
     }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ParallelPreLandingConflictReplayCarriesDecision(bool hasRecordedDecision)
+    {
+        var (_, goal) = SimpleGoal();
+        var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["src/A.cs"], "branch", "main");
+        var policy = ConductorAutonomyPolicy.Conservative;
+        var rebase = LandingRebasePolicy.Evaluate(new("pre-landing", false, "Conflict", ["src/A.cs"], "git conflict", false));
+        var earlyResult = new ConductorAdvanceResult(goal.Id.Value, candidate.GoalPrefix, policy.Name,
+            new ConductorAdvanceOutcome.Escalated(GoalLifecycleState.Verified, rebase.Reason)
+            {
+                Decision = hasRecordedDecision ? rebase.ToRecord() : null
+            });
+        var earlyOutcome = ConductorParallelAcceptanceEarlyOutcome.PreLandingEscalated(GoalLifecycleState.Verified, rebase.Reason);
+        var escalationReasons = new List<string>();
+        var driver = MakeDriver(writeEscalation: (_, _, reason) => escalationReasons.Add(reason));
+
+        var result = driver.ReplayParallelLandingEarlyOutcome(candidate, policy, earlyResult, earlyOutcome);
+
+        var escalated = Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
+        Assert.Equal(rebase.Reason, escalated.Reason);
+        Assert.Equal(escalated.Reason, Assert.Single(escalationReasons));
+        var decision = AssertDecisionAndPayload(escalated, "landing-rebase", "Escalate", 2, "rebase-conflict",
+            escalated.Reason, "Verified", "Unspecified");
+        AssertFact(decision, "phase", "pre-landing");
+        AssertFact(decision, "rebaseStatus", "Conflict");
+        AssertFact(decision, "conflictFiles", hasRecordedDecision ? "src/A.cs" : "");
+        AssertFact(decision, "applySideEffects", "false");
+    }
 }
