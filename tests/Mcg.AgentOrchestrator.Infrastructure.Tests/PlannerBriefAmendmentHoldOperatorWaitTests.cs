@@ -17,14 +17,16 @@ public sealed class PlannerBriefAmendmentHoldOperatorWaitTests
             "The proposed criterion matches the fixture.", "Should the criterion be revised?",
             "Apply the proposed criterion.", OwnerQuestionReversibility.Reversible);
         var answer = AuthorRecommendationApplication.FormatAnswer(question, TimeSpan.FromMinutes(1));
-        return AssertWaitUntilDisposition(answer, disposition, ["--operator-actor", "author", "--actor-kind", "Agent"]);
+        return AssertWaitUntilDisposition(answer, disposition, ["--operator-actor", "author", "--actor-kind", "Agent"],
+            expectedActor: "author", expectedActorKind: OperatorActorKind.Agent);
     }
 
     [Theory]
     [InlineData("accept")]
     [InlineData("decline")]
     public Task OperatorPlainAnswer_IsOperatorWaitUntilDisposition(string disposition) =>
-        AssertWaitUntilDisposition("Apply the proposed criterion.", disposition, []);
+        AssertWaitUntilDisposition("Apply the proposed criterion.", disposition, [],
+            expectedActor: "operator", expectedActorKind: OperatorActorKind.Human);
 
     [Theory]
     [InlineData("accept")]
@@ -33,7 +35,8 @@ public sealed class PlannerBriefAmendmentHoldOperatorWaitTests
     {
         var ruling = new FrozenFactRuling(["behavior"], [new("criterion 1", "brief.md", "Preserve the existing behavior.")],
             "Preserve the regression contract.", "The implementation scope.", "Only criterion 1 changes.", ["seed.txt:1"]);
-        return AssertWaitUntilDisposition(ruling.Render(), disposition, []);
+        return AssertWaitUntilDisposition(ruling.Render(), disposition, ["--operator-actor", "author", "--actor-kind", "Agent"],
+            expectedActor: "author", expectedActorKind: OperatorActorKind.Agent);
     }
 
     [Fact]
@@ -99,7 +102,8 @@ public sealed class PlannerBriefAmendmentHoldOperatorWaitTests
         }
     }
 
-    private static async Task AssertWaitUntilDisposition(string answer, string disposition, string[] attribution)
+    private static async Task AssertWaitUntilDisposition(string answer, string disposition, string[] attribution,
+        string expectedActor, OperatorActorKind expectedActorKind)
     {
         using var f = new Fixture(objective: "Implement the current brief.\n\n## Acceptance criteria\n" +
             "- Reproduce the regression.\n");
@@ -110,6 +114,10 @@ public sealed class PlannerBriefAmendmentHoldOperatorWaitTests
         await File.WriteAllTextAsync(notePath, answer);
         PlannerBriefAmendmentAnswerRoutingTests.ExecuteAttentionAnswer(f, workspace, ["--text-file", notePath, .. attribution]);
         await ApplyAnswerAsync(coordinator, f, repository);
+        var appliedAnswer = Assert.Single(f.Goal.Timeline.Select(entry => entry.OperatorIntentApplied)
+            .OfType<OperatorIntentAppliedPayload>(), applied => applied.Verb == OperatorIntentVerbs.Answer);
+        Assert.Equal(expectedActor, appliedAnswer.Actor);
+        Assert.Equal(expectedActorKind, appliedAnswer.ActorKind);
         Assert.Equal(answer, f.Request.Answer);
         Assert.Null(f.Request.AuthoritativeAnswer!.AmendmentDisposition);
 
