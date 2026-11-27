@@ -29,7 +29,7 @@ public sealed class AssemblyCleanupRetryFeedbackEvidenceTests
         Assert.Equal("failing-trx", decision.FailedPredicate);
         Assert.Null(classified.FailureClassification);
         Assert.Null(classified.FailureCauseEvidence);
-        Assert.Contains(feedback, line => line.Contains("[FAIL] Tests.RealFailure (Failed)", StringComparison.Ordinal) &&
+        Assert.Contains(feedback, line => line.Contains("[FAIL] [not rerun] Tests.RealFailure (Failed)", StringComparison.Ordinal) &&
             line.Contains("real assertion failed", StringComparison.Ordinal));
         var lastTrxEntry = Array.FindLastIndex(feedback, line => line.StartsWith("[FAIL]", StringComparison.Ordinal));
         Assert.True(lastTrxEntry >= 0);
