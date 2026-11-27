@@ -5,11 +5,14 @@ using Xunit;
 
 public sealed class GoalExecutionProjectionAgreementTests
 {
-    [Fact]
-    public void Preflight_MissingWorkspace_ReportsWorkspaceMissingBlocker()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Preflight_MissingWorkspace_ReportsWorkspaceMissingBlocker(bool corruptJournal)
     {
         var (kernel, _, goal, agents) = ReadinessTestSeed.Create();
-        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var directory = Directory.CreateTempSubdirectory();
+        var root = directory.FullName;
         var profiles = WorkerProfileCatalog.Default();
         var now = ReadinessTestSeed.Now;
         var resolutions = 0;
@@ -19,18 +22,33 @@ public sealed class GoalExecutionProjectionAgreementTests
             return null;
         }
 
-        var report = GoalReadinessPreflight.Build(goal, agents, root, profiles, ResolveWorktree,
-            kernel.ProviderHoldScope, now);
-        var conductor = ConductorDriver.EvaluateConductorReadiness(kernel, goal, agents, profiles, now,
-            executionDirectory: root, resolveWorktree: ResolveWorktree);
+        try
+        {
+            if (corruptJournal)
+            {
+                var path = GoalOperationJournal.PathFor(root, goal.Id);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path + ".gz", "Invalid gzip header");
+                Assert.Throws<InvalidDataException>(() => GoalOperationJournal.Read(root, goal.Id));
+            }
 
-        Assert.Equal(2, resolutions);
-        Assert.True(report.RequiresWorkspace);
-        Assert.False(report.HasWorkspace);
-        var finding = Assert.Single(report.Findings, item => item.Kind == "workspace-missing");
-        Assert.Equal(GoalReadinessSeverity.Blocker, finding.Severity);
-        Assert.False(finding.CanOverride);
-        Assert.IsType<DispatchReadinessReady>(conductor);
+            var report = GoalReadinessPreflight.Build(goal, agents, root, profiles, ResolveWorktree,
+                kernel.ProviderHoldScope, now);
+            var conductor = ConductorDriver.EvaluateConductorReadiness(kernel, goal, agents, profiles, now,
+                executionDirectory: root, resolveWorktree: ResolveWorktree);
+
+            Assert.Equal(2, resolutions);
+            Assert.True(report.RequiresWorkspace);
+            Assert.False(report.HasWorkspace);
+            var finding = Assert.Single(report.Findings, item => item.Kind == "workspace-missing");
+            Assert.Equal(GoalReadinessSeverity.Blocker, finding.Severity);
+            Assert.False(finding.CanOverride);
+            Assert.IsType<DispatchReadinessReady>(conductor);
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
     }
 
     [Fact]

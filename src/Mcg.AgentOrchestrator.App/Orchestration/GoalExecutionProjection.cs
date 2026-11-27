@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -48,15 +49,16 @@ internal sealed class GoalExecutionProjection
                 ? new DispatchReadinessReady()
                 : new DispatchReadinessBlocked("No assigned dispatch candidates");
 
-        var journal = executionDirectory is null
-            ? new GoalOperationJournalSummary(string.Empty, [], [], [])
-            : GoalOperationJournal.Read(executionDirectory, goal.Id);
-        var branchHead = string.IsNullOrWhiteSpace(worktree) ? null : GoalAcceptanceStatusProjector.TryResolveHead(worktree);
+        var journal = executionDirectory is null ? null : TryReadJournal(executionDirectory, goal.Id);
+        var branchHead = journal is null || string.IsNullOrWhiteSpace(worktree)
+            ? null
+            : GoalAcceptanceStatusProjector.TryResolveHead(worktree);
         var mainHead = string.IsNullOrWhiteSpace(branchHead) || executionDirectory is null
             ? null
             : GoalAcceptanceStatusProjector.TryResolveHead(executionDirectory);
-        var isBlocked = HasBlockingAcceptance(goal, journal, branchHead, mainHead) ||
-            journal.LatestByOperation.Any(entry =>
+        var lifecycleJournal = journal ?? new GoalOperationJournalSummary(string.Empty, [], [], []);
+        var isBlocked = HasBlockingAcceptance(goal, lifecycleJournal, branchHead, mainHead) ||
+            lifecycleJournal.LatestByOperation.Any(entry =>
                 entry.Status == GoalOperationStatus.Failed &&
                 (entry.Operation.Contains("land", StringComparison.OrdinalIgnoreCase) ||
                  entry.Operation.Contains("cleanup", StringComparison.OrdinalIgnoreCase) ||
@@ -64,16 +66,30 @@ internal sealed class GoalExecutionProjection
         var facts = new GoalLifecycleFacts(
             WorkspaceExists: worktree is not null,
             IsBlocked: isBlocked,
-            IsMerged: GoalOperationJournal.HasCompletedLandingEvidence(journal),
-            IsRecorded: GoalOperationJournal.HasCompletedRecordEvidence(journal),
-            IsCleanedUp: GoalOperationJournal.HasCompletedCleanupEvidence(journal),
+            IsMerged: GoalOperationJournal.HasCompletedLandingEvidence(lifecycleJournal),
+            IsRecorded: GoalOperationJournal.HasCompletedRecordEvidence(lifecycleJournal),
+            IsCleanedUp: GoalOperationJournal.HasCompletedCleanupEvidence(lifecycleJournal),
             HasOpenClarification: hasOpenClarification ?? (workspace is not null && GoalRefinementGate.HasOpenClarification(workspace, goal)));
 
         var acceptance = kernel is null
             ? null
-            : GoalAcceptanceStatusProjector.Build(kernel, goal, worktree is null ? null : executionDirectory,
+            : GoalAcceptanceStatusProjector.Build(kernel, goal,
+                worktree is not null && journal is not null ? executionDirectory : null,
                 integrationBranch ?? TrunkBranchName.Default);
         return new GoalExecutionProjection(goal, worktree, facts, verdict, acceptance);
+    }
+
+    private static GoalOperationJournalSummary? TryReadJournal(string executionDirectory, GoalId goalId)
+    {
+        try
+        {
+            return GoalOperationJournal.Read(executionDirectory, goalId);
+        }
+        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            Trace.TraceWarning("Goal {0} journal could not be read for execution projection. {1}", goalId.Value, error.Message);
+            return null;
+        }
     }
 
     private static bool HasBlockingAcceptance(
