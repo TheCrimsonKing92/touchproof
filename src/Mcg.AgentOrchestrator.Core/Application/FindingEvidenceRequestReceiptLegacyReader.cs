@@ -27,21 +27,32 @@ public static class FindingEvidenceRequestReceiptLegacyReader
             "candidate-rerun-green" => (FindingEvidenceRequestReceiptDecision.CandidateRerunGreen, (FindingEvidenceRequestReceiptHold?)null),
             "candidate-rerun-red" => (FindingEvidenceRequestReceiptDecision.CandidateRerunRed, FindingEvidenceRequestReceiptHold.Escalation),
             "candidate-rerun-unusable" => (FindingEvidenceRequestReceiptDecision.CandidateRerunUnusable, FindingEvidenceRequestReceiptHold.Escalation),
+            "pending-execution-gate" => (FindingEvidenceRequestReceiptDecision.PendingExecutionGate, FindingEvidenceRequestReceiptHold.PendingExecutionGate),
             _ => ((FindingEvidenceRequestReceiptDecision?)null, (FindingEvidenceRequestReceiptHold?)null)
         };
         if (decision is null)
             return null;
 
-        // The historical guard includes the candidate SHA and round. Require the entire guard
-        // at its recorded position before treating the remaining fields as receipt evidence.
-        var header = $"{prefix}{disposition}; {requestGuard}";
-        if (!evt.Message.StartsWith(header, StringComparison.Ordinal) ||
-            (evt.Message.Length > header.Length && evt.Message[header.Length] != ';'))
+        var fields = evt.Message.AsSpan(dispositionEnd);
+        // Pending-gate records put these three fields before the guard.
+        if (decision == FindingEvidenceRequestReceiptDecision.PendingExecutionGate &&
+            (ReadField(ref fields, "; role=") is null ||
+             ReadField(ref fields, "; task_id=") is null ||
+             ReadField(ref fields, "; finding_ids=") is null))
         {
             return null;
         }
 
-        var fields = evt.Message.AsSpan(header.Length);
+        // The historical guard includes the candidate SHA and round. Require the entire guard
+        // at its recorded position before treating the remaining fields as receipt evidence.
+        var guardField = $"; {requestGuard}";
+        if (!fields.StartsWith(guardField, StringComparison.Ordinal) ||
+            (fields.Length > guardField.Length && fields[guardField.Length] != ';'))
+        {
+            return null;
+        }
+
+        fields = fields[guardField.Length..];
         var receiptId = ReadField(ref fields, "; receipt_id=");
         var originalReceiptId = ReadField(ref fields, "; original_receipt_id=");
         return new FindingEvidenceRequestReceipt(
@@ -63,6 +74,11 @@ public static class FindingEvidenceRequestReceiptLegacyReader
 
 internal static class FindingEvidenceRequestTimeline
 {
+    internal static FindingEvidenceRequestReceipt? FindPendingExecutionGate(
+        IReadOnlyList<ProgressEvent> timeline, TaskId taskId, string candidateSha, string fingerprint, string guard) =>
+        ReadNewestFirst(timeline, taskId, candidateSha, fingerprint, guard)
+            .FirstOrDefault(receipt => receipt.Decision == FindingEvidenceRequestReceiptDecision.PendingExecutionGate);
+
     internal static FindingEvidenceRequestReceipt? FindBaselineArmAbsent(
         IReadOnlyList<ProgressEvent> timeline, TaskId taskId, string candidateSha, string fingerprint, string guard) =>
         ReadNewestFirst(timeline, taskId, candidateSha, fingerprint, guard)
