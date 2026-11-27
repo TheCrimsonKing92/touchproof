@@ -116,6 +116,46 @@ public sealed class AcceptanceRetryEvidenceBudgetTests
         Assert.Equal("Acceptance criteria summary:", feedback[^2]);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("[FAIL] output fallback")]
+    public void DispositionLabels_NearTotalCap_PreserveAdmittedEvidence(string? fallback)
+    {
+        const string trxPath = "budget.trx";
+        const string stack = "stack";
+        var evidence = new List<string>
+        {
+            $"failed check: {Partition} (exit code 1)",
+            $"TRX receipt for partition \"{Partition}\": {trxPath}"
+        };
+        var entryLength = (32_000 - evidence.Sum(entry => entry.Length) - (fallback?.Length ?? 0)) / 4;
+        var messagePrefix = string.Concat(Enumerable.Repeat(new string('m', 2_000) + "\n", 3));
+        var names = Enumerable.Range(0, 4).Select(index => $"Tests.NearLimit{index}").ToArray();
+        var failures = names.Select(name =>
+        {
+            var overhead = $"[FAIL] {name} (Failed){Environment.NewLine}{messagePrefix}{Environment.NewLine}{stack}";
+            var message = messagePrefix + new string('m', entryLength - overhead.Length);
+            return (new AcceptanceTrxFailure(name, "Failed", message, stack), AcceptanceRetryFailureDisposition.NotRerun);
+        }).ToArray();
+        var budget = new AcceptanceRetryEvidenceBudget();
+        var remainingEvidenceEntries = 30;
+
+        budget.AppendFailures(evidence, Partition, trxPath, 1, failures, ref remainingEvidenceEntries);
+        if (fallback is not null)
+            AcceptanceRetryOutputEvidence.AppendBounded(evidence, [fallback], ref remainingEvidenceEntries);
+        var completed = budget.Complete(evidence);
+
+        var failureEntries = completed.Skip(2).Take(4).ToArray();
+        Assert.Equal(names.Select(name => $"[FAIL] [not rerun] {name} (Failed)"),
+            failureEntries.Select(entry => entry.Split(Environment.NewLine)[0]));
+        Assert.All(failureEntries, entry => Assert.True(entry.Length <= 8_000));
+        Assert.True(completed.Sum(entry => entry.Length) <= 32_000);
+        if (fallback is null)
+            Assert.Equal(6, completed.Count);
+        else
+            Assert.Equal(fallback, Assert.Single(completed.Skip(6)));
+    }
+
     [Fact]
     public void Rerun_SameNameAndFirstMessageLine_AppearsOnceAndAnnotatesReceipt()
     {
