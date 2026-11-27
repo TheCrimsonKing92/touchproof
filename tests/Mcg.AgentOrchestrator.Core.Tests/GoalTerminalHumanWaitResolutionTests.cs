@@ -88,8 +88,25 @@ public sealed class GoalTerminalHumanWaitResolutionTests
         Assert.Equal(control.RefinedSpec!.AcceptanceCriteria.ToArray(), subject.RefinedSpec!.AcceptanceCriteria.ToArray());
         Assert.Equal(2, subject.AuthoritativeBrief.Version);
         Assert.Equal(control.AuthoritativeBrief.Version, subject.AuthoritativeBrief.Version);
-        Assert.Equal(control.Timeline.Skip(controlTimelineLength).Select(entry => (entry.Kind, entry.Message)),
-            appended.Where(entry => entry.Kind != ProgressKind.HumanInputReceived).Select(entry => (entry.Kind, entry.Message)));
+        // Merge-evidence conflict messages include the ID of the task they describe.
+        var subjectTaskIds = control.Tasks.Zip(subject.Tasks).ToDictionary(pair => pair.First.Id, pair => pair.Second.Id);
+        var expectedProgress = control.Timeline.Skip(controlTimelineLength).Select(entry =>
+        {
+            if (entry.TaskId is not { } controlTaskId)
+            {
+                return entry;
+            }
+
+            var subjectTaskId = subjectTaskIds[controlTaskId];
+            return entry with
+            {
+                TaskId = subjectTaskId,
+                Message = entry.Message.Replace(controlTaskId.Value, subjectTaskId.Value, StringComparison.Ordinal)
+            };
+        });
+        Assert.Equal(expectedProgress.Select(entry => (entry.Kind, entry.TaskId, entry.Message)),
+            appended.Where(entry => entry.Kind != ProgressKind.HumanInputReceived)
+                .Select(entry => (entry.Kind, entry.TaskId, entry.Message)));
         if (!recoveringFromReceipt)
         {
             Assert.Equal((control.Timeline[^1].Kind, control.Timeline[^1].Message),
