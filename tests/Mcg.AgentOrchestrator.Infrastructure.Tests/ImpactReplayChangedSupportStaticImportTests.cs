@@ -35,6 +35,23 @@ public sealed class ImpactReplayChangedSupportStaticImportTests
     }
 
     [Fact]
+    public void MixedDirectAndStaticImportReferrers_SelectsExactlyBoth()
+    {
+        using var sources = new SourceFixture();
+        sources.Add("Support.cs", "public static class Journal { public static int Append(int value) => value; }");
+        sources.Add("Unused.cs", "public class Unused { }");
+        sources.Add("AlphaTests.cs", "namespace SampleTests; public class AlphaTests { int value = Journal.Append(1); }");
+        sources.Add("BetaTests.cs", "using static Journal; namespace SampleTests; public class BetaTests { int value = Append(1); }");
+        sources.Add("GammaTests.cs", "namespace SampleTests; public class GammaTests { }");
+
+        var actual = sources.Select(["Support.cs", "Unused.cs"]);
+
+        Assert.Null(actual.AbandonReason);
+        Assert.Equal(new[] { "SampleTests.AlphaTests", "SampleTests.BetaTests" }, actual.Classes);
+        Assert.Empty(actual.OtherFiles);
+    }
+
+    [Fact]
     public void StaticImportChain_SelectsRunnableThroughSecondSupportType()
     {
         using var sources = new SourceFixture();
@@ -114,8 +131,8 @@ public sealed class ImpactReplayChangedSupportStaticImportTests
             _sources.Add(path);
         }
 
-        internal ImpactReplayChangedSupportSelection Select() =>
-            ImpactReplayChangedSupportReferenceScan.Select(_root, ["Support.cs"],
+        internal ImpactReplayChangedSupportSelection Select(IReadOnlyList<string>? changed = null) =>
+            ImpactReplayChangedSupportReferenceScan.Select(_root, changed ?? ["Support.cs"],
                 [new(Path.Combine(_root, "Infrastructure.Tests.csproj"), true, _sources)],
                 () => new HashSet<string>(StringComparer.Ordinal)
                 {

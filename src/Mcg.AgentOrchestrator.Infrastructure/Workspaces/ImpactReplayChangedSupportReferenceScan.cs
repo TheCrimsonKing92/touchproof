@@ -21,7 +21,7 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
 
     private sealed record ChangedFile(string Path, string FullPath, IReadOnlySet<INamedTypeSymbol> Declared,
         HashSet<TestClass> Direct, string? AbandonReason, string? UnresolvedReason,
-        bool Deleted = false, bool HasAssemblyAttributes = false);
+        bool Deleted = false, bool HasAssemblyAttributes = false, bool DeclaresTestMethods = false);
 
     internal static ImpactReplayChangedSupportSelection Select(
         string checkout, IReadOnlyList<string> changedFiles,
@@ -85,9 +85,15 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
                 .Select(type => type.OriginalDefinition)
                 .ToHashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
             var undeclared = declared.Count == 0 && !hasAssemblyAttributes;
+            var declaresTestMethods = root.DescendantNodes().OfType<MethodDeclarationSyntax>()
+                .SelectMany(method => method.AttributeLists)
+                .SelectMany(list => list.Attributes)
+                .Any(attribute => ImpactReplayChangedSupportNameFilter.RightmostIdentifier(attribute.Name)
+                    is "Fact" or "FactAttribute" or "Theory" or "TheoryAttribute");
             files.Add(new(Relative(path), path, declared, [],
                 undeclared ? $"Changed test support has no resolvable test class: {relativePath}" : null,
-                undeclared ? "no resolvable support declarations" : null, HasAssemblyAttributes: hasAssemblyAttributes));
+                undeclared ? "no resolvable support declarations" : null,
+                HasAssemblyAttributes: hasAssemblyAttributes, DeclaresTestMethods: declaresTestMethods));
         }
 
         var classesByType = new Dictionary<ProjectType, HashSet<TestClass>>();
@@ -126,7 +132,10 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
             }
             var union = reached.Concat(file.Direct).ToHashSet();
             var reachesAssemblyHook = hookProjects.Count > 0;
-            var missingClasses = union.Count == 0 && !truncated && file.UnresolvedReason is null && !reachesAssemblyHook;
+            // Unreferenced support selects nothing extra. Test methods with no runnable class still require a fallback.
+            var unreferenced = file.Declared.Count > 0 && union.Count == 0 && !truncated &&
+                file.UnresolvedReason is null && !reachesAssemblyHook;
+            var missingClasses = unreferenced && file.DeclaresTestMethods;
             var unknownProjectReach = file.UnresolvedReason is not null || missingClasses;
             var closureCount = CountClasses(reached);
             var exceedsThreshold = threshold > 0 && closureCount > threshold;
