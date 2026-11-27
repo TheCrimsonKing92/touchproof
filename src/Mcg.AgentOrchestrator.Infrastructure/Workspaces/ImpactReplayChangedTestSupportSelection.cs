@@ -10,11 +10,12 @@ internal static class ImpactReplayChangedTestSupportSelection
 {
     internal static ImpactReplayChangedSupportSelection Read(
         string checkout, IReadOnlyList<string> changedFiles, ImpactReplayChangedSourceRouting routing,
-        int threshold = ImpactReplayChangedSupportReferenceScan.DefaultClosureThreshold)
+        int threshold = ImpactReplayChangedSupportReferenceScan.DefaultClosureThreshold,
+        ImpactReplayTestSourceIndex? sources = null)
     {
         return ImpactReplayChangedSupportReferenceScan.Select(checkout, changedFiles, routing.TestProjects,
             () => RunnableClasses(checkout, routing).Runnable, threshold: threshold,
-            deletedSourceProjects: routing.DeletedSourceProjects);
+            deletedSourceProjects: routing.DeletedSourceProjects, sources: sources);
     }
 
     internal static (HashSet<string> Runnable, IReadOnlyList<string> Excluded) RunnableClasses(
