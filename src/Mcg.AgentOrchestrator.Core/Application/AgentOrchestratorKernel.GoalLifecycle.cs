@@ -2256,12 +2256,12 @@ public sealed partial class AgentOrchestratorKernel
         var goal = GetGoal(request.GoalId);
         request.Dismiss(_clock.UtcNow);
 
-        if (request.TaskId is not null)
+        if (!IsReopenProtectedGoalStatus(goal.LifecycleStatus))
         {
-            TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, goal.FindTask(request.TaskId).SetStatus(WorkTaskStatus.Running), TaskStatusTransitionRecorder.GoalLifecycleDismissHumanInput);
+            if (request.TaskId is not null)
+                TaskStatusTransitionRecorder.Record(_eventWriter, goal.Id, goal.FindTask(request.TaskId).SetStatus(WorkTaskStatus.Running), TaskStatusTransitionRecorder.GoalLifecycleDismissHumanInput);
+            RefreshGoalStatus(goal);
         }
-
-        RefreshGoalStatus(goal);
         Append(goal, request.TaskId, ProgressKind.HumanInputReceived, $"Dismissed human wait {request.Id.Value[..8]}.");
     }
 

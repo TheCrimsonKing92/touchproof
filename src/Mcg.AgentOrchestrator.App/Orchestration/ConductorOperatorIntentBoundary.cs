@@ -139,6 +139,25 @@ internal static class ConductorOperatorIntentBoundary
                     }
                     if (ids.Count == 0) continue;
                 }
+                if (goal is not null && AgentOrchestratorKernel.IsReopenProtectedGoalStatus(goal.Status) &&
+                    (prepared || observeGoal(target.Key) is ConductorGoalReloadObservation.Terminal terminal &&
+                        terminal.Status == goal.Status))
+                {
+                    // Admit the dismissals for checkpointing without readmitting the terminal goal to work.
+                    var dismissIds = preparedBatch.Where(intent => intent.Verb == OperatorIntentVerbs.HumanInputDismiss)
+                        .Select(intent => intent.Id).ToFrozenSet(StringComparer.Ordinal);
+                    if (dismissIds.Count > 0)
+                    {
+                        var dismissals = OperatorIntentGoalApplication.ApplyTerminalDismissals(
+                            kernel, goal, operatorIntents, dismissIds);
+                        result.Lines.AddRange(dismissals.ProgressLines);
+                        if (dismissals.MutatedGoalState) result.ChangedGoalIds.Add(goalId);
+                        result.UnavailableGoalIds.Add(target.Key);
+                        ids = ids.Except(dismissIds).ToFrozenSet(StringComparer.Ordinal);
+                        deferredBatch = deferredBatch.Where(intent => !dismissIds.Contains(intent.Id));
+                        if (ids.Count == 0) continue;
+                    }
+                }
                 if (!prepared || goal is null)
                 {
                     var disposition = UnloadedGoalIntentDisposition.Decide(target.Key, onlyGoalId, observeGoal);
