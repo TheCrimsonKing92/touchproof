@@ -28,6 +28,9 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
         var hasArchive = await ProviderHoldSeedEvidenceStore.HasArchiveAsync(connection, token);
         var hasTimeline = await GoalTimelineStore.HasTableAsync(connection, token);
         var hasHistory = await GoalTaskHistoryStore.HasTableAsync(connection, token);
+        // Status and Fleet request full archive timelines. Keep startup's sparse replay path.
+        var storedEvidence = !sparseArchiveTimelines && hasArchive &&
+            await ProviderHoldSeedEvidenceStore.HasReadableSchemaAsync(connection, token);
         // Legacy archives need a first decode. Overlap a small number of in-memory
         // decodes while retaining one ordered reader for SQLite and replay attribution.
         var archiveBatchSize = sparseArchiveTimelines ? Math.Clamp(Environment.ProcessorCount, 1, 4) : 1;
@@ -47,7 +50,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
         var hasArchiveDiscovery = !indexed && hasArchive &&
             await GoalSnapshotArchive.HasProviderHoldDiscoveryColumnAsync(connection, token);
         command.CommandText = DocumentDiscoverySql(hasArchive, hasTimeline, hasHistory, hasArchiveDiscovery, indexed,
-            filterTextCandidates, sparseArchiveTimelines, backfillArchiveDiscovery);
+            filterTextCandidates, sparseArchiveTimelines, backfillArchiveDiscovery, storedEvidence);
         if (sparseArchiveTimelines)
             command.Parameters.AddWithValue("$holdRules", JsonSerializer.Serialize(ProviderHoldHistory.HoldOutcomeRules));
         using (var reader = await command.ExecuteReaderAsync(token))
@@ -56,13 +59,29 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
             {
                 var id = reader.GetString(0);
                 var payload = reader.GetValue(1);
+                var archivedAt = reader.IsDBNull(2) ? null : reader.GetString(2);
+                if (storedEvidence && reader.GetBoolean(4))
+                {
+                    await ProjectArchivesAsync();
+                    if (ProviderHoldSeedEvidenceStore.TryDecode(id, payload, options) is { } evidence)
+                    {
+                        if (evidence.Timeline.Any(evt => IsMarker(evt.Message)))
+                            discovery.MarkerGoals.Add(new(id));
+                        discovery.ObserveArchiveProjection(id, new(evidence, null), observe);
+                        continue;
+                    }
+
+                    await using var fallback = connection.CreateCommand();
+                    fallback.CommandText = "SELECT snapshot_json FROM goal_snapshot_archive WHERE goal_id = $id";
+                    fallback.Parameters.AddWithValue("$id", id);
+                    payload = (await fallback.ExecuteScalarAsync(token))!;
+                }
                 observe?.Invoke(new("provider-seed-discovery", id, payload switch
                 {
                     string json => json.Length,
                     byte[] bytes => bytes.Length,
                     _ => 0
                 }));
-                var archivedAt = reader.IsDBNull(2) ? null : reader.GetString(2);
                 if (archivedAt is not null)
                 {
                     pending.Add((id, payload, archivedAt, reader.GetBoolean(3)));
@@ -174,7 +193,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
 
     internal static string DocumentDiscoverySql(bool hasArchive, bool hasTimeline, bool hasHistory,
         bool hasArchiveDiscovery, bool indexed, bool filterTextCandidates, bool sparseArchiveTimelines = false,
-        bool backfillArchiveDiscovery = false)
+        bool backfillArchiveDiscovery = false, bool storedEvidence = false)
     {
         var archiveJoin = hasArchive ? "LEFT JOIN goal_snapshot_archive a ON a.goal_id = g.id" : "";
         var goalIndex = indexed ? $"INDEXED BY {GoalSnapshotArchive.ProviderHoldDiscoveryIndex}" : "";
@@ -188,11 +207,25 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
         var document = hasArchive
             ? "CASE WHEN a.goal_id IS NOT NULL AND json_extract(g.snapshot_json, '$.IsMetadataOnly') = 1 THEN a.snapshot_json ELSE g.snapshot_json END"
             : "g.snapshot_json";
+        var storedColumn = storedEvidence ? ", is_stored" : "";
+        var storedJoin = "";
+        if (storedEvidence)
+        {
+            storedJoin = $"""
+
+                LEFT JOIN provider_hold_seed_evidence e ON e.goal_id = a.goal_id
+                    AND e.format_version = {ProviderHoldSeedEvidenceStore.FormatVersion}
+                    AND e.marker = {ProviderHoldSeedEvidenceStore.MarkerSql(hasArchive: true)}
+                    AND json_extract(g.snapshot_json, '$.IsMetadataOnly') = 1
+                """;
+            document = $"CASE WHEN e.goal_id IS NOT NULL THEN e.evidence_json ELSE {document} END";
+        }
         // Sidecar row presence cannot establish authority over an archived inline timeline.
         // Only a negative projection from the archive's authoritative evidence can exclude it.
         var includeUnclassifiedArchives = backfillArchiveDiscovery ? "WHEN archived_at IS NOT NULL THEN 1" : "";
+        var includeStored = storedEvidence ? "WHEN is_stored THEN 1 " : "";
         var textCandidates = filterTextCandidates ? $"""
-            AND CASE {includeUnclassifiedArchives} WHEN typeof(payload) = 'blob' THEN 1 ELSE (
+            AND CASE {includeStored}{includeUnclassifiedArchives} WHEN typeof(payload) = 'blob' THEN 1 ELSE (
                 {SidecarCandidatesSql(hasTimeline, hasHistory)}
                 EXISTS (SELECT 1 FROM json_each(payload, '$.Timeline') e
                     WHERE json_extract(e.value, '$.Message') GLOB 'PROVIDER_BUDGET_*') OR
@@ -210,9 +243,9 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
         // Keep hot documents sparse. Archives need the original document to distinguish
         // authoritative inline data from histories stored in the sidecar tables.
         return $"""
-            WITH documents(id, payload, archived_at, empty_version) AS NOT MATERIALIZED (
-                SELECT g.id, {document}, {archivedAt}, {archiveVersion} FROM goals g {goalIndex}
-                {archiveJoin}
+            WITH documents(id, payload, archived_at, empty_version{storedColumn}) AS NOT MATERIALIZED (
+                SELECT g.id, {document}, {archivedAt}, {archiveVersion}{(storedEvidence ? ", e.goal_id IS NOT NULL" : "")} FROM goals g {goalIndex}
+                {archiveJoin}{storedJoin}
                 {goalFilter}
             )
             SELECT id, CASE WHEN archived_at IS NULL AND typeof(payload) = 'text' THEN json_object(
@@ -232,7 +265,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
                     'DispatchHistory', (SELECT json_group_array(json({DispatchSql("d.value")}))
                         FROM json_each(t.value, '$.DispatchHistory') d)))
                     FROM json_each(payload, '$.Tasks') t)
-                ) ELSE payload END, archived_at, {requiresTimeline}
+                ) ELSE payload END, archived_at, {requiresTimeline}{storedColumn}
             FROM documents
             WHERE empty_version IS NOT {GoalSnapshotArchive.ProviderHoldEmptyVersion}
             {textCandidates}
@@ -266,6 +299,12 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
             // will still use the normal sparse and canonical fallback paths.
             return null;
         }
+        return ObserveArchiveProjection(id, projection, observe);
+    }
+
+    private bool ObserveArchiveProjection(string id, ProviderHoldSeedEvidenceReader.ArchiveProjection projection,
+        Action<GoalSnapshotReadObservation>? observe)
+    {
         var hasReplayEvidence = MarkerGoals.Contains(new(id));
         foreach (var task in projection.Evidence.Tasks)
         {
