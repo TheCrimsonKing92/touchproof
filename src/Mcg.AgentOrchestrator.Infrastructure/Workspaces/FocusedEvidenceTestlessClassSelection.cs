@@ -1,4 +1,3 @@
-using Microsoft.CodeAnalysis.CSharp.Syntax;
 using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -49,16 +48,21 @@ internal static class FocusedEvidenceTestlessClassSelection
     {
         try
         {
-            var roots = FocusedEvidenceRequestResolver.EnumerateFocusedEvidenceSourceFiles(worktreePath, project)
-                .Select(FocusedEvidenceRequestResolver.ParseCSharpRoot).ToArray();
-            if (roots.Length == 0 || roots.Any(root => root.ContainsDiagnostics)) return null;
-            var declarations = roots.SelectMany(root => root.DescendantNodes().OfType<TypeDeclarationSyntax>()).ToArray();
-            var tests = declarations.SelectMany(type => type.Members.OfType<MethodDeclarationSyntax>()
-                .Where(method => method.AttributeLists.SelectMany(list => list.Attributes)
-                    .Any(attribute => FocusedEvidenceMethodResolver.IsTestAttribute(attribute.Name.ToString())))
-                .Select(method => QualifiedName(type) + "." + method.Identifier.ValueText)).ToArray();
+            var store = FocusedEvidenceDeclarationFactStore.Current;
+            var files = FocusedEvidenceRequestResolver.EnumerateFocusedEvidenceSourceFiles(worktreePath, project)
+                .Select(path =>
+                {
+                    var facts = store.Read(path, worktreePath, out var source);
+                    return (Facts: facts, DirectiveText: facts.ContainsDirectives ? source : null);
+                }).ToArray();
+            if (files.Length == 0 || files.Any(file => file.Facts.ContainsDiagnostics)) return null;
+            var declarations = files.SelectMany(file => file.Facts.Types
+                .Select(type => (Type: type, file.Facts.ContainsDirectives))).ToArray();
+            var tests = declarations.SelectMany(declaration => declaration.Type.TestMethodNames
+                .Select(name => declaration.Type.QualifiedName + "." + name)).ToArray();
             // With no recognised tests, this may be another framework or custom-attribute-only project.
-            return tests.Length == 0 ? null : new(roots, declarations, tests);
+            return tests.Length == 0 ? null : new(
+                files.Select(file => file.DirectiveText).OfType<string>().ToArray(), declarations, tests);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -66,26 +70,26 @@ internal static class FocusedEvidenceTestlessClassSelection
         }
     }
 
-    private sealed record Discovery(IReadOnlyList<CompilationUnitSyntax> Roots,
-        IReadOnlyList<TypeDeclarationSyntax> Declarations, IReadOnlyList<string> TestNames)
+    private sealed record Discovery(IReadOnlyList<string> DirectiveTexts,
+        IReadOnlyList<(FocusedEvidenceDeclarationFacts.DeclaredType Type, bool ContainsDirectives)> Declarations,
+        IReadOnlyList<string> TestNames)
     {
         internal bool ProvesTestless(string selector)
         {
             // A substring-only match does not prove the named class is testless. Keep the
             // original selector so downstream guards can still inspect its merge-base identity.
-            if (!Declarations.Any(type => FocusedEvidenceRequestResolver.FocusedEvidenceTypeMatches(type, selector))) return false;
+            if (!Declarations.Any(declaration =>
+                FocusedEvidenceParsedRootCache.FocusedEvidenceTypeMatches(declaration.Type.Name, selector))) return false;
             if (TestNames.Any(name => name.Contains(selector, StringComparison.OrdinalIgnoreCase))) return false;
             // Disabled conditional text may hide another partial part or a substring match.
             var segments = selector.Split('.');
-            if (Roots.Any(root => root.ContainsDirectives && segments.All(segment =>
-                root.ToFullString().Contains(segment, StringComparison.OrdinalIgnoreCase)))) return false;
-            var matches = Declarations.Where(type => QualifiedName(type)
+            if (DirectiveTexts.Any(text => segments.All(segment =>
+                text.Contains(segment, StringComparison.OrdinalIgnoreCase)))) return false;
+            var matches = Declarations.Where(declaration => declaration.Type.QualifiedName
                 .Contains(selector, StringComparison.OrdinalIgnoreCase)).ToArray();
             if (matches.Length == 0) return false;
-            return matches.All(type => type.BaseList is null &&
-                !type.SyntaxTree.GetRoot().ContainsDirectives &&
-                !type.Members.OfType<MethodDeclarationSyntax>().SelectMany(method => method.AttributeLists)
-                    .SelectMany(list => list.Attributes).Any(attribute => CouldDeclareTest(attribute.Name.ToString())));
+            return matches.All(declaration => !declaration.Type.HasBaseList && !declaration.ContainsDirectives &&
+                !declaration.Type.MethodAttributeNames.Any(CouldDeclareTest));
         }
     }
 
@@ -97,9 +101,4 @@ internal static class FocusedEvidenceTestlessClassSelection
         // A custom Fact/Theory subclass is uncertainty, without expanding test recognition.
         return simpleName.EndsWith("Fact", StringComparison.Ordinal) || simpleName.EndsWith("Theory", StringComparison.Ordinal);
     }
-
-    private static string QualifiedName(TypeDeclarationSyntax type) => string.Join('.',
-        type.Ancestors().OfType<BaseNamespaceDeclarationSyntax>().Reverse().Select(item => item.Name.ToString())
-            .Concat(type.Ancestors().OfType<TypeDeclarationSyntax>().Reverse().Select(item => item.Identifier.ValueText))
-            .Append(type.Identifier.ValueText));
 }

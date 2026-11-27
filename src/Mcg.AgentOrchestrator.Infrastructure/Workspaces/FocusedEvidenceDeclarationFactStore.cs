@@ -9,8 +9,8 @@ internal sealed class FocusedEvidenceDeclarationFactStore(FocusedEvidenceParsedR
 {
     internal const string DirectoryName = "focused-evidence-declaration-facts";
     // Bump if the serialized envelope or facts change incompatibly, or if extraction changes
-    // simple/qualified names (including nesting), class/record classification, or Fact/Theory recognition or ownership.
-    internal const int ExtractorVersion = 1;
+    // names, type classification, test recognition or ownership, diagnostics, directives, bases, or method attributes.
+    internal const int ExtractorVersion = 2;
 
     private static readonly FocusedEvidenceDeclarationFactStore Shared = new();
     private static readonly AsyncLocal<FocusedEvidenceDeclarationFactStore?> Override = new();
@@ -29,10 +29,14 @@ internal sealed class FocusedEvidenceDeclarationFactStore(FocusedEvidenceParsedR
         return new RestoreStore(previous);
     }
 
-    internal FocusedEvidenceDeclarationFacts Read(string path, string? worktreePath = null)
+    internal FocusedEvidenceDeclarationFacts Read(string path, string? worktreePath = null) =>
+        Read(path, worktreePath, out _);
+
+    // Consumers of both facts and text should use the same source snapshot.
+    internal FocusedEvidenceDeclarationFacts Read(string path, string? worktreePath, out string source)
     {
         var fullPath = Path.GetFullPath(path);
-        var source = SelectionFileReadProbe.ReadAllText(path);
+        source = SelectionFileReadProbe.ReadAllText(path);
         var hash = AcceptanceTestClassSourceExtractStore.HashText(source);
         lock (_sync)
         {
@@ -105,7 +109,8 @@ internal sealed class FocusedEvidenceDeclarationFactStore(FocusedEvidenceParsedR
             if (entry is null || entry.ExtractorVersion != ExtractorVersion || entry.ContentHash != hash ||
                 entry.Facts is not { } facts || facts.Types.IsDefault ||
                 facts.Types.Any(type => type is null || type.SimpleName is null || type.QualifiedName is null ||
-                    type.TestMethodNames.IsDefault || type.TestMethodNames.Any(name => name is null)))
+                    type.TestMethodNames.IsDefault || type.TestMethodNames.Any(name => name is null) ||
+                    type.MethodAttributeNames.IsDefault || type.MethodAttributeNames.Any(name => name is null)))
                 return null;
             return facts;
         }
