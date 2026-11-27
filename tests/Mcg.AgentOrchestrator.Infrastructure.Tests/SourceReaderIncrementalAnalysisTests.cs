@@ -117,41 +117,157 @@ public sealed class SourceReaderIncrementalAnalysisTests
         Assert.Equal(2, cache.SemanticFileCount);
     }
 
-    [Theory]
-    [InlineData("corrupt")]
-    [InlineData("truncated")]
-    [InlineData("missing")]
-    [InlineData("older-format")]
-    [InlineData("missing-facts")]
-    [InlineData("hash-mismatch")]
-    [InlineData("wrong-key")]
-    public void InvalidBaseline_AnalysesEveryCandidateFile(string damage)
+    [Fact]
+    public void PerFileRecords_WithoutWholeTreeEnvelopes_ReuseBaselineAndMatchFullExtract()
     {
         using var storage = new Storage();
         var baseline = Base();
+        const string changed = "tests/Helper.cs";
+        baseline.Add(changed, "public static class Helper { public static void Read() {} }");
+        baseline["tests/Reader.cs"] = "public class FirstTests { public void Reads() { Helper.Read(); } }";
         var stored = new SourceReaderAnalysisCache(storage.Path);
         Analyze(stored, baseline);
-        var entry = Assert.IsType<string>(stored.EntryPath(SourceReaderAnalysisCache.Key(Sources(baseline))));
-        var text = File.ReadAllText(entry);
+        var key = SourceReaderAnalysisCache.Key(Sources(baseline));
+        var envelope = Assert.IsType<string>(stored.EntryPath(key));
+        Assert.True(File.Exists(envelope));
+        File.Delete(envelope);
+        Assert.Empty(Directory.GetFiles(storage.Path, "*.json"));
+        Assert.True(File.Exists(new SourceReaderFileFactsStore(storage.Path).PublicationPath(key)));
+
+        var candidate = new Dictionary<string, string>(baseline)
+        {
+            [changed] = "public static class Helper { public static void Read() { RepositorySourceSnapshotCache.Get(\"root\"); } }"
+        };
+        var cache = new SourceReaderAnalysisCache(storage.Path);
+        var extractions = new List<HashSet<string>?>();
+        var actual = Analyze(cache, candidate, extractions);
+
+        AssertEquivalent(Analyze(new(null), candidate), actual);
+        Assert.Contains("FirstTests", actual.ReaderOwners);
+        var plan = Assert.IsType<HashSet<string>>(Assert.Single(extractions));
+        Assert.Equal(new[] { changed, "tests/Reader.cs" }, plan.Order(StringComparer.Ordinal));
+        Assert.Equal(plan.Count, cache.SemanticFileCount);
+        Assert.True(cache.SemanticFileCount < candidate.Count);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("truncated")]
+    [InlineData("payload-digest-mismatch")]
+    [InlineData("content-hash-mismatch")]
+    [InlineData("path-mismatch")]
+    [InlineData("older-format")]
+    [InlineData("missing-old-version")]
+    public void DamagedFileRecord_IsAbsentAndMatchesFullExtract(string damage)
+    {
+        using var storage = new Storage();
+        var baseline = Base();
+        Analyze(new(storage.Path), baseline);
+        const string changed = "tests/Spare0.cs";
+        const string unchanged = "tests/Spare1.cs";
+        var hash = SourceReaderFileFacts.Hash(baseline[damage == "missing-old-version" ? changed : unchanged]);
+        var record = Assert.IsType<string>(new SourceReaderFileFactsStore(storage.Path).RecordPath(hash));
+        var text = File.ReadAllText(record);
         var json = Assert.IsType<JsonObject>(JsonNode.Parse(text));
         switch (damage)
         {
             case "older-format": json["FormatVersion"] = SourceReaderAnalysisCache.FormatVersion - 1; break;
-            case "missing-facts": Assert.True(json.Remove("Files")); break;
-            case "hash-mismatch": json["Files"]![0]!["ContentHash"] = new string('0', 64); break;
-            case "wrong-key": json["Key"] = new string('0', 64); break;
+            case "payload-digest-mismatch": json["FactsByPath"]![unchanged]!["Facts"]!["DeclaresSnapshotCache"] = true; break;
+            case "content-hash-mismatch": json["ContentHash"] = new string('0', 64); break;
+            case "path-mismatch":
+                var paths = Assert.IsType<JsonObject>(json["FactsByPath"]);
+                var payload = paths[unchanged];
+                paths.Remove(unchanged);
+                paths["tests/Different.cs"] = payload;
+                break;
         }
-        if (damage == "missing") File.Delete(entry);
-        else File.WriteAllText(entry, damage switch
-        {
-            "corrupt" => "not json",
-            "truncated" => text[..(text.Length / 2)],
-            _ => json.ToJsonString()
-        });
-        var candidate = new Dictionary<string, string>(baseline) { ["tests/Spare0.cs"] = Reader("Spare0", "Unique0") };
+        if (damage is "missing" or "missing-old-version") File.Delete(record);
+        else File.WriteAllText(record, damage == "truncated" ? text[..(text.Length / 2)] : json.ToJsonString());
+
+        var candidate = new Dictionary<string, string>(baseline) { [changed] = Reader("Spare0", "Unique0") };
         var cache = new SourceReaderAnalysisCache(storage.Path);
-        AssertEquivalent(Analyze(new(null), candidate), Analyze(cache, candidate));
-        Assert.Equal(candidate.Count, cache.SemanticFileCount);
+        var extractions = new List<HashSet<string>?>();
+        AssertEquivalent(Analyze(new(null), candidate), Analyze(cache, candidate, extractions));
+        var plan = Assert.Single(extractions);
+        if (damage == "missing-old-version")
+        {
+            Assert.Null(plan);
+            Assert.Equal(candidate.Count, cache.SemanticFileCount);
+        }
+        else
+        {
+            Assert.NotNull(plan);
+            Assert.Equal(new[] { changed, unchanged }, plan.Order(StringComparer.Ordinal));
+            Assert.Equal(plan.Count, cache.SemanticFileCount);
+        }
+    }
+
+    [Fact]
+    public void RecordFromDifferentPublication_ReextractsReboundCaller()
+    {
+        using var storage = new Storage();
+        const string caller = "tests/Reader.cs";
+        const string helper = "tests/Helper.cs";
+        var baseline = Base();
+        baseline[caller] = "public class FirstTests { public void Reads() { Probe.Read(null); } }";
+        const string readingOverload = "public static void Read(object value) { RepositorySourceSnapshotCache.Get(\"root\"); }";
+        baseline.Add(helper, $"public static class Probe {{ {readingOverload} }}");
+        Assert.Contains("FirstTests", Analyze(new(storage.Path), baseline).ReaderOwners);
+        var newerTree = new Dictionary<string, string>(baseline)
+        {
+            [helper] = $"public static class Probe {{ {readingOverload} public static void Read(string value) {{}} }}"
+        };
+        Assert.DoesNotContain("FirstTests", Analyze(new(storage.Path), newerTree).ReaderOwners);
+
+        var candidate = new Dictionary<string, string>(baseline)
+        {
+            ["tests/Spare0.cs"] = baseline["tests/Spare0.cs"] + "\n// Isolated edit"
+        };
+        var cache = new SourceReaderAnalysisCache(storage.Path);
+        var extractions = new List<HashSet<string>?>();
+        var actual = Analyze(cache, candidate, extractions);
+
+        AssertEquivalent(Analyze(new(null), candidate), actual);
+        Assert.Contains("FirstTests", actual.ReaderOwners);
+        var plan = Assert.IsType<HashSet<string>>(Assert.Single(extractions));
+        Assert.Contains(caller, plan);
+        Assert.Equal(plan.Count, cache.SemanticFileCount);
+        Assert.True(cache.SemanticFileCount < candidate.Count);
+    }
+
+    [Fact]
+    public void IdenticalContentsAtDifferentPaths_DoNotRebindGlobalUsingFacts()
+    {
+        using var storage = new Storage();
+        const string globalUsing = "global using System;";
+        const string first = "tests/FirstUsings.cs";
+        const string second = "tests/SecondUsings.cs";
+        const string changed = "tests/Spare0.cs";
+        var baseline = Base();
+        baseline.Add(first, globalUsing);
+        baseline.Add(second, globalUsing);
+        Analyze(new(storage.Path), baseline);
+        var store = new SourceReaderFileFactsStore(storage.Path);
+        var hash = SourceReaderFileFacts.Hash(globalUsing);
+        var record = JsonNode.Parse(File.ReadAllText(store.RecordPath(hash)!))!;
+        var paths = Assert.IsType<JsonObject>(record["FactsByPath"]);
+        Assert.Equal(2, paths.Count);
+        var firstDigest = paths[first]!["Digest"]!.GetValue<string>();
+        var secondDigest = paths[second]!["Digest"]!.GetValue<string>();
+        Assert.True(store.TryGet(hash, first, firstDigest, out var firstFacts));
+        Assert.Equal(first, firstFacts.Path);
+        Assert.True(store.TryGet(hash, second, secondDigest, out var secondFacts));
+        Assert.Equal(second, secondFacts.Path);
+        Assert.False(store.TryGet(hash, second, firstDigest, out _));
+        Assert.False(store.TryGet(hash, "tests/OtherUsings.cs", firstDigest, out _));
+
+        var candidate = new Dictionary<string, string>(baseline) { [changed] = Reader("Spare0", "Unique0") };
+        var cache = new SourceReaderAnalysisCache(storage.Path);
+        var extractions = new List<HashSet<string>?>();
+        AssertEquivalent(Analyze(new(null), candidate), Analyze(cache, candidate, extractions));
+        var plan = Assert.IsType<HashSet<string>>(Assert.Single(extractions));
+        Assert.Equal(changed, Assert.Single(plan));
+        Assert.Equal(plan.Count, cache.SemanticFileCount);
     }
 
     [Fact]

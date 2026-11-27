@@ -11,6 +11,51 @@ public sealed class SourceReaderAnalysisCacheTests
     [new("Sample.FirstTests", null), new("Sample.SecondTests", null), new("Sample.ThirdTests", null)];
 
     [Fact]
+    public void FileFactsStore_AlternatingTreesStayWithinRetentionBound()
+    {
+        using var storage = new CacheDirectory();
+        var cache = new SourceReaderAnalysisCache(storage.Path);
+        var store = new SourceReaderFileFactsStore(storage.Path);
+        var readers = new[] { Reader("FirstTests"), Reader("SecondTests") };
+
+        for (var index = 0; index < 12; index++)
+        {
+            var key = PublishFacts(cache, readers[index % readers.Length]);
+            File.Delete(cache.EntryPath(key)!); // Force publication even when a tree returns.
+        }
+
+        Assert.Equal(12, cache.AnalysisCount);
+        var records = Path.GetDirectoryName(store.RecordPath(SourceReaderFileFacts.Hash(Snapshot)))!;
+        Assert.Equal(3, Directory.GetFiles(records, "*.json").Length); // One shared record and two reader records.
+        var publications = Path.GetDirectoryName(store.PublicationPath(new string('0', 64)))!;
+        Assert.InRange(Directory.GetFiles(publications, "*.json").Length, 2, SourceReaderFileFactsStore.RetainedPublications);
+    }
+
+    [Fact]
+    public void FileFactsStore_EvictsRecordsUnreferencedByRetainedPublications()
+    {
+        using var storage = new CacheDirectory();
+        var cache = new SourceReaderAnalysisCache(storage.Path);
+        var store = new SourceReaderFileFactsStore(storage.Path);
+        var oldestRecord = store.RecordPath(SourceReaderFileFacts.Hash(Reader("Test0")))!;
+        var bound = SourceReaderFileFactsStore.RetainedPublications;
+        var firstPublication = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        string? lastPublication = null;
+
+        for (var index = 0; index <= bound; index++)
+        {
+            lastPublication = store.PublicationPath(PublishFacts(cache, Reader($"Test{index}")))!;
+            File.SetLastWriteTimeUtc(lastPublication, firstPublication.AddDays(index));
+            if (index == 0) Assert.True(File.Exists(oldestRecord));
+        }
+
+        Assert.Equal(bound, Directory.GetFiles(Path.GetDirectoryName(lastPublication!)!, "*.json").Length);
+        Assert.Equal(bound + 1, Directory.GetFiles(Path.GetDirectoryName(oldestRecord)!, "*.json").Length);
+        Assert.False(File.Exists(oldestRecord));
+        Assert.True(File.Exists(store.RecordPath(SourceReaderFileFacts.Hash(Snapshot))));
+    }
+
+    [Fact]
     public void PublishingEvictsOldGenerationsAndPreservesUnownedFiles()
     {
         using var storage = new CacheDirectory();
@@ -460,6 +505,17 @@ public sealed class SourceReaderAnalysisCacheTests
 
     private static ImpactReplayTestSourceIndex Sources(params string[] texts) =>
         new(texts.Select(text => (SyntaxTree)CSharpSyntaxTree.ParseText(text)));
+
+    private static string PublishFacts(SourceReaderAnalysisCache cache, string reader)
+    {
+        var sources = new ImpactReplayTestSourceIndex(
+        [
+            CSharpSyntaxTree.ParseText(Snapshot, path: "tests/Snapshot.cs"),
+            CSharpSyntaxTree.ParseText(reader, path: "tests/Reader.cs")
+        ]);
+        cache.GetOrAnalyze(sources, SourceReadingGuardTestClasses.Extract, SourceReadingGuardTestClasses.Evaluate);
+        return SourceReaderAnalysisCache.Key(sources);
+    }
 
     private static void AssertNames(ImpactReplayTestSourceIndex sources, params string[] expected) =>
         Assert.Equal(expected, Assert.IsType<ImpactReplaySourceGuardReport>(
