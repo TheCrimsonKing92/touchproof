@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using System.Text.Json;
 
 public sealed class HumanInputRetractionMultilineBriefTests
 {
@@ -72,9 +73,11 @@ public sealed class HumanInputRetractionMultilineBriefTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void SupersedingAnswerPreservesConvergencePathCoordinatesAfterMultilineFinding(bool retractAfterPaths)
+    [InlineData("\n", false)]
+    [InlineData("\r\n", false)]
+    [InlineData("\r\n", true)]
+    public void SupersedingAnswerPreservesConvergencePathCoordinatesAfterMultilineFinding(
+        string newline, bool retractAfterPaths)
     {
         const string staleAnswer = "obsolete finding detail";
         const string retainedDetail = "Retain the finding continuation.";
@@ -87,12 +90,12 @@ public sealed class HumanInputRetractionMultilineBriefTests
         var request = kernel.RequestHumanInput(goal.Id, reviewer.Id, "Which detail should govern?");
         kernel.SubmitHumanInput(request.Id, staleAnswer);
 
-        var description = $"{staleAnswer}\n{retainedDetail}";
+        var description = staleAnswer + newline + retainedDetail;
         kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review", "C:\\fixture", 1,
             $$"""
             WORKER_RESULT:
-            findings: [{"stable_id":"scope","state":"open","severity":"blocking","location":{"file":"src/A.cs","region":"A.Run"},"description":"{{staleAnswer}}\n{{retainedDetail}}"}]
+            findings: [{"stable_id":"scope","state":"open","severity":"blocking","location":{"file":"src/A.cs","region":"A.Run"},"description":{{JsonSerializer.Serialize(description)}}}]
             touched_anchors: []
             END_WORKER_RESULT
             """, string.Empty, clock.UtcNow,
@@ -104,7 +107,7 @@ public sealed class HumanInputRetractionMultilineBriefTests
             segment => segment.ConvergenceChangedFiles is not null);
 
         var before = BuildConvergence();
-        Assert.Contains(before.Lines, line => line.EndsWith(description, StringComparison.Ordinal));
+        var beforeFinding = Assert.Single(before.Lines, line => line.EndsWith(description, StringComparison.Ordinal));
 
         clock.Advance();
         kernel.SupersedeHumanInput(goal.Id, request.Id, "Current finding detail", HumanInputAnswerOrigin.Operator);
@@ -124,7 +127,7 @@ public sealed class HumanInputRetractionMultilineBriefTests
         Assert.Equal(paths.Select(path => $"- {path}"),
             after.Lines.Skip(pathList.FirstListLineIndex).Take(pathList.ListLineCount));
         Assert.DoesNotContain(after.Lines, line => line.Contains(staleAnswer, StringComparison.Ordinal));
-        Assert.Contains(after.Lines, line => line.EndsWith("\n" + retainedDetail, StringComparison.Ordinal));
+        Assert.Contains(beforeFinding.Replace(staleAnswer, string.Empty, StringComparison.Ordinal), after.Lines);
     }
 
     private static void AssertAdjacentLines(IReadOnlyList<string> lines, string first, string second)
