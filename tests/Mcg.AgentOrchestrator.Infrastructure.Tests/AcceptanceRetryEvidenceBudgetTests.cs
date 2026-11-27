@@ -11,6 +11,50 @@ public sealed class AcceptanceRetryEvidenceBudgetTests
     private const string Partition = "infrastructure tests: budget";
 
     [Fact]
+    public void FourTrxFailures_RenderOneDispositionEach()
+    {
+        using var fixture = new AssemblyCleanupTrxFixture();
+        var path = fixture.WriteReceipt([
+            Result("Tests.LaneRepeat", "Failed"),
+            Result("Tests.WithinAttemptRepeat", "Failed"),
+            Result("Tests.PassedRetry", "Failed"),
+            Result("Tests.NotRerun", "Failed")]);
+        var check = Check(path) with
+        {
+            LaneRerun = LaneRerun(
+                ["Tests.LaneRepeat", "Tests.WithinAttemptRepeat", "Tests.PassedRetry", "tests.NotRerun"],
+                ["Tests.LaneRepeat"]),
+            WithinAttemptRerun = new(Partition, "initial failure", "first", "retry", 1, [],
+                RerunPassed: false, RerunFailingTestIdentities: ["Tests.WithinAttemptRepeat"])
+        };
+
+        var feedback = ConductorDriver.FormatCriterionRetryFeedbackForTests([check]);
+
+        Assert.Equal([
+            "[FAIL] [repeatable] Tests.LaneRepeat (Failed)",
+            "[FAIL] [repeatable] Tests.WithinAttemptRepeat (Failed)",
+            "[FAIL] [passed retry] Tests.PassedRetry (Failed)",
+            "[FAIL] [not rerun] Tests.NotRerun (Failed)"],
+            Failures(feedback).Select(entry => entry.Split(Environment.NewLine)[0]));
+    }
+
+    [Fact]
+    public void Disposition_RequiresIdentityEvidence()
+    {
+        var check = Check() with
+        {
+            LaneRerun = LaneRerun(null!, null!),
+            WithinAttemptRerun = new(Partition, "initial failure", "first", "retry", 1, [], RerunPassed: true)
+        };
+
+        Assert.Equal(AcceptanceRetryFailureDisposition.NotRerun,
+            AcceptanceRetryEvidenceBudget.ResolveDisposition(check, "Tests.Unattributed"));
+        Assert.Equal(AcceptanceRetryFailureDisposition.NotRerun,
+            AcceptanceRetryEvidenceBudget.ResolveDisposition(
+                check with { LaneRerun = LaneRerun([" "], [" "]) }, " "));
+    }
+
+    [Fact]
     public void LongMessageLine_MeasuredFailureShape_KeepsPrefixAndOmittedCount()
     {
         using var fixture = new AssemblyCleanupTrxFixture();
@@ -32,17 +76,18 @@ public sealed class AcceptanceRetryEvidenceBudgetTests
         var message = string.Join('\n', Enumerable.Repeat(new string('m', 1_000), 6));
         var stack = string.Join('\n', Enumerable.Repeat(new string('s', 1_000), 6));
         var path = fixture.WriteReceipt([WithStack("Tests.LargeEntry", message, stack)]);
+        var check = Check(path) with { LaneRerun = LaneRerun(["Tests.LargeEntry"], []) };
 
-        var entry = Assert.Single(Failures(Feedback(path)));
+        var entry = Assert.Single(Failures(ConductorDriver.FormatCriterionRetryFeedbackForTests([check])));
 
         Assert.True(entry.Length <= 8_000);
         var marker = Regex.Match(entry, @"\[truncated: (\d+) chars omitted; full failure in (.*)\]$");
         Assert.True(marker.Success, "Entry overflow must end with a full-failure receipt.");
         Assert.Equal(path, marker.Groups[2].Value);
         var retainedLength = marker.Index - Environment.NewLine.Length;
-        var originalLength = $"[FAIL] Tests.LargeEntry (Failed){Environment.NewLine}{message}{Environment.NewLine}{stack}".Length;
+        var originalLength = $"[FAIL] [passed retry] Tests.LargeEntry (Failed){Environment.NewLine}{message}{Environment.NewLine}{stack}".Length;
         Assert.Equal(originalLength, retainedLength + int.Parse(marker.Groups[1].Value));
-        Assert.StartsWith("[FAIL] Tests.LargeEntry (Failed)", entry);
+        Assert.StartsWith("[FAIL] [passed retry] Tests.LargeEntry (Failed)", entry);
         Assert.Contains(new string('s', 100), entry, StringComparison.Ordinal);
     }
 
@@ -63,7 +108,7 @@ public sealed class AcceptanceRetryEvidenceBudgetTests
         var evidence = ConcreteEvidence(feedback);
         Assert.True(evidence.Sum(entry => entry.Length) <= 32_000);
         Assert.Equal(4, Failures(feedback).Length);
-        Assert.Equal(Enumerable.Range(0, 4).Select(index => $"[FAIL] Tests.Failure{index} (Failed)"),
+        Assert.Equal(Enumerable.Range(0, 4).Select(index => $"[FAIL] [not rerun] Tests.Failure{index} (Failed)"),
             Failures(feedback).Select(entry => entry.Split(Environment.NewLine)[0]));
         var summary = Assert.Single(evidence.Where(entry => entry.Contains("more failures omitted", StringComparison.Ordinal)));
         Assert.Equal($"6 more failures omitted — see {string.Join(", ", paths)}", summary);
@@ -79,14 +124,17 @@ public sealed class AcceptanceRetryEvidenceBudgetTests
         var rerun = Path.Combine(fixture.Root, "remainder-run-1.trx");
         File.Copy(fixture.WriteReceipt([WithStack("Tests.Duplicate", "same assertion\nrerun details", "rerun stack")]), rerun);
 
-        var feedback = Feedback(first, rerun);
+        var feedback = ConductorDriver.FormatCriterionRetryFeedbackForTests([
+            Check(first) with { LaneRerun = LaneRerun(["Tests.Duplicate"], ["Tests.Duplicate"]) },
+            Check(rerun) with { LaneRerun = LaneRerun(["Tests.Duplicate"], []) }]);
 
         var entry = Assert.Single(Failures(feedback));
+        Assert.Equal("[FAIL] [repeatable] Tests.Duplicate (Failed)", entry.Split(Environment.NewLine)[0]);
         Assert.Contains("first details", entry, StringComparison.Ordinal);
         Assert.Contains("first stack", entry, StringComparison.Ordinal);
         Assert.DoesNotContain("rerun details", entry, StringComparison.Ordinal);
         Assert.Equal($"TRX receipt for partition \"{Partition}\": {first}", feedback[2]);
-        Assert.Equal($"TRX receipt for partition \"{Partition}\": {rerun} (same failures as {first})", feedback[4]);
+        Assert.Equal($"TRX receipt for partition \"{Partition}\": {rerun} (same failures as {first})", feedback[5]);
     }
 
     [Fact]
@@ -102,7 +150,7 @@ public sealed class AcceptanceRetryEvidenceBudgetTests
     }
 
     [Fact]
-    public void SmallNote_TrxAndOutputFallback_IsByteIdenticalToExistingFormat()
+    public void SmallNote_LabelsTrxAndPreservesOutputFallback()
     {
         using var fixture = new AssemblyCleanupTrxFixture();
         var path = fixture.WriteReceipt([WithStack("Tests.First", "expected 2\nactual 0", "at Tests.cs:line 42"),
@@ -114,8 +162,8 @@ public sealed class AcceptanceRetryEvidenceBudgetTests
             "Concrete acceptance failure evidence:",
             $"failed check: {Partition} (exit code 1)",
             $"TRX receipt for partition \"{Partition}\": {path}",
-            $"[FAIL] Tests.First (Failed){Environment.NewLine}expected 2\nactual 0{Environment.NewLine}at Tests.cs:line 42",
-            $"[FAIL] Tests.Second (Timeout){Environment.NewLine}failure message unavailable{Environment.NewLine}stack trace unavailable",
+            $"[FAIL] [not rerun] Tests.First (Failed){Environment.NewLine}expected 2\nactual 0{Environment.NewLine}at Tests.cs:line 42",
+            $"[FAIL] [not rerun] Tests.Second (Timeout){Environment.NewLine}failure message unavailable{Environment.NewLine}stack trace unavailable",
             "failed check: output-only (exit code 1)",
             "[FAIL] fallback details",
             "detail unavailable: no TRX path was recorded for partition \"output-only\"",
@@ -166,6 +214,11 @@ public sealed class AcceptanceRetryEvidenceBudgetTests
 
     private static AcceptanceCheckResult Check(params string[] paths) =>
         new(Partition, false, 1, null, TestResultPaths: paths, ResultSummary: "failed tests");
+
+    private static AcceptanceLaneRerunEvidence LaneRerun(
+        IReadOnlyList<string> firstFailures, IReadOnlyList<string> retryFailures) =>
+        new("first", [], firstFailures, "initial failure", "retry", [], retryFailures, null,
+            AcceptanceLaneRerunEvidence.ConfirmedFailure);
 
     private static string[] Feedback(params string[] paths) =>
         ConductorDriver.FormatCriterionRetryFeedbackForTests([Check(paths)]);

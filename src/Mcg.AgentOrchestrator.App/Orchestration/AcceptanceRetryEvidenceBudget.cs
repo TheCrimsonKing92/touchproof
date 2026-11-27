@@ -37,11 +37,34 @@ internal sealed class AcceptanceRetryEvidenceBudget
         return bounded?.ToString() ?? text;
     }
 
-    private static string FormatFailure(AcceptanceTrxFailure failure, string trxPath)
+    internal static AcceptanceRetryFailureDisposition ResolveDisposition(AcceptanceCheckResult check, string? identity)
     {
+        if (string.IsNullOrWhiteSpace(identity))
+            return AcceptanceRetryFailureDisposition.NotRerun;
+
+        var laneRerun = check.LaneRerun;
+        if (laneRerun?.RerunFailingTestIdentities?.Contains(identity, StringComparer.Ordinal) == true ||
+            check.WithinAttemptRerun?.RerunFailingTestIdentities?.Contains(identity, StringComparer.Ordinal) == true)
+            return AcceptanceRetryFailureDisposition.Repeatable;
+
+        return laneRerun?.FirstFailingTestIdentities?.Contains(identity, StringComparer.Ordinal) == true
+            ? AcceptanceRetryFailureDisposition.PassedRetry
+            : AcceptanceRetryFailureDisposition.NotRerun;
+    }
+
+    private static string FormatFailure(
+        AcceptanceTrxFailure failure, AcceptanceRetryFailureDisposition disposition, string trxPath)
+    {
+        var label = disposition switch
+        {
+            AcceptanceRetryFailureDisposition.Repeatable => "repeatable",
+            AcceptanceRetryFailureDisposition.PassedRetry => "passed retry",
+            AcceptanceRetryFailureDisposition.NotRerun => "not rerun",
+            _ => throw new ArgumentOutOfRangeException(nameof(disposition), disposition, null)
+        };
         var message = string.IsNullOrEmpty(failure.Message) ? "failure message unavailable" : failure.Message;
         var stackTrace = string.IsNullOrEmpty(failure.StackTrace) ? "stack trace unavailable" : failure.StackTrace;
-        var entry = BoundLine($"[FAIL] {failure.TestName} ({failure.Outcome}){Environment.NewLine}{message}{Environment.NewLine}{stackTrace}");
+        var entry = BoundLine($"[FAIL] [{label}] {failure.TestName} ({failure.Outcome}){Environment.NewLine}{message}{Environment.NewLine}{stackTrace}");
         if (entry.Length <= MaxFailureCharacters) return entry;
 
         var retained = MaxFailureCharacters;
@@ -56,11 +79,12 @@ internal sealed class AcceptanceRetryEvidenceBudget
 
     internal void AppendFailures(
         List<string> evidence, string criterionName, string trxPath, int receiptLineIndex,
-        IReadOnlyList<AcceptanceTrxFailure> failures, ref int remainingEvidenceEntries)
+        IReadOnlyList<(AcceptanceTrxFailure Failure, AcceptanceRetryFailureDisposition Disposition)> failures,
+        ref int remainingEvidenceEntries)
     {
         var omittedFailures = 0;
         var duplicatePaths = new List<string>();
-        foreach (var failure in failures)
+        foreach (var (failure, disposition) in failures)
         {
             if (string.IsNullOrWhiteSpace(failure.TestName))
             {
@@ -88,7 +112,7 @@ internal sealed class AcceptanceRetryEvidenceBudget
 
             _seen.Add(key, trxPath);
             _failures.Add((evidence.Count, trxPath));
-            evidence.Add(FormatFailure(failure, trxPath));
+            evidence.Add(FormatFailure(failure, disposition, trxPath));
             remainingEvidenceEntries--;
         }
 

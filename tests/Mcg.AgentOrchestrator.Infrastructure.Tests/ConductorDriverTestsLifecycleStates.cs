@@ -618,7 +618,7 @@ public sealed partial class ConductorDriverTestsLifecycleStates
         Assert.Equal(1, task.CriterionRetryCount);
         Assert.Contains(trxPath, retryMessage!, StringComparison.Ordinal);
         Assert.Contains(
-            "[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests.IncludesFailures (Failed)",
+            "[FAIL] [not rerun] Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests.IncludesFailures (Failed)",
             retryMessage!,
             StringComparison.Ordinal);
         Assert.Contains("Expected: 2", retryMessage!, StringComparison.Ordinal);
