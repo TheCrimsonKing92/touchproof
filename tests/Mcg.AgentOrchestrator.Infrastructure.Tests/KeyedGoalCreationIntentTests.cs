@@ -263,8 +263,9 @@ public sealed class KeyedGoalCreationIntentTests : CliCommandTestBase
         for (var index = 2; index < goalCount; index++)
             stored.CreateGoal($"Unrelated goal {index}");
         await repository.SaveAsync(stored);
-        var claim = new SourceBacklogClaimStore(workspace.SqliteStatePath)
-            .EnsureClaimForNewGoal(stored, item.Id, owner.Id.Value, SourceBacklogCoverage.Slice);
+        var claimStore = new SourceBacklogClaimStore(workspace.SqliteStatePath);
+        var claim = await repository.TransactAsync((current, _) => Task.FromResult((ShouldSave: false,
+            Result: claimStore.EnsureClaimForNewGoal(current, item.Id, owner.Id.Value, SourceBacklogCoverage.Slice))));
         Assert.Equal(owner.Id.Value, claim.OwnerGoalId);
         var working = await repository.LoadGoalsAsync([dependency.Id, owner.Id]);
 
