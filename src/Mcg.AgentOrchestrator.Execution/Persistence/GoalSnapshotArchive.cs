@@ -48,7 +48,10 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
         }
 
         if (candidates.Count != 0)
+        {
             await EnsureProviderHoldDiscoveryIndexAsync(connection, cancellationToken);
+            await ProviderHoldSeedEvidenceStore.CreateSchemaAsync(connection, cancellationToken);
+        }
         var archived = 0;
         long archivedBytes = 0;
         var archivedAt = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
@@ -101,6 +104,7 @@ public sealed class GoalSnapshotArchive(JsonSerializerOptions serializerOptions)
             if (await copy.ExecuteNonQueryAsync(cancellationToken) == 0)
                 continue;
 
+            await ProviderHoldSeedArchiveEvidenceWriter.WriteAsync(connection, id, json, serializerOptions, cancellationToken);
             await using var update = connection.CreateCommand();
             update.CommandText = "UPDATE goals SET snapshot_json = $stub WHERE id = $id";
             update.Parameters.AddWithValue("$id", id);

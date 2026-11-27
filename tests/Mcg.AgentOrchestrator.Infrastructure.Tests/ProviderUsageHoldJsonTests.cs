@@ -111,6 +111,8 @@ public sealed class ProviderUsageHoldJsonTests
             command.CommandText = "SELECT typeof(snapshot_json) FROM goal_snapshot_archive WHERE goal_id = $id";
             command.Parameters.AddWithValue("$id", unrelated.Id.Value);
             Assert.Equal("blob", await command.ExecuteScalarAsync(token));
+            command.CommandText = "DELETE FROM provider_hold_seed_evidence WHERE goal_id = $id";
+            await command.ExecuteNonQueryAsync(token);
             if (corrupt)
             {
                 command.CommandText = """

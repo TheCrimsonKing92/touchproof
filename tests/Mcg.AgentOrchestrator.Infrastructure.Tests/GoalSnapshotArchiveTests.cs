@@ -58,6 +58,8 @@ public sealed class GoalSnapshotArchiveTests
         var after = fixture.GoalRows();
         var archive = fixture.ArchiveRows();
         Assert.Equal(old.Select(g => g.Id).Order(), archive.Keys.Order());
+        var evidenceRows = fixture.ProviderHoldEvidenceRows();
+        Assert.Equal(old.Select(g => g.Id).Order(StringComparer.Ordinal), evidenceRows.Select(row => row.GoalId));
         foreach (var (id, row) in before)
         {
             if (!archive.ContainsKey(id))
@@ -90,6 +92,7 @@ public sealed class GoalSnapshotArchiveTests
         Assert.Equal(0, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(Cutoff));
         Assert.Equal(after.OrderBy(r => r.Key), fixture.GoalRows().OrderBy(r => r.Key));
         Assert.Equal(archive.OrderBy(r => r.Key), fixture.ArchiveRows().OrderBy(r => r.Key));
+        Assert.Equal(evidenceRows, fixture.ProviderHoldEvidenceRows());
         Assert.Equal(otherTables, fixture.OtherTableRows());
     }
 
@@ -260,6 +263,7 @@ public sealed class GoalSnapshotArchiveTests
         Assert.Equal(1, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(Cutoff));
 
         Assert.Equal(eligible.Id, Assert.Single(fixture.ArchiveRows()).Key);
+        Assert.Equal(eligible.Id, Assert.Single(fixture.ProviderHoldEvidenceRows()).GoalId);
         var afterRows = fixture.GoalRows();
         foreach (var snapshot in nonTerminal)
             Assert.Equal(beforeRows[snapshot.Id], afterRows[snapshot.Id]);
@@ -435,11 +439,30 @@ public sealed class GoalSnapshotArchiveTests
             return (long)command.ExecuteScalar()! == 1;
         }
 
+        public List<(string GoalId, string Marker, long FormatVersion, string Payload)> ProviderHoldEvidenceRows()
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT goal_id, marker, format_version, quote(evidence_json)
+                FROM provider_hold_seed_evidence ORDER BY goal_id
+                """;
+            using var reader = command.ExecuteReader();
+            var rows = new List<(string, string, long, string)>();
+            while (reader.Read()) rows.Add((reader.GetString(0), reader.GetString(1), reader.GetInt64(2), reader.GetString(3)));
+            return rows;
+        }
+
         public string OtherTableRows()
         {
             using var connection = Open();
             using var tables = connection.CreateCommand();
-            tables.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT IN ('goals', 'goal_snapshot_archive', 'attention_archive_evidence') ORDER BY name";
+            tables.CommandText = """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table'
+                  AND name NOT IN ('goals', 'goal_snapshot_archive', 'attention_archive_evidence', 'provider_hold_seed_evidence')
+                ORDER BY name
+                """;
             var names = new List<string>();
             using (var reader = tables.ExecuteReader())
                 while (reader.Read()) names.Add(reader.GetString(0));
