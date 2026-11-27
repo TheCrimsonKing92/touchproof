@@ -740,7 +740,7 @@ internal static class SourceSizeRatchet
             // Goal 98758ac2: injected tick census scope and completion emission; measured 7765 lines in the same 50 partials.
             // Goal 7ca0990d: sixteen lines reserve backstop capacity and wire its lifecycle; no new partial or headroom.
             // Goals e986e021 (observation-only conduct ticks) and f53529b7 (scheduled main verification in acceptance capacity).
-            new SourceClassCeiling("ConductorBatchLoop", 7555, 49),
+            new SourceClassCeiling("ConductorBatchLoop", 7554, 49),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
