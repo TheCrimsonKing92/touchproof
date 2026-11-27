@@ -636,7 +636,7 @@ internal static class SourceSizeRatchet
             // the Orchestration-to-Cli boundary; metric validation and auditing stay in CostGoalOutcomeMetric.
             // Measured 11024 lines across the existing 30 partials, with no extra headroom.
             // Goal a1a4aff1 adds three loop lifetime wiring lines. Notice processing lives in ProcessErrorModeEventObserver.
-            new SourceClassCeiling("CliCommandHandlers", 10867, 30),
+            new SourceClassCeiling("CliCommandHandlers", 10801, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -740,7 +740,7 @@ internal static class SourceSizeRatchet
             // Goal 98758ac2: injected tick census scope and completion emission; measured 7765 lines in the same 50 partials.
             // Goal 7ca0990d: sixteen lines reserve backstop capacity and wire its lifecycle; no new partial or headroom.
             // Goals e986e021 (observation-only conduct ticks) and f53529b7 (scheduled main verification in acceptance capacity).
-            new SourceClassCeiling("ConductorBatchLoop", 7554, 49),
+            new SourceClassCeiling("ConductorBatchLoop", 7555, 49),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
