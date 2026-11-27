@@ -113,10 +113,9 @@ public sealed class ImpactReplayChangedTestSupportTests
         });
         fixture.AddAttempt("unused-support");
         var attempt = Assert.Single(fixture.Run().Report.Attempts);
-        Assert.Equal("Abandoned", attempt.SelectionOutcome);
-        Assert.Equal("ChangedTestSupportUnresolved", attempt.DegradationKind);
-        Assert.Contains("UnusedSupport.cs", attempt.SelectionReason);
-        Assert.Empty(attempt.SkippedLanes);
-        Assert.False(attempt.MissCheckComplete);
+        Assert.Equal("Resolved", attempt.SelectionOutcome);
+        Assert.Null(attempt.DegradationKind);
+        Assert.Equal(new[] { "AlphaTests" }, attempt.SelectedTestClasses);
+        Assert.DoesNotContain(attempt.EvidenceWarnings, warning => warning.Contains("UnusedSupport.cs", StringComparison.Ordinal));
     }
 }
