@@ -168,6 +168,7 @@ internal static class ReverseDependencyTestImpactReader
         IReadOnlyDictionary<string, IReadOnlyList<(int StartLine, int EndLine)>>? changedLineRanges)
     {
         var indexedFiles = index.Files;
+        var knownMembersByType = index.KnownMembersByType;
         try
         {
             var normalizedChangedPaths = changedSourcePaths
@@ -217,7 +218,8 @@ internal static class ReverseDependencyTestImpactReader
             var frontier = MergeFrontier(changedPaths
                 .SelectMany(path =>
                 {
-                    var declarations = indexedFiles[path].Symbols!.DeclaredTypes;
+                    var file = indexedFiles[path];
+                    var declarations = file.Symbols!.DeclaredTypes;
                     var key = NormalizeRepositoryPath(Path.GetRelativePath(repositoryRoot, path));
                     if (normalizedRanges.TryGetValue(key, out var ranges))
                     {
@@ -232,7 +234,7 @@ internal static class ReverseDependencyTestImpactReader
                     return declarations.Select(declaration => new FrontierSymbol(
                         declaration.Name,
                         TestSelectionMode.AllReferencingClasses,
-                        SeedFilter(declaration, ranges)));
+                        SeedFilter(declaration, ranges, isShippingFile: !file.IsTargetTestProject)));
                 }));
             headroom = headroom with { LargestFrontierSymbolCount = frontier.Length };
             if (frontier.Length == 0)
@@ -262,7 +264,7 @@ internal static class ReverseDependencyTestImpactReader
                 var hasMemberFilters = frontier.Any(symbol => symbol.MemberFilter is not null);
                 bool ReferencesFrontier(CSharpTestClassScanner.SourceTypeDeclaration declaration) =>
                     declaration.ReferencedIdentifiers.Overlaps(frontierSet) &&
-                    (!hasMemberFilters || frontier.Any(symbol => References(declaration, symbol)));
+                    (!hasMemberFilters || frontier.Any(symbol => References(declaration, symbol, knownMembersByType)));
 
                 var consumers = indexedFiles.Values
                     .Where(file => !seenPaths.Contains(file.Path))
@@ -273,7 +275,7 @@ internal static class ReverseDependencyTestImpactReader
                 {
                     var referencedFrontier = frontier
                         .Where(symbol => consumer.Symbols!.DeclaredTypes.Any(declaration =>
-                            References(declaration, symbol)))
+                            References(declaration, symbol, knownMembersByType)))
                         .ToArray();
                     var allReferencingSymbols = referencedFrontier
                         .Where(symbol => symbol.TestSelectionMode == TestSelectionMode.AllReferencingClasses &&
@@ -296,7 +298,7 @@ internal static class ReverseDependencyTestImpactReader
                             .Where(declaration =>
                                 ownedClassNames.Contains(declaration.Name) ||
                                 declaration.ReferencedIdentifiers.Overlaps(allReferencingSymbols) ||
-                                filteredReferencingSymbols.Any(symbol => References(declaration, symbol)))
+                                filteredReferencingSymbols.Any(symbol => References(declaration, symbol, knownMembersByType)))
                             .Select(declaration => declaration.Name));
                     if (shippingReachDiagnostics is not null && hop == 2)
                     {
@@ -305,7 +307,7 @@ internal static class ReverseDependencyTestImpactReader
                         foreach (var symbol in referencedFrontier.Where(symbol => shippingFrontier!.Contains(symbol.Name)))
                         {
                             if (symbol.TestSelectionMode == TestSelectionMode.AllReferencingClasses
-                                    ? References(declaration, symbol)
+                                    ? References(declaration, symbol, knownMembersByType)
                                     : declaration.Name == $"{symbol.Name}Tests")
                                 shippingReachDiagnostics(symbol.Name, declaration.Name);
                         }
@@ -334,7 +336,8 @@ internal static class ReverseDependencyTestImpactReader
                             file.IsTargetTestProject || propagateShippingSourceReach
                                 ? TestSelectionMode.AllReferencingClasses
                                 : TestSelectionMode.OwnedClassOnly,
-                            declaration.IsPartial ? MemberNames(declaration.Members) : null))));
+                            ConsumerFilter(declaration, frontier, knownMembersByType,
+                                followShippingMembers: !file.IsTargetTestProject && propagateShippingSourceReach)))));
                 if (frontier.Length == 0)
                 {
                     break;
@@ -586,7 +589,14 @@ internal static class ReverseDependencyTestImpactReader
                 new IndexedSourceFile(source.Path, source.IsTargetTestProject, symbols));
         }
 
-        return new ReverseDependencyIndex(files);
+        var knownMembersByType = files.Values
+            .SelectMany(file => file.Symbols!.DeclaredTypes)
+            .GroupBy(declaration => declaration.Name, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key,
+                group => group.SelectMany(declaration => declaration.Members)
+                    .Select(member => member.Name).ToHashSet(StringComparer.Ordinal),
+                StringComparer.Ordinal);
+        return new ReverseDependencyIndex(files, knownMembersByType);
     }
 
     private static bool TryGetCachedIndex(
@@ -820,7 +830,8 @@ internal static class ReverseDependencyTestImpactReader
         CSharpTestClassScanner.SourceSymbols? Symbols);
 
     private sealed record ReverseDependencyIndex(
-        IReadOnlyDictionary<string, IndexedSourceFile> Files);
+        IReadOnlyDictionary<string, IndexedSourceFile> Files,
+        IReadOnlyDictionary<string, HashSet<string>> KnownMembersByType);
 
     private sealed record CachedIndex(string Fingerprint, ReverseDependencyIndex Index);
 
@@ -850,10 +861,101 @@ internal static class ReverseDependencyTestImpactReader
 
     private static IReadOnlySet<string>? SeedFilter(
         CSharpTestClassScanner.SourceTypeDeclaration declaration,
-        IReadOnlyList<(int StartLine, int EndLine)>? ranges) =>
-        declaration.IsPartial && ranges is { Count: > 0 }
-            ? MemberNames(declaration.Members.Where(member => OverlapsAnyRange(member.StartLine, member.EndLine, ranges)))
-            : null;
+        IReadOnlyList<(int StartLine, int EndLine)>? ranges,
+        bool isShippingFile)
+    {
+        if (ranges is not { Count: > 0 })
+            return null;
+
+        if (!declaration.IsPartial)
+        {
+            if (!isShippingFile || declaration.UnattributedLines is not { } unattributedLines ||
+                unattributedLines.Any(line => OverlapsAnyRange(line, line, ranges)))
+                return null;
+
+            foreach (var (startLine, endLine) in ranges)
+            {
+                if (startLine <= declaration.EndLine && declaration.StartLine <= endLine &&
+                    !IsCoveredByMembers(startLine, endLine, declaration.Members))
+                    return null;
+            }
+        }
+
+        return MemberNames(declaration.Members.Where(member => OverlapsAnyRange(member.StartLine, member.EndLine, ranges)));
+    }
+
+    private static bool IsCoveredByMembers(int startLine, int endLine, IReadOnlyList<SourceMemberDeclaration> members)
+    {
+        // The scanner emits member spans in source order.
+        foreach (var member in members)
+        {
+            if (member.EndLine < startLine)
+                continue;
+            if (member.StartLine > startLine)
+                return false;
+            if (member.EndLine >= endLine)
+                return true;
+
+            startLine = member.EndLine + 1;
+        }
+
+        return false;
+    }
+
+    private static IReadOnlySet<string>? ConsumerFilter(
+        CSharpTestClassScanner.SourceTypeDeclaration declaration,
+        IReadOnlyList<FrontierSymbol> frontier,
+        IReadOnlyDictionary<string, HashSet<string>> knownMembersByType,
+        bool followShippingMembers)
+    {
+        var fallback = declaration.IsPartial ? MemberNames(declaration.Members) : null;
+        if (!followShippingMembers || declaration.UnattributedIdentifiers is not { } unattributed ||
+            declaration.Members.Any(member => member.ReferencedIdentifiers is null))
+            return fallback;
+
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var symbol in frontier.Where(symbol => References(declaration, symbol, knownMembersByType)))
+        {
+            if (unattributed.Contains(symbol.Name) ||
+                (symbol.MemberFilter is { } filter && unattributed.Overlaps(filter)))
+                return fallback;
+
+            var matchedMember = false;
+            foreach (var member in declaration.Members)
+            {
+                var identifiers = member.ReferencedIdentifiers!;
+                if (!identifiers.Contains(symbol.Name))
+                    continue;
+
+                if (symbol.MemberFilter is not null && !identifiers.Overlaps(symbol.MemberFilter))
+                {
+                    // A name-only use may reach the changed member indirectly (for example, through construction).
+                    if (!knownMembersByType.TryGetValue(symbol.Name, out var knownMembers) || !identifiers.Overlaps(knownMembers))
+                        return fallback;
+                    continue;
+                }
+
+                matchedMember = true;
+                names.Add(member.Name);
+            }
+
+            if (!matchedMember)
+                return fallback;
+        }
+
+        // Keep callers of matching members in this declaration, including chains of calls.
+        int previousCount;
+        do
+        {
+            previousCount = names.Count;
+            foreach (var member in declaration.Members)
+                if (member.ReferencedIdentifiers!.Overlaps(names))
+                    names.Add(member.Name);
+        }
+        while (names.Count != previousCount);
+
+        return names.Count == 0 || unattributed.Overlaps(names) ? fallback : names;
+    }
 
     private static IReadOnlySet<string>? MemberNames(IEnumerable<SourceMemberDeclaration> members)
     {
@@ -861,9 +963,14 @@ internal static class ReverseDependencyTestImpactReader
         return names.Count > 0 ? names : null;
     }
 
-    private static bool References(CSharpTestClassScanner.SourceTypeDeclaration declaration, FrontierSymbol symbol) =>
+    private static bool References(
+        CSharpTestClassScanner.SourceTypeDeclaration declaration,
+        FrontierSymbol symbol,
+        IReadOnlyDictionary<string, HashSet<string>> knownMembersByType) =>
         declaration.ReferencedIdentifiers.Contains(symbol.Name) &&
-        (symbol.MemberFilter is null || declaration.ReferencedIdentifiers.Overlaps(symbol.MemberFilter));
+        (symbol.MemberFilter is null || declaration.ReferencedIdentifiers.Overlaps(symbol.MemberFilter) ||
+         !knownMembersByType.TryGetValue(symbol.Name, out var knownMembers) ||
+         !declaration.ReferencedIdentifiers.Overlaps(knownMembers));
 
     private static FrontierSymbol[] MergeFrontier(IEnumerable<FrontierSymbol> symbols) =>
         symbols.GroupBy(symbol => symbol.Name, StringComparer.Ordinal)
