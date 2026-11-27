@@ -46,4 +46,20 @@ public sealed class AuthorBriefDraftPromptTestsExactForms
         Assert.Equal(guidance, lines.Skip(ruleIndex + 2).Take(guidance.Length));
         foreach (var line in ownerLines.Concat([lintLine]).Concat(guidance)) Assert.Contains(line, lines);
     }
+
+    [Fact]
+    public void Command_prompt_describes_runtime_observation_bullet_form()
+    {
+        using var fixture = new CliAuthorDraftCommandTests.Fixture();
+        Assert.Equal(0, fixture.Run(JsonSerializer.Serialize(new
+        {
+            kind = "draft", markdown = CliAuthorDraftCommandTests.ValidMarkdown
+        })));
+        var prompt = Assert.IsType<WorkerProcessRunRequest>(fixture.Request).StandardInput!;
+
+        Assert.Contains("starts with the exact prefix runtime-observation:", prompt);
+        Assert.Contains("the same bullet cites either an operator-evidence file path in plain text with a directory separator and a file extension", prompt);
+        Assert.Contains("a backlog note as note <hex id>", prompt);
+        Assert.Contains("If either check fails, the bullet is counted and verified as a source claim.", prompt);
+    }
 }

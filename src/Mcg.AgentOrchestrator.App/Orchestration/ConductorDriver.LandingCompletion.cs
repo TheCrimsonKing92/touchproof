@@ -8,7 +8,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
-    private readonly SoloBaselineRepairCoordinator? _soloBaselineRepair;
+    internal readonly SoloBaselineRepairCoordinator? _soloBaselineRepair;
 
     private SoloAcceptanceConsumptionContext? ReadSoloAcceptanceContext(Goal goal) =>
         SoloAcceptanceContextReader is { } reader ? reader(goal) :

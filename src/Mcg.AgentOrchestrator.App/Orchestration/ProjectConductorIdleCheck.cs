@@ -13,7 +13,7 @@ internal static class ProjectConductorIdleCheck
             // intents and acceptance holders cover work surviving a previous conductor generation.
             var gateCount = countLiveGroupedGates() + driver.ParallelAcceptanceAttemptCoordinator
                 .GetAllCapacityReservingAttempts().Count + driver._focusedEvidenceAttemptCoordinator
-                .GetAllCapacityReservingAttempts().Count;
+                .GetAllCapacityReservingAttempts().Count + (driver._soloBaselineRepair?.CountLiveCheckAttempts() ?? 0);
             return Blockers(countRunningWorkers(), gateCount, landingInProgress: false,
                 pendingIntents: operatorIntents?.HasRelaunchBlockingIntents() == true,
                 applyingIntents: false).Concat(additionalBlockers?.Invoke() ?? []).ToArray();

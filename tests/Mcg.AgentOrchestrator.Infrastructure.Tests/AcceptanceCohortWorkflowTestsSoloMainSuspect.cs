@@ -347,6 +347,7 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
         {
             _driver = new ConductorDriver(Kernel, Workspace, _verifier,
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                runAcceptanceAttemptsInCurrentProcess: true,
                 cleanupHooks: CreateIsolatedCleanupContext(Repo).Hooks,
                 repairIntake: new CliSoloBaselineRepairIntake(Workspace));
         }

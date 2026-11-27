@@ -311,9 +311,11 @@ internal sealed partial class ConductorBatchLoop
             : ConductorTickStepLedger.Measure("prep-oldest-waiter", () => ObserveOldestParallelAcceptanceWaiter(state.OrderedEligible, state.LiveAttemptGoalIds));
         state.TransientRetryPriorityGoal = !suppressNewAcceptanceAdmission() &&
             (driver.MergeTrainsEnabled || driver.AcceptanceCohortsEnabled)
-            ? ConductorTickStepLedger.Measure("prep-retry-priority", () => SelectTransientRetryPriorityGoal(kernel, driver, state.CohortEligible, policy,
-                state.AcceptanceCensus, state.ConfiguredAcceptanceWidth, state.ActiveAttemptSlotIndexes,
-                state.ActiveCandidates, state.LiveAttemptGoalIds, state.OldestWaiterObservation, state.Results, tick, changedGoalLines))
+            ? ConductorTickStepLedger.Measure("prep-retry-priority", () => SoloAcceptanceTransientRetryPriority.Select(
+                state.CohortEligible, state.Results, goal => EvaluateSoloAcceptanceAdmissibility(kernel, driver, goal, policy,
+                    state.AcceptanceCensus, state.ConfiguredAcceptanceWidth, state.ActiveAttemptSlotIndexes, state.ActiveCandidates,
+                    state.LiveAttemptGoalIds, state.OldestWaiterObservation, oldestServedThisTick: false, tick),
+                driver.ParallelAcceptanceAttemptCoordinator.CountPendingTransientRetries, tick, changedGoalLines))
             : null;
         var interactionOnlyKeys = ConductorTickStepLedger.Measure("prep-interaction-keys", () => driver.ReadInteractionOnlyMemberKeys());
         var interactionOnlyGoalIds = speculativeCandidates
@@ -443,16 +445,14 @@ internal sealed partial class ConductorBatchLoop
         {
             // An inline completion can schedule a relaunch before the next candidate.
             if (suppressNewAcceptanceAdmission()) break;
-            if (state.Results.ContainsKey(goal.Id.Value))
-            {
-                continue;
-            }
+            if (state.Results.ContainsKey(goal.Id.Value)) continue;
             try
             {
-            var soloAdmission = ActivationAdmissionProbeScope.RecordSolo(goal.Id, EvaluateSoloAcceptanceAdmissibility(
-                kernel, driver, goal, policy, state.AcceptanceCensus, state.ConfiguredAcceptanceWidth,
-                state.ActiveAttemptSlotIndexes, state.ActiveCandidates, state.LiveAttemptGoalIds,
-                state.OldestWaiterObservation, oldestServedThisTick, tick));
+            var soloAdmission = ActivationAdmissionProbeScope.RecordSolo(goal.Id, GateObligationSelectorPreAdmissionClassifier.CheckSolo(
+                kernel, driver, goal, policy, _workspace, SoloObligationOrchestratorDirectory, SoloObligationInventorySource,
+                EvaluateSoloAcceptanceAdmissibility(kernel, driver, goal, policy, state.AcceptanceCensus, state.ConfiguredAcceptanceWidth,
+                    state.ActiveAttemptSlotIndexes, state.ActiveCandidates, state.LiveAttemptGoalIds,
+                    state.OldestWaiterObservation, oldestServedThisTick, tick, inspectObligationSelectors: false), changedGoalLines.Add));
             if (soloAdmission.Kind != SoloAcceptanceAdmissionKind.Admissible)
             {
                 if (soloAdmission.Kind == SoloAcceptanceAdmissionKind.Capacity) state.DeferredByAdmission++;
