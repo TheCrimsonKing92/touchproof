@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -12,12 +13,30 @@ internal static class PreTesterGuardReferenceReader
         string Pattern = "*", bool Recursive = false);
     private sealed record Binding(ExpressionSyntax Expression, MethodDeclarationSyntax Caller);
 
-    internal static GuardReference[] Read(string file)
+    internal static GuardReference[] Read(string file) =>
+        Read(file, PreTesterGuardReferenceStore.ResolveForFile, Parse);
+
+    internal static GuardReference[] Read(string file, Func<string, PreTesterGuardReferenceStore?> resolveStore,
+        Func<string, GuardReference[]> parse)
     {
         var source = File.ReadAllText(file);
         if (!source.Contains("ReadAllText", StringComparison.Ordinal) &&
             !source.Contains("GetFiles", StringComparison.Ordinal) &&
             !source.Contains("EnumerateFiles", StringComparison.Ordinal)) return [];
+
+        var store = resolveStore(file);
+        if (store is null) return parse(source);
+
+        var hash = AcceptanceTestClassSourceExtractStore.HashText(source);
+        if (store.TryRead(hash, out var cached)) return cached;
+
+        var parsed = parse(source);
+        store.Write(hash, parsed);
+        return parsed;
+    }
+
+    internal static GuardReference[] Parse(string source)
+    {
         var root = CSharpSyntaxTree.ParseText(source).GetRoot();
         var references = new List<GuardReference>();
         foreach (var method in root.DescendantNodes().OfType<MethodDeclarationSyntax>().Where(IsTest))
