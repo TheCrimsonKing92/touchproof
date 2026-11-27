@@ -39,7 +39,7 @@ public sealed class SourceReaderBaselineReuseTests
         Assert.All(roots, root => Assert.StartsWith("tests/", root));
         var originals = LaneTestSourceRootResolver.SourceFiles(repository, roots);
         Assert.True(originals.Length > 1000, $"Expected repository test sources, found {originals.Length}.");
-        var copied = SourceReaderRepositoryIncrementalReuseTests.CopySourcesWithDistinctContents(repository, originals, copy.Path);
+        var copied = SourceReaderRepositoryIncrementalReuseTests.CopySources(repository, originals, copy.Path);
         var sources = new ImpactReplayTestSourceIndex(copied, null, copy.Path);
         var cache = new SourceReaderAnalysisCache(storage.Path);
 

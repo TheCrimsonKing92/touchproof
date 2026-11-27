@@ -4,7 +4,7 @@ using static Mcg.AgentOrchestrator.Infrastructure.SourceReaderAnalysisCache;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-// One record per content hash. A publication pins each record's semantic facts to the tree
+// One record per content hash, with separate facts for each path. A publication pins the facts to the tree
 // that produced them, since the same source text can bind differently in another tree.
 internal sealed class SourceReaderFileFactsStore(string? directory)
 {
@@ -68,9 +68,11 @@ internal sealed class SourceReaderFileFactsStore(string? directory)
         {
             var record = Read<FileRecord>(recordPath);
             if (record is null || record.FormatVersion != FormatVersion ||
-                record.ContentHash != contentHash || record.Path != path || record.Digest != expectedDigest ||
-                record.Digest != RecordDigest(contentHash, path, record.Facts)) return false;
-            if (record.Facts.Deserialize<SourceReaderFileFacts>() is not { } stored ||
+                record.ContentHash != contentHash ||
+                record.FactsByPath?.GetValueOrDefault(path) is not { } payload ||
+                payload.Digest != expectedDigest ||
+                payload.Digest != RecordDigest(contentHash, path, payload.Facts)) return false;
+            if (payload.Facts.Deserialize<SourceReaderFileFacts>() is not { } stored ||
                 stored.Path != path || stored.ContentHash != contentHash ||
                 !SourceReaderFileFacts.WellFormed(stored)) return false;
             facts = stored;
@@ -94,22 +96,20 @@ internal sealed class SourceReaderFileFactsStore(string? directory)
             if (((records.Attributes | publications.Attributes) & FileAttributes.ReparsePoint) != 0)
                 return;
 
-            // Multiple paths can share content. Publish just one record per hash and keep each
-            // path's expected digest in the inventory, so lookups can detect a displaced record.
-            var recordOwners = files.GroupBy(file => file.ContentHash, StringComparer.Ordinal)
-                .ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal);
-            var entries = new PublicationEntry[files.Length];
-            for (var index = 0; index < files.Length; index++)
+            var groups = files.GroupBy(file => file.ContentHash, StringComparer.Ordinal).ToArray();
+            var entries = new List<PublicationEntry>(files.Length);
+            foreach (var group in groups)
             {
-                var file = files[index];
-                if (!loadedDigests.TryGetValue(file, out var digest))
+                if (group.All(loadedDigests.ContainsKey))
                 {
-                    var record = CreateRecord(file);
-                    digest = record.Digest;
-                    if (ReferenceEquals(file, recordOwners[file.ContentHash]))
-                        staged.Add(file.ContentHash, Stage(RecordPath(file.ContentHash)!, record));
+                    entries.AddRange(group.Select(file => new PublicationEntry(file.Path, group.Key, loadedDigests[file])));
+                    continue;
                 }
-                entries[index] = new(file.Path, file.ContentHash, digest);
+
+                // A fresh payload replaces the entire hash record, including any reused paths.
+                var record = CreateRecord(group);
+                staged.Add(group.Key, Stage(RecordPath(group.Key)!, record));
+                entries.AddRange(group.Select(file => new PublicationEntry(file.Path, group.Key, record.FactsByPath[file.Path].Digest)));
             }
 
             using var lease = AcquirePublicationLease(root);
@@ -117,15 +117,16 @@ internal sealed class SourceReaderFileFactsStore(string? directory)
             string? published = null;
             try
             {
-                foreach (var (hash, file) in recordOwners)
+                foreach (var group in groups)
                 {
-                    var destination = RecordPath(hash)!;
-                    if (staged.TryGetValue(hash, out var temporary))
+                    var destination = RecordPath(group.Key)!;
+                    if (staged.TryGetValue(group.Key, out var temporary))
                         File.Move(temporary, destination, overwrite: true);
                     else if (!File.Exists(destination))
-                        Write(destination, CreateRecord(file));
+                        Write(destination, CreateRecord(group));
                 }
-                Write(publicationPath, new Publication(FormatVersion, key, entries, PublicationDigest(key, entries)));
+                var inventory = entries.ToArray();
+                Write(publicationPath, new Publication(FormatVersion, key, inventory, PublicationDigest(key, inventory)));
                 published = publicationPath;
             }
             finally
@@ -140,10 +141,14 @@ internal sealed class SourceReaderFileFactsStore(string? directory)
         }
     }
 
-    private static FileRecord CreateRecord(SourceReaderFileFacts file)
+    private static FileRecord CreateRecord(IGrouping<string, SourceReaderFileFacts> group)
     {
-        var facts = JsonSerializer.SerializeToElement(file);
-        return new(FormatVersion, file.ContentHash, file.Path, facts, RecordDigest(file.ContentHash, file.Path, facts));
+        var factsByPath = group.ToDictionary(file => file.Path, file =>
+        {
+            var facts = JsonSerializer.SerializeToElement(file);
+            return new FilePayload(facts, RecordDigest(group.Key, file.Path, facts));
+        }, StringComparer.Ordinal);
+        return new(FormatVersion, group.Key, factsByPath);
     }
 
     private static string RecordDigest(string contentHash, string path, JsonElement facts) =>
@@ -234,7 +239,9 @@ internal sealed class SourceReaderFileFactsStore(string? directory)
     private sealed record FileRecord(
         [property: JsonRequired] int FormatVersion,
         [property: JsonRequired] string ContentHash,
-        [property: JsonRequired] string Path,
+        [property: JsonRequired] Dictionary<string, FilePayload> FactsByPath);
+
+    private sealed record FilePayload(
         [property: JsonRequired] JsonElement Facts,
         [property: JsonRequired] string Digest);
 

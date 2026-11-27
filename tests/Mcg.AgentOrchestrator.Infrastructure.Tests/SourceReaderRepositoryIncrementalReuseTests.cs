@@ -2,19 +2,14 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class SourceReaderRepositoryIncrementalReuseTests
 {
-    internal static string[] CopySourcesWithDistinctContents(string repository, string[] originals, string copyRoot)
+    internal static string[] CopySources(string repository, string[] originals, string copyRoot)
     {
-        var hashes = new HashSet<string>(StringComparer.Ordinal);
         return originals.Select(original =>
         {
             var relativePath = Path.GetRelativePath(repository, original);
             var destination = Path.Combine(copyRoot, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
             File.Copy(original, destination);
-            // The checkout includes identical global using files. Give duplicate fixture copies distinct
-            // hashes without changing their syntax, so the deliberate one-file edit is the only Plan miss.
-            if (!hashes.Add(SourceReaderFileFacts.Hash(File.ReadAllText(destination))))
-                File.AppendAllText(destination, $"{Environment.NewLine}// Fixture path: {relativePath}");
             return destination;
         }).ToArray();
     }
@@ -32,7 +27,7 @@ public sealed class SourceReaderRepositoryIncrementalReuseTests
             var repositoryReuseOriginals = LaneTestSourceRootResolver.SourceFiles(repositoryReuseRoot, repositoryReuseLaneRoots);
             Assert.True(repositoryReuseOriginals.Length > 1000);
             var repositoryReuseCopyRoot = Path.Combine(repositoryReuseTemp.FullName, "sources");
-            var repositoryReuseCopiedSources = CopySourcesWithDistinctContents(repositoryReuseRoot, repositoryReuseOriginals,
+            var repositoryReuseCopiedSources = CopySources(repositoryReuseRoot, repositoryReuseOriginals,
                 repositoryReuseCopyRoot);
             // Names from both versions seed Plan. Give the append a file with a unique declaration.
             const string repositoryReuseEditedRelativePath = "tests/SourceReaderRepositoryReuseProbe.cs";

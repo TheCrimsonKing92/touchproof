@@ -172,9 +172,14 @@ public sealed class SourceReaderIncrementalAnalysisTests
         switch (damage)
         {
             case "older-format": json["FormatVersion"] = SourceReaderAnalysisCache.FormatVersion - 1; break;
-            case "payload-digest-mismatch": json["Facts"]!["DeclaresSnapshotCache"] = true; break;
+            case "payload-digest-mismatch": json["FactsByPath"]![unchanged]!["Facts"]!["DeclaresSnapshotCache"] = true; break;
             case "content-hash-mismatch": json["ContentHash"] = new string('0', 64); break;
-            case "path-mismatch": json["Path"] = "tests/Different.cs"; break;
+            case "path-mismatch":
+                var paths = Assert.IsType<JsonObject>(json["FactsByPath"]);
+                var payload = paths[unchanged];
+                paths.Remove(unchanged);
+                paths["tests/Different.cs"] = payload;
+                break;
         }
         if (damage is "missing" or "missing-old-version") File.Delete(record);
         else File.WriteAllText(record, damage == "truncated" ? text[..(text.Length / 2)] : json.ToJsonString());
@@ -235,23 +240,34 @@ public sealed class SourceReaderIncrementalAnalysisTests
     {
         using var storage = new Storage();
         const string globalUsing = "global using System;";
+        const string first = "tests/FirstUsings.cs";
+        const string second = "tests/SecondUsings.cs";
+        const string changed = "tests/Spare0.cs";
         var baseline = Base();
-        baseline.Add("tests/FirstUsings.cs", globalUsing);
-        baseline.Add("tests/SecondUsings.cs", globalUsing);
+        baseline.Add(first, globalUsing);
+        baseline.Add(second, globalUsing);
         Analyze(new(storage.Path), baseline);
         var store = new SourceReaderFileFactsStore(storage.Path);
         var hash = SourceReaderFileFacts.Hash(globalUsing);
         var record = JsonNode.Parse(File.ReadAllText(store.RecordPath(hash)!))!;
-        var digest = record["Digest"]!.GetValue<string>();
-        Assert.True(store.TryGet(hash, "tests/SecondUsings.cs", digest, out _));
-        Assert.False(store.TryGet(hash, "tests/FirstUsings.cs", digest, out _));
+        var paths = Assert.IsType<JsonObject>(record["FactsByPath"]);
+        Assert.Equal(2, paths.Count);
+        var firstDigest = paths[first]!["Digest"]!.GetValue<string>();
+        var secondDigest = paths[second]!["Digest"]!.GetValue<string>();
+        Assert.True(store.TryGet(hash, first, firstDigest, out var firstFacts));
+        Assert.Equal(first, firstFacts.Path);
+        Assert.True(store.TryGet(hash, second, secondDigest, out var secondFacts));
+        Assert.Equal(second, secondFacts.Path);
+        Assert.False(store.TryGet(hash, second, firstDigest, out _));
+        Assert.False(store.TryGet(hash, "tests/OtherUsings.cs", firstDigest, out _));
 
-        var candidate = new Dictionary<string, string>(baseline) { ["tests/Spare0.cs"] = Reader("Spare0", "Unique0") };
+        var candidate = new Dictionary<string, string>(baseline) { [changed] = Reader("Spare0", "Unique0") };
         var cache = new SourceReaderAnalysisCache(storage.Path);
         var extractions = new List<HashSet<string>?>();
         AssertEquivalent(Analyze(new(null), candidate), Analyze(cache, candidate, extractions));
-        Assert.Null(Assert.Single(extractions));
-        Assert.Equal(candidate.Count, cache.SemanticFileCount);
+        var plan = Assert.IsType<HashSet<string>>(Assert.Single(extractions));
+        Assert.Equal(changed, Assert.Single(plan));
+        Assert.Equal(plan.Count, cache.SemanticFileCount);
     }
 
     [Fact]
