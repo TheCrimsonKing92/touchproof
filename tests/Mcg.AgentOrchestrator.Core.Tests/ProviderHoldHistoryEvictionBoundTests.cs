@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 
 // Parallel-safe: in-memory kernels and deterministic dispatch receipts.
@@ -33,6 +34,64 @@ public sealed class ProviderHoldHistoryEvictionBoundTests
             Assert.Contains(kernel.ProviderHoldHistory.Retained, goal => goal.Id == leaving.Id);
             return work;
         }
+    }
+
+    [Fact]
+    public void Evict_AfterEquivalentWorkingGoalReload_HasConstantWorkAcrossHistorySizes()
+    {
+        var small = MeasureEviction(2_000);
+        var large = MeasureEviction(4_000);
+        Assert.Equal(small, large);
+        Assert.InRange(large.BindingEvaluations, 1, 4);
+        Assert.InRange(large.GoalVisits, 1, 12);
+
+        static (int BindingEvaluations, int GoalVisits) MeasureEviction(int retainedCount)
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var working = WorkingEvidence("provider-0000", 0, success: false);
+            var persisted = JsonSerializer.Serialize(working.ToSnapshot());
+            kernel.ReplaceGoalWithSnapshot(JsonSerializer.Deserialize<GoalSnapshot>(persisted)!);
+            var original = Assert.Single(kernel.Goals);
+            var sources = Enumerable.Range(0, retainedCount).Select(index =>
+                Source($"old-{index:D4}", [$"provider-{index / 2:D4}"], 2 + index % 2)).ToArray();
+            kernel.ProviderHoldHistory.Retain(sources, kernel.Goals);
+            Assert.Equal(retainedCount, kernel.ProviderHoldHistory.Retained.Count);
+
+            Assert.Equal(1, kernel.RefreshTrackedGoals(new([JsonSerializer.Deserialize<GoalSnapshot>(persisted)!], [])));
+            var reloaded = Assert.Single(kernel.Goals);
+            Assert.NotSame(original, reloaded);
+            Assert.NotSame(original.Tasks[0].DispatchHistory[0].SelectedSkills,
+                reloaded.Tasks[0].DispatchHistory[0].SelectedSkills);
+            Assert.NotSame(original.Tasks[0].VerificationHistory[0].MergedReviewFindings,
+                reloaded.Tasks[0].VerificationHistory[0].MergedReviewFindings);
+            Assert.NotSame(original.Timeline.Last().OperatorGates, reloaded.Timeline.Last().OperatorGates);
+
+            var leaving = Source("leaving", ["new-provider"], 5);
+            kernel.ReplaceGoalWithSnapshot(leaving.ToSnapshot());
+            Assert.Equal(1, kernel.EvictTerminalGoalAggregates([leaving.Id]));
+            Assert.Equal(retainedCount + 1, kernel.ProviderHoldHistory.Retained.Count);
+            return kernel.ProviderHoldHistory.LastRetentionWork;
+        }
+    }
+
+    [Fact]
+    public void Retain_AfterWorkingGoalReloadChangesProviderEvidence_MatchesLegacy()
+    {
+        var actual = new ProviderHoldHistory();
+        var legacy = new ProviderHoldHistoryLegacyRetain();
+        var source = Source("older-refusal", [Providers[0]], 1);
+        var working = WorkingEvidence(Providers[0], 5, success: false);
+        actual.Retain(source, [working]);
+        legacy.Retain(source, [working]);
+        Assert.Contains(legacy.Retained, goal => goal.Id == source.Id);
+        AssertEquivalent(legacy, actual, [working], [source, working]);
+
+        var changed = Goal.FromSnapshot(WorkingEvidence(Providers[0], 5, success: true).ToSnapshot());
+        var leaving = Source("leaving", [Providers[1]], 8);
+        actual.Retain(leaving, [changed]);
+        legacy.Retain(leaving, [changed]);
+        Assert.DoesNotContain(legacy.Retained, goal => goal.Id == source.Id);
+        AssertEquivalent(legacy, actual, [changed], [source, working, leaving]);
     }
 
     [Fact]
@@ -183,6 +242,24 @@ public sealed class ProviderHoldHistoryEvictionBoundTests
             ? Goal.CreateMetadataOnlyTerminal(new(new GoalId(id), GoalStatus.Completed, "Provider marker"))
             : new Goal(new(id), "Provider evidence", tasks);
         goal.SetStatus(GoalStatus.Completed);
+        return goal;
+    }
+
+    private static Goal WorkingEvidence(string provider, int minute, bool success)
+    {
+        var at = Start.AddMinutes(minute);
+        var task = new TaskSpec(new("working-task"), "Provider observation", AgentRole.Tester);
+        task.RecordDispatch(new("fixture", "fixture", @"C:\fixture", at, ProviderName: provider,
+            SelectedSkills: ["verification-before-completion"]));
+        task.RecordVerification(new("fixture", @"C:\fixture", success ? 0 : 1, "",
+            success ? "" : "Provider budget exhausted.", at.AddMinutes(1),
+            ProviderFailureKind: success ? ProviderFailureKind.Unknown : ProviderFailureKind.BudgetExhausted,
+            DispatchStartedAt: at, CompletionVerdictVerifiedSuccess: success,
+            MergedReviewFindings: [new("fixture-finding", ReviewFindingState.Open, new("src/fixture.cs", "Fixture"), "Fixture finding")]));
+        var goal = new Goal(new("working"), "Provider evidence", [task], at);
+        goal.SetStatus(GoalStatus.Active);
+        goal.Append(new(goal.Id, task.Id, ProgressKind.TaskNote, "Operator gate", at.AddMinutes(2),
+            OperatorGates: [new("deliverable", "record", at)]));
         return goal;
     }
 

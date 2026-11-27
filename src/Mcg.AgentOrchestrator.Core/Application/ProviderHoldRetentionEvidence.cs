@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 using BindingKey = SubscriptionLimitEvidence.ProviderBindingKey;
@@ -14,6 +16,14 @@ internal sealed record ProviderHoldRetentionEvidence(Goal Goal, ProviderHoldRete
             task.LatestProviderBudgetRecoveryAt, task.DispatchHistory.ToArray(), task.VerificationHistory.ToArray())).ToArray();
         return new(goal, new(goal.IsTerminal, tasks, timeline, ProviderHoldHistory.ExhaustedBindings([goal])));
     }
+
+    private static bool SameHistory<T>(IReadOnlyList<T> current, IReadOnlyList<T> previous) =>
+        ReferenceEquals(current, previous) ||
+        current.Count == previous.Count && current.Zip(previous).All(pair =>
+            EqualityComparer<T>.Default.Equals(pair.First, pair.Second) ||
+            // Persisted reloads reconstruct nested receipt lists with fresh references.
+            JsonElement.DeepEquals(JsonSerializer.SerializeToElement(pair.First),
+                JsonSerializer.SerializeToElement(pair.Second)));
 
     internal sealed class Input
     {
@@ -62,7 +72,7 @@ internal sealed record ProviderHoldRetentionEvidence(Goal Goal, ProviderHoldRete
         internal bool Matches(Goal goal, IReadOnlyList<ProgressEvent> timeline)
         {
             if (goal.IsTerminal != _terminal || goal.Tasks.Count != _tasks.Length ||
-                (!ReferenceEquals(timeline, _timeline) && !timeline.SequenceEqual(_timeline))) return false;
+                !SameHistory(timeline, _timeline)) return false;
             for (var i = 0; i < _tasks.Length; i++)
                 if (!_tasks[i].Matches(goal.Tasks[i])) return false;
             return true;
@@ -75,6 +85,6 @@ internal sealed record ProviderHoldRetentionEvidence(Goal Goal, ProviderHoldRete
         internal bool Matches(TaskSpec task) =>
             Id == task.Id && Status == task.Status && AgentId == task.AssignedAgentId &&
             RecoveryAt == task.LatestProviderBudgetRecoveryAt &&
-            task.DispatchHistory.SequenceEqual(Dispatches) && task.VerificationHistory.SequenceEqual(Verifications);
+            SameHistory(task.DispatchHistory, Dispatches) && SameHistory(task.VerificationHistory, Verifications);
     }
 }
