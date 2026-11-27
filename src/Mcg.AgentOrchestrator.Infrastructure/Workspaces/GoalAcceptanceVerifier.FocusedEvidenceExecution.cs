@@ -322,7 +322,7 @@ internal static class FocusedEvidenceExecution
                 ? check with { TestProjectPath = project }
                 : check).ToArray();
         var disposition = ClassifyFocusedEvidenceArm(checks);
-        var notRun = FocusedEvidenceNotRunPlan.Compare(focusedChecks, checks, coverage, continueAfterFailure);
+        var notRun = FocusedEvidenceNotRunPlan.Compare(focusedChecks, checks, coverage, continueAfterFailure, worktreePath);
         if (notRun.Checks.Count > 0 && disposition == FindingEvidenceArmDisposition.Green)
             disposition = FindingEvidenceArmDisposition.Inconclusive;
         var failed = checks.FirstOrDefault(check => !check.Passed);
