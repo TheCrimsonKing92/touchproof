@@ -5,6 +5,10 @@ internal sealed record MainFullVerificationRecord(
     DateTimeOffset? CompletedAt = null, double? DurationSeconds = null, MainFullVerificationResult? Result = null);
 
 internal sealed record MainFullVerificationResult(
-    string Outcome, string? Detail = null, IReadOnlyList<MainFullVerificationFailure>? Failures = null);
+    string Outcome, string? Detail = null, IReadOnlyList<MainFullVerificationFailure>? Failures = null,
+    IReadOnlyList<string>? Unconfirmed = null)
+{
+    internal const string PassedWithUnconfirmed = "passed-with-unconfirmed";
+}
 
 internal sealed record MainFullVerificationFailure(string Test, string? Landing = null, string? Goal = null);

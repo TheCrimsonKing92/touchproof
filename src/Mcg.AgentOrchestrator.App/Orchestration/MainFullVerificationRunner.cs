@@ -40,7 +40,10 @@ internal sealed class MainFullVerificationRunner(
 
             var verification = RunAttempt(verifier, checkout, commit, lease, cancellationToken,
                 workspace.ProjectHomeDirectoryOrNull, workspace.IntegrationBranch);
-            return Interpret(verification, tests => Attribute(tests, checkout, commit, lastPassed));
+            return Conclude(verification, tests => Attribute(tests, checkout, commit, lastPassed),
+                (test, token) => MainFullVerificationConfirmation.RunFocused(verifier, checkout, lease,
+                    workspace.IntegrationBranch, workspace.ProjectHomeDirectoryOrNull, verification.Checks ?? [], test, token),
+                cancellationToken);
         }
         finally
         {
@@ -60,6 +63,16 @@ internal sealed class MainFullVerificationRunner(
             lease?.Environment.BuildPermitIndex, lease, cancellationToken,
             new AcceptanceRunExecutionOptions(RunId: RunId(commit), ProjectHomeDirectory: projectHome,
                 IntegrationBranch: integrationBranch, PinnedMainCommit: commit));
+
+    internal static MainFullVerificationResult Conclude(AcceptanceVerificationResult verification,
+        Func<IReadOnlyList<string>, IReadOnlyList<MainFullVerificationFailure>> attribute,
+        Func<string, CancellationToken, MainFullVerificationRerun> rerun, CancellationToken cancellationToken)
+    {
+        var result = Interpret(verification, attribute);
+        return result.Outcome == "failed"
+            ? MainFullVerificationConfirmation.Confirm(result.Failures!, rerun, cancellationToken)
+            : result;
+    }
 
     internal static MainFullVerificationResult Interpret(AcceptanceVerificationResult verification,
         Func<IReadOnlyList<string>, IReadOnlyList<MainFullVerificationFailure>> attribute)
