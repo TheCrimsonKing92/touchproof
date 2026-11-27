@@ -160,7 +160,9 @@ public sealed class PendingExecutionGateRequestReceiptTests
             var tester = Goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
             _developerId = developer.Id;
             TesterId = tester.Id;
-            PassVerification(Kernel, Goal, developer, hasCommittedChanges: true);
+            PassVerification(Kernel, Goal, developer);
+            // The probe restores a snapshot, which retains the dispatch commit.
+            Kernel.RecordDispatchResultCommit(Goal.Id, developer.Id, Candidate);
             DispatchTask(Kernel, Goal, tester, "test");
             var finding = EvidenceFindingWithRequest(
                 "The candidate needs focused evidence before a Developer retry.",
