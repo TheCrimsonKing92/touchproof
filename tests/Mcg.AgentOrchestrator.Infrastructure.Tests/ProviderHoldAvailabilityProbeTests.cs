@@ -1,9 +1,60 @@
+using System.Security.Cryptography;
+using System.Text;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: injected process runner; the real provider is never invoked.
 public sealed class ProviderHoldAvailabilityProbeTests
 {
+    [Fact]
+    public async Task HeldIdentity_AcceptsCurrentKeyLegacyAndShortFormsOnly()
+    {
+        const string key = "fixture-key";
+        var fingerprint = ClaudeApiHoldFingerprint.FromSecret(new byte[32]);
+        var legacy = "api-" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(key)));
+        var otherLegacy = "api-" + Convert.ToHexStringLower(SHA256.HashData("other-key"u8));
+        var shortIdentity = fingerprint.Compute(key);
+        var cases = new (string? Identity, string? CurrentKey, bool Expected)[]
+        {
+            (legacy, key, true),
+            (otherLegacy, key, false),
+            (shortIdentity, key, true),
+            ("api-" + legacy["api-".Length..].ToUpperInvariant(), key, false),
+            (null, key, false),
+            (legacy, null, false),
+            (null, " \t", true),
+        };
+
+        foreach (var (identity, currentKey, expected) in cases)
+        {
+            var clock = new ProviderHoldScenarioClock();
+            var kernel = new AgentOrchestratorKernel(clock);
+            var source = ProviderHoldDispatchScenarioTests.Record(kernel, clock, "You've hit your weekly limit", "",
+                credential: null, apiRoute: identity);
+            var dispatch = source.Tasks.Single().LastDispatch!;
+            var row = Assert.Single(ProviderUsageHoldView.Read(kernel.Goals, clock.UtcNow));
+            Assert.Equal(identity, dispatch.ClaudeApiHoldIdentity);
+            Assert.Equal($"anthropic::{identity?.ToLowerInvariant() ?? "<provider-default>"}",
+                ProviderHoldBinding.BaseKey(row.Hold.BindingKey));
+
+            var calls = 0;
+            var probe = new ProviderHoldAvailabilityProbe(WorkerProfileCatalog.Default(), (_, _) =>
+            {
+                calls++;
+                return Task.FromResult(new WorkerProcessRunResult(0, "AVAILABLE", "", false));
+            })
+            {
+                ReadEnvironment = name => name == ClaudeCredentialSource.ApiKeyEnvironmentVariable ? currentKey : null,
+                Fingerprint = fingerprint,
+            };
+
+            var result = await probe.CheckAsync(row.Hold, dispatch, TestContext.Current.CancellationToken);
+            Assert.Equal(expected ? "available" : "failed", result.Outcome);
+            Assert.Equal(expected ? "minimal-request-succeeded" : "held-billing-route-unavailable", result.Reason);
+            Assert.Equal(expected ? 1 : 0, calls);
+        }
+    }
+
     [Theory]
     [InlineData(0, "AVAILABLE", "", false, "available")]
     [InlineData(0, "", "", false, "failed")]
