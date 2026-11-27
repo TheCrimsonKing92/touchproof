@@ -130,7 +130,7 @@ public sealed class AnsweredHumanInputRetryContextTests
         Assert.Equal(WorkTaskStatus.Assigned, context.Task.Status);
 
         var prompt = context.Kernel.BuildTaskBriefSource(context.Goal.Id, context.Task.Id)
-            .ProjectLegacyMarkedTextV1(false).Content;
+            .ProjectLegacyMarkedTextV1().Content;
 
         Assert.Contains("## Resolved Human Input", prompt, StringComparison.Ordinal);
         Assert.Contains($"{context.Request.Id}: {context.Request.Question} → {answer}",

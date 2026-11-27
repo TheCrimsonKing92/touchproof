@@ -49,7 +49,7 @@ public sealed class RejectedPlannerLegacyStdoutRecoveryTests
         }
     }
 
-    private static (Goal Goal, TaskSpec Task, TaskBrief Brief, string LogPath) ArrangeRejectedPlannerRetry(
+    private static (Goal Goal, TaskSpec Task, TaskBriefSource Brief, string LogPath) ArrangeRejectedPlannerRetry(
         string root, int logLength)
     {
         const string head = "Rejected plan\n";
@@ -80,12 +80,7 @@ public sealed class RejectedPlannerLegacyStdoutRecoveryTests
         Assert.Equal(logLength, onDisk.Length);
         Assert.Equal(onDisk, rejected.StandardOutput);
 
-        var brief = new TaskBrief(goal.Id, task.Id, task.RequiredRole, task.Description,
-            """
-            # Agent Task Brief
-            ## Instructions
-            Repair the rejected plan.
-            """);
+        var brief = TypedBriefSourceFixture.Create(goal, task, "Repair the rejected plan.");
         return (goal, task, brief, logPath);
     }
 }

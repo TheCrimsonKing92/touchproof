@@ -109,7 +109,7 @@ public sealed class PlannerGateTestSelectorFormTests
         var task = new TaskSpec(TaskId.New(), "Plan test evidence", AgentRole.Planner);
         var goal = kernel.CreateGoal("Choose selectors", [task]);
         return kernel.BuildTaskBriefSource(goal.Id, task.Id, roleRequirementStack: stack, testCheckCommands: commands)
-            .ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false).Content;
+            .ProjectLegacyMarkedTextV1().Content;
     }
 
     private static string Sentence(string output)

@@ -19,7 +19,7 @@ internal static class CliWorkerDispatchPreparation
         var workerTools = ResolveWorkerTools(context, task);
         var briefSource = context.Kernel.BuildTaskBriefSource(goal.Id, task.Id, workingDirectory: workerExecutionDirectory,
             workerToolsAvailable: workerTools is not null);
-        var brief = briefSource.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false);
+        var brief = briefSource.ProjectLegacyMarkedTextV1();
         var preparation = WorkerCommandTemplate.Prepare(brief, parts[2], parts[3], context.Workspace.PromptDirectory,
             WorkerProfileDispatcher.BuildDispatchVariables(task.RequiredRole, workerExecutionDirectory, null));
         context.Kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(parts[2], preparation.Command,

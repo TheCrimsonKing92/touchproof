@@ -26,11 +26,11 @@ public sealed class ChangedExistingTestsBriefSectionTests
         Assert.Contains("- A.NoRuling (tests/A.cs:2-4) changed: no ruling", section.Lines);
         Assert.Contains($"- B.Allowed (tests/B.cs:14-18) changed: allowed by ruling {request.Id.Value}", section.Lines);
         Assert.Equal(Closing, section.Lines[^2]);
-        var brief = source.ProjectLegacyMarkedTextV1(false).Content;
+        var brief = source.ProjectLegacyMarkedTextV1().Content;
         Assert.True(brief.IndexOf("## Changed existing tests", StringComparison.Ordinal) >
                     brief.IndexOf("## Frozen-fact rulings", StringComparison.Ordinal));
         foreach (var role in new[] { AgentRole.Developer, AgentRole.Tester })
-            Assert.DoesNotContain("## Changed existing tests", Build(kernel, goal, role, entries).ProjectLegacyMarkedTextV1(false).Content);
+            Assert.DoesNotContain("## Changed existing tests", Build(kernel, goal, role, entries).ProjectLegacyMarkedTextV1().Content);
     }
 
     [Fact]
@@ -41,8 +41,8 @@ public sealed class ChangedExistingTestsBriefSectionTests
         var source = Build(kernel, goal, AgentRole.Reviewer, [], diagnostic);
         var section = Assert.Single(source.Segments.Where(segment => segment.Lines.Contains("## Changed existing tests")));
         Assert.Equal(new[] { "## Changed existing tests", diagnostic, string.Empty }, section.Lines);
-        Assert.DoesNotContain("## Changed existing tests", Build(kernel, goal, AgentRole.Developer, [], diagnostic).ProjectLegacyMarkedTextV1(false).Content);
-        Assert.DoesNotContain("## Changed existing tests", Build(kernel, goal, AgentRole.Reviewer, []).ProjectLegacyMarkedTextV1(false).Content);
+        Assert.DoesNotContain("## Changed existing tests", Build(kernel, goal, AgentRole.Developer, [], diagnostic).ProjectLegacyMarkedTextV1().Content);
+        Assert.DoesNotContain("## Changed existing tests", Build(kernel, goal, AgentRole.Reviewer, []).ProjectLegacyMarkedTextV1().Content);
     }
 
     [Fact]
