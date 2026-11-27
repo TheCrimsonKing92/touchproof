@@ -10,13 +10,13 @@ internal sealed partial class ConductorDriver
     private ConductorAdvanceResult EscalateOrBeginConflictIntegration(
         Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, GoalLifecycleState state, PolicyDecisionRecord decision)
     {
-        if (_conflictIntegration is not null && LandingRebaseEscalation.IsConflict(decision.Reason))
+        if (_conflictIntegration is not null && LandingDecisionFacts.IsConflict(decision.Reason))
         {
             var attempt = _conflictIntegration.TryRecord(goal);
             if (attempt.Started)
                 return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Executed(state, attempt.Detail));
 
-            decision = LandingRebaseEscalation.WithIntegrationRefusal(decision, attempt.Detail);
+            decision = LandingDecisionFacts.WithIntegrationRefusal(decision, attempt.Detail);
         }
 
         var result = Escalate(goal, goalPrefix, policy, state, decision.Reason);
@@ -139,31 +139,5 @@ internal sealed partial class ConductorDriver
                 new ConductorAdvanceOutcome.Escalated(GoalLifecycleState.Verified, decision.Reason) { Decision = landResult.Decision.Decision ?? decision.ToRecord() });
         var result = Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, decision.Reason);
         return result with { Outcome = ((ConductorAdvanceOutcome.Escalated)result.Outcome) with { Decision = landResult.Decision.Decision ?? decision.ToRecord() } };
-    }
-}
-
-internal static class LandingRebaseEscalation
-{
-    internal static bool IsConflict(string reason) =>
-        reason.StartsWith("pre-landing rebase conflict (", StringComparison.Ordinal) ||
-        reason.StartsWith("pre-merge rebase conflict (", StringComparison.Ordinal);
-
-    internal static PolicyDecisionRecord WithIntegrationRefusal(PolicyDecisionRecord decision, string detail) => decision with
-    {
-        Reason = decision.Reason.Replace(" and does not run workspace rebase", "", StringComparison.Ordinal) +
-            "; conductor integration refused: " + detail,
-        Facts = Array.AsReadOnly<PolicyDecisionFact>([.. decision.Facts, new("conductorIntegrationRefusal", detail)])
-    };
-
-    internal static PolicyDecisionRecord ReplayDecision(ConductorAdvanceResult earlyResult, string detail)
-    {
-        if (earlyResult.Outcome is ConductorAdvanceOutcome.Escalated { Decision: { Stage: LandingRebasePolicy.StageName } recorded })
-            return recorded with { Reason = detail };
-
-        // Rehydrated attempt results retain the detail without the original rebase facts.
-        var phase = detail.StartsWith("pre-merge rebase ", StringComparison.Ordinal) ? "pre-merge" : "pre-landing";
-        var status = IsConflict(detail) ? "Conflict" : string.Empty;
-        var facts = new LandingRebaseFacts(phase, false, status, [], detail, false);
-        return LandingRebasePolicy.Evaluate(facts).ToRecord() with { Reason = detail };
     }
 }

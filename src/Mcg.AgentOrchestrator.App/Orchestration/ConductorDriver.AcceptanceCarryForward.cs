@@ -85,7 +85,7 @@ internal sealed partial class ConductorDriver
         if (disposition is AcceptanceMainAdvanceDisposition.Disjoint or AcceptanceMainAdvanceDisposition.Unchanged)
             return CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
 
-        var decision = RacingLandingCarryForwardPolicy.Evaluate(AcceptanceMainAdvanceFacts.ForRevalidationHold(disposition));
+        var decision = RacingLandingCarryForwardPolicy.Evaluate(LandingDecisionFacts.ForRevalidationHold(disposition));
         var identity = AcceptanceMainAdvanceReceipt.BuildRevalidationHoldIdentity(candidate, _resolveAcceptanceHeads);
         return MakeResult(candidate.Goal.Id.Value, candidate.GoalPrefix, policy,
             new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, decision.Reason, identity)
@@ -231,20 +231,4 @@ internal sealed partial class ConductorDriver
             // Diagnostics must not replace today's safe re-gate behavior when evidence storage is unavailable.
         }
     }
-}
-
-internal static class AcceptanceMainAdvanceFacts
-{
-    internal static RacingLandingCarryForwardFacts ForRevalidationHold(AcceptanceMainAdvanceDisposition disposition) =>
-        disposition switch
-        {
-            AcceptanceMainAdvanceDisposition.Overlap overlap =>
-                new(nameof(AcceptanceMainAdvanceDisposition.Overlap), overlap.Kind, overlap.LandedPath,
-                    overlap.VerifiedPath, string.Empty, overlap.FormatReceipt()),
-            AcceptanceMainAdvanceDisposition.Unknown unknown =>
-                new(nameof(AcceptanceMainAdvanceDisposition.Unknown), string.Empty, string.Empty,
-                    string.Empty, unknown.Reason, unknown.FormatReceipt()),
-            _ => throw new InvalidOperationException(
-                $"Unsupported acceptance main-advance disposition {disposition.GetType().Name}.")
-        };
 }
