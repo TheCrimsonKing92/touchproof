@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static FocusedEvidenceUnionPlanningSupport;
@@ -9,12 +10,29 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedUnionReceip
     [Xunit.Fact]
     public void OmittedPartition_CannotCreditTheOriginalMixedTarget()
     {
-        var request = "Infrastructure.Tests:" + Fqn(ClassA) + "|" + Fqn(MethodA);
+        var original = new FindingEvidenceSelection("Infrastructure.Tests", Fqn(ClassA) + "|" + Fqn(MethodA));
+        var request = $"{original.TestProject}:{original.TestClass}";
         var checks = Resolve(request, out var coverage);
-        var completed = new AcceptanceCheckResult(checks[0].Name, true, 0, "passed", ExecutedTestCount: 1);
+        var classCheck = Assert.Single(checks, check => check.FocusedEvidenceTokens.Any(token => token.Value == ClassA));
+        var methodCheck = Assert.Single(checks, check => check.FocusedEvidenceTokens.Any(token => token.Value == MethodA));
+        using var worktree = new FocusedEvidenceUnexecutedClassCauseTests.Worktree();
+        var report = Path.Combine(worktree.Root, "class.ctrf.json");
+        NormalizedTestResultWriter.Write(report, "vstest",
+            [FocusedEvidenceNotRunPlanRemainderTests.Result(ClassA + ".Executed", TestResultStatus.Passed)]);
+        var completed = new AcceptanceCheckResult(classCheck.Name, true, 0, "passed", ExecutedTestCount: 1)
+            { NormalizedTestResultPaths = [report] };
         var notRun = FocusedEvidenceNotRunPlan.Compare(checks, [completed], coverage, continueAfterFailure: true);
-        Assert.Equal(checks[1].Name, Assert.Single(notRun.Checks).CheckName);
-        Assert.Equal(Fqn(ClassA) + "|" + Fqn(MethodA), Assert.Single(notRun.Selections).TestClass);
+        var omission = Assert.Single(notRun.Checks);
+        Assert.Equal(methodCheck.Name, omission.CheckName);
+        Assert.Equal(original with { TestClass = Fqn(MethodA) }, Assert.Single(omission.UndemonstratedSelections!));
+        Assert.Equal(original, Assert.Single(notRun.Selections));
+        var arm = new FindingEvidenceArmReceipt(FindingEvidenceArm.Candidate, "candidate",
+            FindingEvidenceArmDisposition.Inconclusive, true, false, "partial",
+            ExecutedTestCount: 1, NotRunSelections: notRun.Selections);
+        var receipt = new FindingEvidenceReceipt("receipt", "candidate", new([original]),
+            true, false, "partial", Arms: [arm]);
+        Assert.Empty(FindingEvidenceExecutedCoverage.ExecutedSelections(receipt,
+            selection => $"{selection.TestProject}:{selection.TestClass}"));
     }
 
     [Xunit.Theory]
