@@ -80,9 +80,28 @@ internal sealed record ProviderHoldBinding(string Provider, string? Credential, 
         }
     }
 
-    internal static bool Matches(TaskDispatchRecord dispatch, string key) =>
-        From(dispatch).Key.Equals(key, StringComparison.OrdinalIgnoreCase) ||
-        From(dispatch, dispatch.ModelName).Key.Equals(key, StringComparison.OrdinalIgnoreCase);
+    internal static bool Matches(TaskDispatchRecord dispatch, string key, Func<string, bool>? isCurrentApiKeyIdentity = null)
+    {
+        bool MatchesRendered(ProviderHoldBinding binding) =>
+            binding.Key.Equals(key, StringComparison.OrdinalIgnoreCase) ||
+            (binding with { Model = dispatch.ModelName }).Key.Equals(key, StringComparison.OrdinalIgnoreCase);
+
+        var binding = From(dispatch);
+        if (MatchesRendered(binding))
+            return true;
+        if (isCurrentApiKeyIdentity is null || dispatch.ClaudeApiHoldIdentity is not { } dispatchIdentity)
+            return false;
+
+        var modelSeparator = key.LastIndexOf(ModelSeparator, StringComparison.OrdinalIgnoreCase);
+        var baseKey = modelSeparator < 0 ? key : key[..modelSeparator];
+        var separator = baseKey.IndexOf("::", StringComparison.Ordinal);
+        if (separator < 0)
+            return false;
+
+        var credential = baseKey[(separator + 2)..];
+        return MatchesRendered(binding with { Credential = credential }) &&
+            isCurrentApiKeyIdentity(dispatchIdentity) && isCurrentApiKeyIdentity(credential);
+    }
 
     internal static bool Matches(TaskDispatchRecord dispatch, SubscriptionLimitEvidence.ProviderBindingKey identity) =>
         From(dispatch, identity.Model is null ? null : dispatch.ModelName).ScopedKey == identity;

@@ -21,14 +21,24 @@ public sealed class ProviderHoldAvailabilityProbe(WorkerProfileCatalog profiles,
     TimeProvider? timeProvider = null)
     : IProviderHoldAvailabilityProbe
 {
+    internal Func<string, string?> ReadEnvironment { get; init; } = Environment.GetEnvironmentVariable;
+    internal ClaudeApiHoldFingerprint? Fingerprint { get; init; }
+
     public async Task<ProviderHoldProbeResult> CheckAsync(ProviderBudgetExhaustionHold hold, TaskDispatchRecord dispatch,
         CancellationToken cancellationToken)
     {
         var provider = WorkerProviderCatalog.Default().ResolveProfile(dispatch.WorkerName);
-        if (provider.Identity.Kind == ProviderKind.AnthropicClaudeCli &&
-            !string.Equals(dispatch.ClaudeApiHoldIdentity, ClaudeCliAuthProbe.HoldIdentity(
-                Environment.GetEnvironmentVariable(ClaudeCredentialSource.ApiKeyEnvironmentVariable)), StringComparison.Ordinal))
-            return new("failed", "held-billing-route-unavailable");
+        if (provider.Identity.Kind == ProviderKind.AnthropicClaudeCli)
+        {
+            var apiKey = ReadEnvironment(ClaudeCredentialSource.ApiKeyEnvironmentVariable);
+            var heldIdentity = dispatch.ClaudeApiHoldIdentity;
+            var routeAvailable = string.IsNullOrWhiteSpace(apiKey)
+                ? heldIdentity is null
+                : (Fingerprint ?? ClaudeApiHoldFingerprint.ForMachine())
+                    .IsCurrentKeyIdentity(heldIdentity, apiKey, StringComparison.Ordinal);
+            if (!routeAvailable)
+                return new("failed", "held-billing-route-unavailable");
+        }
         var directory = Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("mcg-provider-check"), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try
