@@ -864,24 +864,27 @@ internal static class ReverseDependencyTestImpactReader
         IReadOnlyList<(int StartLine, int EndLine)>? ranges,
         bool isShippingFile)
     {
-        if (ranges is not { Count: > 0 })
+        if (ranges is not { Count: > 0 } || (!declaration.IsPartial && !isShippingFile))
             return null;
 
-        if (!declaration.IsPartial)
-        {
-            if (!isShippingFile || declaration.UnattributedLines is not { } unattributedLines ||
-                unattributedLines.Any(line => OverlapsAnyRange(line, line, ranges)))
-                return null;
+        var names = MemberNames(declaration.Members.Where(member => OverlapsAnyRange(member.StartLine, member.EndLine, ranges)));
+        if (names is null || declaration.IsPartial)
+            return names;
 
-            foreach (var (startLine, endLine) in ranges)
-            {
-                if (startLine <= declaration.EndLine && declaration.StartLine <= endLine &&
-                    !IsCoveredByMembers(startLine, endLine, declaration.Members))
-                    return null;
-            }
+        if (declaration.UnattributedLines is not { } unattributedLines ||
+            unattributedLines.Any(line => OverlapsAnyRange(line, line, ranges)) ||
+            declaration.UnattributedIdentifiers is not { } unattributed ||
+            declaration.Members.Any(member => member.ReferencedIdentifiers is null))
+            return null;
+
+        foreach (var (startLine, endLine) in ranges)
+        {
+            if (startLine <= declaration.EndLine && declaration.StartLine <= endLine &&
+                !IsCoveredByMembers(startLine, endLine, declaration.Members))
+                return null;
         }
 
-        return MemberNames(declaration.Members.Where(member => OverlapsAnyRange(member.StartLine, member.EndLine, ranges)));
+        return CompleteMemberFilter(declaration.Members, names, unattributed);
     }
 
     private static bool IsCoveredByMembers(int startLine, int endLine, IReadOnlyList<SourceMemberDeclaration> members)
@@ -943,21 +946,32 @@ internal static class ReverseDependencyTestImpactReader
                 return fallback;
         }
 
+        return CompleteMemberFilter(declaration.Members, names, unattributed) ?? fallback;
+    }
+
+    private static IReadOnlySet<string>? CompleteMemberFilter(
+        IReadOnlyList<SourceMemberDeclaration> members,
+        HashSet<string> names,
+        IReadOnlySet<string> unattributed)
+    {
+        if (names.Count == 0)
+            return null;
+
         // Keep callers of matching members in this declaration, including chains of calls.
         int previousCount;
         do
         {
             previousCount = names.Count;
-            foreach (var member in declaration.Members)
+            foreach (var member in members)
                 if (member.ReferencedIdentifiers!.Overlaps(names))
                     names.Add(member.Name);
         }
         while (names.Count != previousCount);
 
-        return names.Count == 0 || unattributed.Overlaps(names) ? fallback : names;
+        return unattributed.Overlaps(names) ? null : names;
     }
 
-    private static IReadOnlySet<string>? MemberNames(IEnumerable<SourceMemberDeclaration> members)
+    private static HashSet<string>? MemberNames(IEnumerable<SourceMemberDeclaration> members)
     {
         var names = members.Select(member => member.Name).ToHashSet(StringComparer.Ordinal);
         return names.Count > 0 ? names : null;

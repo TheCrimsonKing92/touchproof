@@ -51,6 +51,61 @@ public sealed class ReverseDependencyShippingMemberHopTests
     }
 
     [Fact]
+    public void NonPartialSeed_KeepsDirectAndTransitiveCallers()
+    {
+        using var repository = new Repository();
+        repository.Write(Store, """
+            internal class Store
+            {
+                internal static int Save() => Forward();
+                private static int Forward() => ChangedValue();
+                private static int ChangedValue() => 1;
+                internal static int Load() => 0;
+            }
+            """);
+        repository.Write(Hub, """
+            internal class Hub
+            {
+                internal static int Write() => Store.Save();
+                internal static int Read() => Store.Load();
+            }
+            """);
+        repository.WriteTest("SaveTests", "Store.Save()");
+        repository.WriteTest("LoadTests", "Store.Load()");
+        WriteHubTests(repository);
+
+        var selection = repository.Read(Store, (5, 5));
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Assert.Equal(["SaveTests", "WriteTests"], selection.TestClassNames);
+        Assert.Equal([("Hub", "WriteTests")], repository.ShippingReach);
+    }
+
+    [Fact]
+    public void NonPartialSeed_ConstructorReference_MatchesWholeTypeSelection()
+    {
+        using var repository = new Repository();
+        repository.Write(Store, """
+            internal class Store
+            {
+                internal Store() { _ = Save(); }
+                internal int Save() => 1;
+                internal int Load() => 0;
+            }
+            """);
+        repository.WriteTest("LoadTests", "new Store().Load()");
+        repository.WriteTest("SaveTests", "new Store().Save()");
+
+        var baseline = repository.Read(Store);
+        var selection = repository.Read(Store, (4, 4));
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, baseline.Outcome);
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Assert.Equal(["LoadTests", "SaveTests"], baseline.TestClassNames);
+        Assert.Equal(baseline.TestClassNames, selection.TestClassNames);
+    }
+
+    [Fact]
     public void NonPartialKernel_ChangedConstant_KeepsDirectAndTransitiveReach()
     {
         using var repository = new Repository();
