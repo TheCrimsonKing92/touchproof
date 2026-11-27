@@ -29,12 +29,14 @@ public enum FindingEvidenceRequestReceiptDecision
     CandidateRerunRequested,
     CandidateRerunGreen,
     CandidateRerunRed,
-    CandidateRerunUnusable
+    CandidateRerunUnusable,
+    PendingExecutionGate
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter<FindingEvidenceRequestReceiptHold>))]
 public enum FindingEvidenceRequestReceiptHold
 {
     Escalation,
-    UnconfirmedRedRouting
+    UnconfirmedRedRouting,
+    PendingExecutionGate
 }

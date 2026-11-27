@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using static Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier;
 
 public sealed class FocusedEvidenceDeclarationFactStoreTests
 {
@@ -53,6 +54,11 @@ public sealed class FocusedEvidenceDeclarationFactStoreTests
     [InlineData("classification-missing")]
     [InlineData("methods-null")]
     [InlineData("method-null")]
+    [InlineData("diagnostics-missing")]
+    [InlineData("directives-missing")]
+    [InlineData("base-list-missing")]
+    [InlineData("attributes-null")]
+    [InlineData("attribute-null")]
     public void InvalidEntryFallsBackToCurrentSourceAndRepairsEntry(string defect)
     {
         using var tree = new SourceTree(ownerState: true);
@@ -69,6 +75,37 @@ public sealed class FocusedEvidenceDeclarationFactStoreTests
         using (UseColdStore())
             AssertCurrentSource(tree, source);
         Assert.Equal(1, parses.CountFor(source));
+    }
+
+    [Theory]
+    [InlineData("older-version")]
+    [InlineData("hash")]
+    [InlineData("truncated")]
+    public void InvalidEntryIsRebuiltWithSameTestlessSelection(string defect)
+    {
+        using var tree = new SourceTree(ownerState: true);
+        var source = tree.Write("Current.cs", "namespace Sample; class SupportHelper { [Fact] void Runs() {} }");
+        const string selector = "SupportHelper";
+        var token = new FocusedEvidenceFilterToken(selector, selector, FocusedEvidenceTokenKind.Class, selector, selector);
+        var filter = new FocusedEvidenceFilter(selector, selector, [token]);
+        AssertSelection();
+
+        // The decoy has a recognised test elsewhere and would prove SupportHelper testless if accepted.
+        File.WriteAllText(tree.EntryFor(source), InvalidEntryJson(tree.Hash(source), defect, testlessSelector: selector));
+        using var parses = FocusedEvidenceParsedRootCache.Observe(tree.Root);
+        AssertSelection();
+        Assert.Equal(1, parses.CountFor(source));
+        AssertSelection();
+        Assert.Equal(1, parses.CountFor(source));
+
+        void AssertSelection()
+        {
+            using var store = UseColdStore();
+            var result = FocusedEvidenceTestlessClassSelection.Apply(tree.Root,
+                [("target", SourceTree.Project, filter)], [], out var dropped);
+            Assert.Equal(("target", SourceTree.Project, filter), Assert.Single(result));
+            Assert.Empty(dropped);
+        }
     }
 
     [Fact]
@@ -180,17 +217,34 @@ public sealed class FocusedEvidenceDeclarationFactStoreTests
             Assert.Single(FocusedEvidenceBareSelectorResolution.ReadDeclaredClasses(source, tree.Root)));
     }
 
-    private static string InvalidEntryJson(string hash, string defect)
+    private static string InvalidEntryJson(string hash, string defect, string? testlessSelector = null)
     {
         var type = new JsonObject
         {
             ["SimpleName"] = "Decoy",
             ["QualifiedName"] = "Sample.Decoy",
             ["IsClassOrNonStructRecord"] = true,
-            ["TestMethodNames"] = new JsonArray(JsonValue.Create("Wrong"))
+            ["TestMethodNames"] = new JsonArray(JsonValue.Create("Wrong")),
+            ["HasBaseList"] = false,
+            ["MethodAttributeNames"] = new JsonArray(JsonValue.Create("Fact"))
         };
         var types = new JsonArray(type);
-        var facts = new JsonObject { ["Types"] = types };
+        if (testlessSelector is not null)
+            types.Add(new JsonObject
+            {
+                ["SimpleName"] = testlessSelector,
+                ["QualifiedName"] = "Sample." + testlessSelector,
+                ["IsClassOrNonStructRecord"] = true,
+                ["TestMethodNames"] = new JsonArray(),
+                ["HasBaseList"] = false,
+                ["MethodAttributeNames"] = new JsonArray()
+            });
+        var facts = new JsonObject
+        {
+            ["Types"] = types,
+            ["ContainsDiagnostics"] = false,
+            ["ContainsDirectives"] = false
+        };
         var envelope = new JsonObject
         {
             ["ExtractorVersion"] = FocusedEvidenceDeclarationFactStore.ExtractorVersion,
@@ -203,6 +257,7 @@ public sealed class FocusedEvidenceDeclarationFactStoreTests
             case "non-json": return "not JSON";
             case "null": return "null";
             case "version": envelope["ExtractorVersion"] = FocusedEvidenceDeclarationFactStore.ExtractorVersion + 1; break;
+            case "older-version": envelope["ExtractorVersion"] = FocusedEvidenceDeclarationFactStore.ExtractorVersion - 1; break;
             case "hash": envelope["ContentHash"] = "stale"; break;
             case "facts-null": envelope["Facts"] = null; break;
             case "types-null": facts["Types"] = null; break;
@@ -212,6 +267,11 @@ public sealed class FocusedEvidenceDeclarationFactStoreTests
             case "classification-missing": type.Remove("IsClassOrNonStructRecord"); break;
             case "methods-null": type["TestMethodNames"] = null; break;
             case "method-null": type["TestMethodNames"]![0] = null; break;
+            case "diagnostics-missing": facts.Remove("ContainsDiagnostics"); break;
+            case "directives-missing": facts.Remove("ContainsDirectives"); break;
+            case "base-list-missing": type.Remove("HasBaseList"); break;
+            case "attributes-null": type["MethodAttributeNames"] = null; break;
+            case "attribute-null": type["MethodAttributeNames"]![0] = null; break;
             default: throw new ArgumentOutOfRangeException(nameof(defect), defect, "Unknown cache defect.");
         }
         return envelope.ToJsonString();
