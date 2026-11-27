@@ -1,5 +1,4 @@
 using System.Text.RegularExpressions;
-using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -192,19 +191,23 @@ internal sealed class GoalCreationOperatorIntentHandler(
     private void HydrateConstructionInputs(AgentOrchestratorKernel kernel, GoalCreationOperatorIntentPayload payload)
     {
         var arguments = payload.CreationArguments;
-        if (CliCommandHandlers.HasCliConfirmation(arguments, "--run") ||
-            CliCommandHandlers.HasCliConfirmation(arguments, "--dispatch"))
+        if (arguments.Any(argument =>
+            argument.Equals("--run", StringComparison.OrdinalIgnoreCase) ||
+            argument.Equals("--dispatch", StringComparison.OrdinalIgnoreCase)))
             return;
 
         var goalIds = FindExplicitDependencyIds(arguments);
-        var backlogPrefix = CliCommandHandlers.GetFlagValue(arguments, "--backlog-item");
+        var backlogPrefix = ReadBacklogItemFlag(arguments);
         if (string.IsNullOrWhiteSpace(backlogPrefix))
             backlogPrefix = OpeningBacklogReference.Match(payload.Objective).Groups[1].Value;
+        backlogPrefix = backlogPrefix.Trim();
 
-        BacklogItem? sourceItem;
+        BacklogItem? sourceItem = null;
         try
         {
-            sourceItem = BacklogItemIdPrefixResolver.Resolve(workspace.BacklogStorePath, backlogPrefix, explicitFlag: false);
+            if (backlogPrefix.Length > 0)
+                sourceItem = new BacklogStore(workspace.BacklogStorePath)
+                    .GetByIdPrefixAsync(backlogPrefix).GetAwaiter().GetResult();
         }
         catch (InvalidOperationException ex)
         {
@@ -230,6 +233,22 @@ internal sealed class GoalCreationOperatorIntentHandler(
             if (_repository.LoadGoalAsync(id).GetAwaiter().GetResult() is { } snapshot)
                 kernel.ReplaceGoalWithSnapshot(snapshot);
         }
+    }
+
+    private static string? ReadBacklogItemFlag(IReadOnlyList<string> arguments)
+    {
+        const string flag = "--backlog-item";
+        const string inlinePrefix = flag + "=";
+        for (var index = 1; index < arguments.Count; index++)
+        {
+            var argument = arguments[index];
+            if (argument.StartsWith(inlinePrefix, StringComparison.OrdinalIgnoreCase))
+                return argument[inlinePrefix.Length..];
+            if (argument.Equals(flag, StringComparison.OrdinalIgnoreCase))
+                return index + 1 < arguments.Count ? arguments[index + 1] : null;
+        }
+
+        return null;
     }
 
     private HashSet<GoalId> FindExplicitDependencyIds(IReadOnlyList<string> arguments)
