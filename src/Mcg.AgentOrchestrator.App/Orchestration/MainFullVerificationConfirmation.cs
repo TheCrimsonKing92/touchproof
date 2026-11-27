@@ -45,7 +45,7 @@ internal static class MainFullVerificationConfirmation
 
         cancellationToken.ThrowIfCancellationRequested();
         return unavailable.Count > 0
-            ? new("incomplete", $"confirmation-unavailable: {string.Join(", ", unavailable)}", confirmed, unconfirmed)
+            ? new("incomplete", $"confirmation-unavailable: {string.Join(", ", unavailable)}", Unconfirmed: unconfirmed)
             : new(confirmed.Count > 0 ? "failed" : MainFullVerificationResult.PassedWithUnconfirmed,
                 Failures: confirmed, Unconfirmed: unconfirmed);
     }

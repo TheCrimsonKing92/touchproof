@@ -50,8 +50,10 @@ public sealed class MainFullVerificationConfirmationTests
         Assert.Equal([First, Second], result.Unconfirmed);
     }
 
-    [Fact]
-    public void FailedCheckWithoutTestIdentityKeepsRunIncompleteAfterPassingRerun()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FailedCheckWithoutTestIdentityKeepsRunIncompleteAfterRerun(bool rerunFails)
     {
         using var fixture = new ConductorVerbStartTests.Fixture();
         const string unnamedCheck = "tests-with-missing-results";
@@ -66,14 +68,14 @@ public sealed class MainFullVerificationConfirmationTests
         var result = Conclude(verification, (test, _) =>
         {
             reruns.Add(test);
-            return new(Unconfirmed);
+            return new(rerunFails ? Confirmed : Unconfirmed);
         });
 
         Assert.Equal("incomplete", result.Outcome);
         Assert.Contains(unnamedCheck, result.Detail);
         Assert.Equal([First], reruns);
-        Assert.Equal([First], result.Unconfirmed);
-        Assert.Empty(result.Failures!);
+        Assert.Equal(rerunFails ? Array.Empty<string>() : [First], result.Unconfirmed);
+        Assert.Null(result.Failures);
     }
 
     [Fact]
@@ -127,7 +129,7 @@ public sealed class MainFullVerificationConfirmationTests
         var result = store.Latest("completed")!.Result!;
         Assert.Equal("incomplete", result.Outcome);
         Assert.Contains(First, result.Detail);
-        Assert.Equal(Second, Assert.Single(result.Failures!).Test);
+        Assert.Null(result.Failures);
         Assert.Equal([Third], result.Unconfirmed);
         Assert.DoesNotContain(lines, line => line.StartsWith("MAIN_FULL_VERIFICATION_HOLD ", StringComparison.Ordinal));
         Assert.Empty(await items.ListAsync());

@@ -76,11 +76,8 @@ internal sealed class MainFullVerificationRunner(
         if (result.Outcome != "incomplete")
             return confirmation;
 
-        return confirmation with
-        {
-            Outcome = "incomplete",
-            Detail = confirmation.Detail is null ? result.Detail : $"{result.Detail}. {confirmation.Detail}"
-        };
+        return new("incomplete", confirmation.Detail is null ? result.Detail : $"{result.Detail}. {confirmation.Detail}",
+            Unconfirmed: confirmation.Unconfirmed);
     }
 
     internal static MainFullVerificationResult Interpret(AcceptanceVerificationResult verification,
