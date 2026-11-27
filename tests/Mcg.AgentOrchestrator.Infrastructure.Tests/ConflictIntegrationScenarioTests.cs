@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static AdditiveConflictGitFixture;
 using static ConductorDriverTests;
+using static ConductorDriverTestsLandingCompletionDecision;
 using static ConductorConflictIntegrationRecordTests;
 
 // Parallel-safe: independent repositories and kernels; worker, build and acceptance effects are injected.
@@ -127,9 +128,20 @@ public sealed class ConflictIntegrationScenarioTests
         Assert.Single(scenario.Escalations);
         scenario.Escalations.Clear();
         PassVerification(scenario.Fixture.Kernel, scenario.Fixture.Goal, scenario.Fixture.Tester);
-        Assert.IsType<ConductorAdvanceOutcome.Escalated>(scenario.Tick().Outcome);
-        Assert.Contains("conductor integration refused: repeat conflict on unchanged candidate", Assert.Single(scenario.Escalations));
+        var escalated = Assert.IsType<ConductorAdvanceOutcome.Escalated>(scenario.Tick().Outcome);
+        Assert.Equal(escalated.Reason, Assert.Single(scenario.Escalations));
+        Assert.Contains("conductor integration refused: repeat conflict on unchanged candidate", escalated.Reason);
         Assert.DoesNotContain("workspace rebase", scenario.Escalations[0]);
+        var decision = Assert.IsType<PolicyDecisionRecord>(escalated.Decision);
+        Assert.Equal("landing-rebase", decision.Stage);
+        Assert.Equal("Escalate", decision.Action);
+        Assert.Equal(2, decision.Rung);
+        Assert.Equal("rebase-conflict", decision.DiscriminatingEvidence);
+        Assert.Equal(escalated.Reason, decision.Reason);
+        AssertFact(decision, "conductorIntegrationRefusal", "repeat conflict on unchanged candidate");
+        AssertFact(decision, "phase", "pre-landing");
+        AssertFact(decision, "conflictFiles", "src/Widget.cs");
+        AssertFact(decision, "applySideEffects", "true");
         Assert.Equal(1, scenario.Fixture.RetryCalls);
         Assert.Equal(0, scenario.TesterDispatches);
         scenario.Fixture.GitFixture.AssertRestored();
