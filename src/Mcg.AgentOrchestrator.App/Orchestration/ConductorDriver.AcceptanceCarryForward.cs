@@ -82,31 +82,16 @@ internal sealed partial class ConductorDriver
         AcceptanceVerificationSummary acceptance)
     {
         var disposition = CarryForwardGreenVerdict(candidate, acceptance);
-        if (disposition is not (
-            AcceptanceMainAdvanceDisposition.Disjoint or
-            AcceptanceMainAdvanceDisposition.Unchanged))
-        {
-            var reason = disposition switch
-            {
-                AcceptanceMainAdvanceDisposition.Overlap =>
-                    "Main advanced with overlapping changes; revalidation required before landing.",
-                AcceptanceMainAdvanceDisposition.Unknown =>
-                    "Acceptance candidate relationship could not be classified; revalidation required before landing.",
-                _ => throw new InvalidOperationException(
-                    $"Unsupported acceptance main-advance disposition {disposition.GetType().Name}.")
-            };
-            return MakeResult(
-                candidate.Goal.Id.Value,
-                candidate.GoalPrefix,
-                policy,
-                new ConductorAdvanceOutcome.Held(
-                    GoalLifecycleState.Verified,
-                    $"{reason} {disposition.FormatReceipt()}",
-                    StableIdentity: AcceptanceMainAdvanceReceipt.BuildRevalidationHoldIdentity(
-                        candidate, _resolveAcceptanceHeads)));
-        }
+        if (disposition is AcceptanceMainAdvanceDisposition.Disjoint or AcceptanceMainAdvanceDisposition.Unchanged)
+            return CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
 
-        return CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
+        var decision = RacingLandingCarryForwardPolicy.Evaluate(AcceptanceMainAdvanceFacts.ForRevalidationHold(disposition));
+        var identity = AcceptanceMainAdvanceReceipt.BuildRevalidationHoldIdentity(candidate, _resolveAcceptanceHeads);
+        return MakeResult(candidate.Goal.Id.Value, candidate.GoalPrefix, policy,
+            new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, decision.Reason, identity)
+            {
+                Decision = decision.ToRecord()
+            });
     }
 
     internal AcceptanceMainAdvanceDisposition CarryForwardGreenVerdict(
@@ -246,4 +231,20 @@ internal sealed partial class ConductorDriver
             // Diagnostics must not replace today's safe re-gate behavior when evidence storage is unavailable.
         }
     }
+}
+
+internal static class AcceptanceMainAdvanceFacts
+{
+    internal static RacingLandingCarryForwardFacts ForRevalidationHold(AcceptanceMainAdvanceDisposition disposition) =>
+        disposition switch
+        {
+            AcceptanceMainAdvanceDisposition.Overlap overlap =>
+                new(nameof(AcceptanceMainAdvanceDisposition.Overlap), overlap.Kind, overlap.LandedPath,
+                    overlap.VerifiedPath, string.Empty, overlap.FormatReceipt()),
+            AcceptanceMainAdvanceDisposition.Unknown unknown =>
+                new(nameof(AcceptanceMainAdvanceDisposition.Unknown), string.Empty, string.Empty,
+                    string.Empty, unknown.Reason, unknown.FormatReceipt()),
+            _ => throw new InvalidOperationException(
+                $"Unsupported acceptance main-advance disposition {disposition.GetType().Name}.")
+        };
 }
