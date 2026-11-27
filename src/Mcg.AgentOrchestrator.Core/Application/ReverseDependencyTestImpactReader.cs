@@ -377,7 +377,8 @@ internal static class ReverseDependencyTestImpactReader
                             ConsumerFilter(declaration, frontier, knownMembersByType,
                                 file.IsTargetTestProject ? helperPeers : propagateShippingSourceReach ? shippingFrontier : null,
                                 (file.IsTargetTestProject ? helpersWithMultipleParts : shippingConsumersWithMultipleParts)
-                                    ?.Contains(declaration.Name) == true)))));
+                                    ?.Contains(declaration.Name) == true,
+                                isTestHelper: file.IsTargetTestProject)))));
                 if (frontier.Length == 0)
                 {
                     break;
@@ -950,7 +951,8 @@ internal static class ReverseDependencyTestImpactReader
         IReadOnlyList<FrontierSymbol> frontier,
         IReadOnlyDictionary<string, HashSet<string>> knownMembersByType,
         IReadOnlySet<string>? shippingFrontier,
-        bool hasMultipleReachedParts)
+        bool hasMultipleReachedParts,
+        bool isTestHelper)
     {
         var fallback = declaration.IsPartial ? MemberNames(declaration.Members) : null;
         // Caller expansion is local to a declaration. Keep every member of each reached part
@@ -1002,7 +1004,12 @@ internal static class ReverseDependencyTestImpactReader
             if (HasShippingPeer(member.ReferencedIdentifiers!))
                 names.Add(member.Name);
 
-        return CompleteMemberFilter(declaration.Members, names, unattributed) ?? fallback;
+        var memberFilter = CompleteMemberFilter(declaration.Members, names, unattributed);
+        // Using statements and test fixture lifecycle hooks can invoke members without naming them.
+        if (isTestHelper && memberFilter?.Any(name => name is "Dispose" or "DisposeAsync" or "InitializeAsync") == true)
+            return fallback;
+
+        return memberFilter ?? fallback;
     }
 
     private static IReadOnlySet<string>? CompleteMemberFilter(

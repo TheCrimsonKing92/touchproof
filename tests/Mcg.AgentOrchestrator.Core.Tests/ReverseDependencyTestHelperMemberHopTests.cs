@@ -111,6 +111,40 @@ public sealed class ReverseDependencyTestHelperMemberHopTests
     }
 
     [Fact]
+    public void ImplicitDisposal_KeepsUsingDeclarationConsumer()
+    {
+        using var repository = new Repository();
+
+        void WriteHelper(string probeExpression, string disposeExpression) => repository.WriteHelper("Helper", $$"""
+            internal sealed class Helper : System.IDisposable
+            {
+                internal int Probe() => {{probeExpression}};
+                internal int Read() => 0;
+                public void Dispose() { _ = {{disposeExpression}}; }
+            }
+            """);
+
+        repository.WriteTest("ExplicitTests", "new Helper().Probe()");
+        repository.WriteHelper("UsingTests", """
+            public class UsingTests
+            {
+                [Xunit.Fact]
+                public void Test()
+                {
+                    using var helper = new Helper();
+                    _ = helper.Read();
+                }
+            }
+            """);
+
+        WriteHelper("Store.Save()", "0");
+        Assert.Equal(["ExplicitTests"], repository.ReadClasses());
+
+        WriteHelper("0", "Store.Save()");
+        Assert.Equal(["ExplicitTests", "UsingTests"], repository.ReadClasses());
+    }
+
+    [Fact]
     public void ReachedPartialParts_KeepAllMembersAndCrossPartCallers()
     {
         using var repository = new Repository();
@@ -170,7 +204,7 @@ public sealed class ReverseDependencyTestHelperMemberHopTests
 
         IReadOnlySet<string>? Filter(CSharpTestClassScanner.SourceTypeDeclaration declaration) =>
             ReverseDependencyTestImpactReader.ConsumerFilter(declaration, [store], knownMembers, helperPeers,
-                hasMultipleReachedParts: false);
+                hasMultipleReachedParts: false, isTestHelper: true);
 
         var preciseFilter = Filter(helper);
         Assert.NotNull(preciseFilter);
