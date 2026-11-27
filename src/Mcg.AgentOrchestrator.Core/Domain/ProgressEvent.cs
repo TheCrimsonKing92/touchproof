@@ -13,7 +13,8 @@ public sealed record ProgressEvent(
     ConductorTickOutcomePayload? TickOutcome = null,
     ProgressFailurePayload? Failure = null,
     DateTimeOffset? OperatorIntentCreatedAt = null,
-    PreTesterEvidenceEntry? PreTesterEvidence = null);
+    PreTesterEvidenceEntry? PreTesterEvidence = null,
+    FindingEvidenceRequestReceipt? FindingEvidenceRequest = null);
 
 // Facts captured when a failure is recorded, before its diagnostic text is composed.
 public sealed record ProgressFailurePayload(string Kind, string? Rule, IReadOnlyList<ProgressFailureEvidence> Evidence)

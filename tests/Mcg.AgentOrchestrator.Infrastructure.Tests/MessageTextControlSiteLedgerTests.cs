@@ -10,6 +10,10 @@ public sealed class MessageTextControlSiteLedgerTests
     private const string LedgerPath = "docs/message-text-control-sites.tsv";
     private const string IntentCoordinatorPath =
         "src/Mcg.AgentOrchestrator.App/Orchestration/OperatorIntentCoordinator.cs";
+    private const string FindingEvidenceRoutingPath =
+        "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRouting.cs";
+    private const string FindingEvidenceLegacyReaderPath =
+        "src/Mcg.AgentOrchestrator.Core/Application/FindingEvidenceRequestReceiptLegacyReader.cs";
     private const string LedgerHeader = "path\tcount\tclassification\ttyped_record\trequired_fields\tretirement_priority\tnotes";
     private const string DefinitionText =
         "Count each executable C# invocation of Contains, StartsWith, EndsWith or IndexOf whose immediate receiver is named Message. Include qualified or bare member access, conditional access, multiline formatting, parentheses and null-forgiving wrappers. Count all overloads. Exclude comments, string contents, inactive preprocessor regions, aliases and transformed receivers.";
@@ -27,6 +31,8 @@ public sealed class MessageTextControlSiteLedgerTests
 
         Assert.NotEmpty(scan);
         Assert.Empty(ledger.Violations.Concat(CompareMessageCounts(scan, ledger.Rows)));
+        Assert.Equal(0, ledger.Rows[FindingEvidenceRoutingPath].Count);
+        Assert.Equal(scan[FindingEvidenceLegacyReaderPath], ledger.Rows[FindingEvidenceLegacyReaderPath].Count);
     }
 
     [Fact]

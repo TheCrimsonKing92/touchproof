@@ -382,7 +382,8 @@ public sealed record ProgressEventSnapshot(
     ConductorTickOutcomePayload? TickOutcome = null,
     ProgressFailurePayload? Failure = null,
     DateTimeOffset? OperatorIntentCreatedAt = null,
-    PreTesterEvidenceEntry? PreTesterEvidence = null);
+    PreTesterEvidenceEntry? PreTesterEvidence = null,
+    FindingEvidenceRequestReceipt? FindingEvidenceRequest = null);
 
 public sealed record HumanInputRequestSnapshot(
     string Id,
