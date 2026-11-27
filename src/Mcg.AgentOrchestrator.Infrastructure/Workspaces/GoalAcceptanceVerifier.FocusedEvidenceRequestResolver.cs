@@ -363,11 +363,8 @@ internal static partial class FocusedEvidenceRequestResolver
         string className)
     {
         return EnumerateFocusedEvidenceSourceFiles(worktreePath, project)
-            .Where(path =>
-            {
-                ParseCSharpRoot(path, out var names);
-                return names.Any(name => FocusedEvidenceParsedRootCache.FocusedEvidenceTypeMatches(name, className));
-            })
+            .Where(path => FocusedEvidenceDeclarationFactStore.Current.Read(path, worktreePath).Types
+                .Any(type => FocusedEvidenceParsedRootCache.FocusedEvidenceTypeMatches(type.Name, className)))
             .ToArray();
     }
 
@@ -380,16 +377,7 @@ internal static partial class FocusedEvidenceRequestResolver
             $"focused evidence source discovery failed: {exception.GetType().Name}: {exception.Message}");
 
     internal static CompilationUnitSyntax ParseCSharpRoot(string path) =>
-        ParseCSharpRoot(path, out _);
-
-    private static CompilationUnitSyntax ParseCSharpRoot(
-        string path,
-        out System.Collections.Immutable.ImmutableArray<FocusedEvidenceParsedRootCache.DeclaredTypeName> names)
-    {
-        var file = CSharpSourceFileRootReader.ReadFile(path);
-        names = file.Names;
-        return file.Root;
-    }
+        CSharpSourceFileRootReader.Read(path);
 
     internal static bool FocusedEvidenceTypeMatches(TypeDeclarationSyntax declaration, string className) =>
         FocusedEvidenceParsedRootCache.FocusedEvidenceTypeMatches(
@@ -581,7 +569,7 @@ internal static partial class FocusedEvidenceRequestResolver
             }
 
             var methodSelector = segments[^1];
-            if (FocusedEvidenceMethodResolver.FindTestMethodNames(classFiles, className).Any(methodName =>
+            if (FocusedEvidenceMethodResolver.FindTestMethodNames(classFiles, className, worktreePath).Any(methodName =>
                     methodName.StartsWith(methodSelector, StringComparison.OrdinalIgnoreCase)))
             {
                 candidates.Add(new FocusedEvidenceFilterToken(
