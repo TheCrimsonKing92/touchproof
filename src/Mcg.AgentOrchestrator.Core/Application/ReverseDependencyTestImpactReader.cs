@@ -343,6 +343,26 @@ internal static class ReverseDependencyTestImpactReader
                     }
                 }
 
+                HashSet<string>? helperPeers = null;
+                HashSet<string>? helpersWithMultipleParts = null;
+                if (propagateShippingSourceReach)
+                {
+                    var helperConsumers = consumers.Where(file => file.IsTargetTestProject)
+                        .SelectMany(file => file.Symbols!.DeclaredTypes.Where(declaration =>
+                            ReferencesFrontier(declaration) &&
+                            !file.Symbols.TestClassNames.Contains(declaration.Name, StringComparer.Ordinal)))
+                        .ToArray();
+                    helperPeers = helperConsumers.Select(declaration => declaration.Name)
+                        .ToHashSet(StringComparer.Ordinal);
+                    helperPeers.UnionWith(shippingFrontier!);
+                    helpersWithMultipleParts = helperConsumers
+                        .Where(declaration => declaration.IsPartial)
+                        .GroupBy(declaration => declaration.Name, StringComparer.Ordinal)
+                        .Where(parts => parts.Count() > 1)
+                        .Select(parts => parts.Key)
+                        .ToHashSet(StringComparer.Ordinal);
+                }
+
                 frontier = MergeFrontier(consumers
                     .SelectMany(file => file.Symbols!.DeclaredTypes
                         .Where(ReferencesFrontier)
@@ -355,8 +375,9 @@ internal static class ReverseDependencyTestImpactReader
                                 ? TestSelectionMode.AllReferencingClasses
                                 : TestSelectionMode.OwnedClassOnly,
                             ConsumerFilter(declaration, frontier, knownMembersByType,
-                                !file.IsTargetTestProject && propagateShippingSourceReach ? shippingFrontier : null,
-                                !file.IsTargetTestProject && shippingConsumersWithMultipleParts?.Contains(declaration.Name) == true)))));
+                                file.IsTargetTestProject ? helperPeers : propagateShippingSourceReach ? shippingFrontier : null,
+                                (file.IsTargetTestProject ? helpersWithMultipleParts : shippingConsumersWithMultipleParts)
+                                    ?.Contains(declaration.Name) == true)))));
                 if (frontier.Length == 0)
                 {
                     break;
