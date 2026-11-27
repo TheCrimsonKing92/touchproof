@@ -62,7 +62,10 @@ internal sealed class MainFullVerificationCoordinator(
 
         try
         {
-            var lastPassed = store.Latest("completed", "passed")?.Commit;
+            var passed = store.Latest("completed", "passed");
+            var passedWithUnconfirmed = store.Latest("completed", MainFullVerificationResult.PassedWithUnconfirmed);
+            var lastPassed = (passedWithUnconfirmed?.CompletedAt > passed?.CompletedAt
+                ? passedWithUnconfirmed : passed ?? passedWithUnconfirmed)?.Commit;
             var record = new MainFullVerificationRecord(commit!, now, intervalSeconds);
             store.Write("admitted", record, now);
             var started = clock();
@@ -101,8 +104,8 @@ internal sealed class MainFullVerificationCoordinator(
             _active = null;
         }
 
-        if (store.Latest("completed", "failed") is { } failure)
-            PublishHold(failure);
+        if (store.Latest("completed") is { } latest)
+            PublishHold(latest);
     }
 
     private static MainFullVerificationResult Execute(MainFullVerificationRun run, string? lastPassed, CancellationToken token)
@@ -131,20 +134,24 @@ internal sealed class MainFullVerificationCoordinator(
         var completed = active with { CompletedAt = now, DurationSeconds = duration, Result = result };
         store.Write("completed", completed, now);
         var count = result.Failures?.Count ?? 0;
+        var unconfirmed = result.Unconfirmed is { Count: > 0 } names
+            ? $" unconfirmedTests={OneLine(string.Join(",", names))}" : "";
         progress(FormattableString.Invariant(
-            $"{Event} result={result.Outcome} commit={active.Commit} durationSeconds={duration:0.###} failingTests={count} truncated={Math.Max(0, count - MaxHoldLines)} detail={OneLine(result.Detail ?? "none")}"));
+            $"{Event} result={result.Outcome} commit={active.Commit} durationSeconds={duration:0.###} failingTests={count} truncated={Math.Max(0, count - MaxHoldLines)} detail={OneLine(result.Detail ?? "none")}{unconfirmed}"));
     }
 
     private void PublishHold(MainFullVerificationRecord record)
     {
-        var failures = record.Result!.Failures!;
+        // Confirmation fills Unconfirmed even when all reruns fail. Older records lack that evidence.
+        if (record.Result is not { Outcome: "failed", Unconfirmed: not null, Failures: { Count: > 0 } failures })
+            return;
         if (!store.Contains(record.Commit, "hold-published"))
         {
             string? tip;
             try { tip = mainTip(); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) { tip = null; }
             var reason = tip is not null && !string.Equals(tip, record.Commit, StringComparison.OrdinalIgnoreCase)
-                ? "tip-moved" : "not-confirmed-by-rerun";
+                ? "tip-moved" : "confirmed-by-rerun";
             foreach (var failure in failures.Take(MaxHoldLines))
                 progress($"{HoldEvent} commit={record.Commit} test={OneLine(failure.Test)} landing={failure.Landing ?? "undetermined"} landingGoal={failure.Goal ?? "none"} revert=withheld reason={reason}");
             store.Write("hold-published", record, clock());
