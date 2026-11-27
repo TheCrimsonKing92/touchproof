@@ -1,8 +1,10 @@
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 // Parallel-safe: each fixture owns its stores and lease. Failure hooks are scoped to its execution context.
 public sealed class KeyedGoalCreationIntentTests : CliCommandTestBase
@@ -245,6 +247,132 @@ public sealed class KeyedGoalCreationIntentTests : CliCommandTestBase
             GoalIntakeRequestStates.Created,
             new GoalIntakeRequestStore(workspace.SqliteStatePath).Get("concurrent-goal-key")!.State);
     }
+
+    [Theory]
+    [InlineData(300)]
+    [InlineData(600)]
+    public async Task ManyStoredGoals_IntentLoadsOnlyDependencyAndSourceClaimOwner(int goalCount)
+    {
+        using var root = new TemporaryDirectory();
+        var workspace = CreateRefinedWorkspace(root.Path);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Track scoped intent creation");
+        var stored = new AgentOrchestratorKernel();
+        var dependency = stored.CreateGoal("Explicit dependency");
+        var owner = stored.CreateGoal("Existing source claim owner");
+        for (var index = 2; index < goalCount; index++)
+            stored.CreateGoal($"Unrelated goal {index}");
+        await repository.SaveAsync(stored);
+        var claim = new SourceBacklogClaimStore(workspace.SqliteStatePath)
+            .EnsureClaimForNewGoal(stored, item.Id, owner.Id.Value, SourceBacklogCoverage.Slice);
+        Assert.Equal(owner.Id.Value, claim.OwnerGoalId);
+        var working = await repository.LoadGoalsAsync([dependency.Id, owner.Id]);
+
+        const string key = "scoped-creation";
+        Assert.Contains("\"state\":\"still-committing\"", Execute(workspace, "goal", "Create one scoped goal",
+            "--depends-on", dependency.Id.Value, "--backlog-item", item.Id, "--backlog-coverage", "slice",
+            "--request-key", key));
+        var reads = new List<GoalSnapshotReadObservation>();
+        var observed = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath,
+            statementObserver: null, telemetryOptions: null, readObserver: reads.Add);
+        var coordinator = OperatorIntentCoordinator.CreateDefault(workspace,
+            new GoalCreationOperatorIntentHandler(workspace, new CliGoalIntentConstruction(), observed));
+        var snapshotIds = new List<string>();
+        var traceErrors = new List<Exception>();
+        SnapshotTrace observer = (_, _, statement, _) =>
+        {
+            try
+            {
+                // This also sees the transaction's snapshot rows, which bypass the repository read observer.
+                var sql = Marshal.PtrToStringUTF8(StatementSql(statement));
+                var column = sql switch
+                {
+                    string select when select.StartsWith("SELECT id, snapshot_json FROM goals", StringComparison.Ordinal) => 1,
+                    string select when select.StartsWith("SELECT snapshot_json FROM goals", StringComparison.Ordinal) => 0,
+                    _ => -1
+                };
+                if (column >= 0)
+                {
+                    using var row = JsonDocument.Parse(Marshal.PtrToStringUTF8(ColumnText(statement, column))!);
+                    snapshotIds.Add(row.RootElement.GetProperty("Id").GetString()!);
+                }
+            }
+            catch (Exception ex)
+            {
+                traceErrors.Add(ex);
+            }
+            return 0;
+        };
+        void ObserveConnection(SqliteConnection connection, string path)
+        {
+            if (path.Equals(workspace.SqliteStatePath, StringComparison.OrdinalIgnoreCase) &&
+                TraceSnapshotRows(connection.Handle!, 4, observer, 0) != 0)
+            {
+                traceErrors.Add(new InvalidOperationException("Could not attach SQLite snapshot row observer."));
+            }
+        }
+
+        using (ConductorLoopLease.Acquire(workspace.OrchestratorDirectory))
+        {
+            StateDbConnectionFactory.ConnectionOpenedForDiagnostics += ObserveConnection;
+            try
+            {
+                Assert.Contains("result=applied", Assert.Single(coordinator.ExecuteWorkspacePending(working)));
+            }
+            finally
+            {
+                StateDbConnectionFactory.ConnectionOpenedForDiagnostics -= ObserveConnection;
+                GC.KeepAlive(observer);
+            }
+        }
+
+        Assert.Empty(traceErrors);
+        Assert.DoesNotContain(reads, read => read.Operation == "metadata");
+        Assert.Equal(new[] { dependency.Id.Value, owner.Id.Value }.Order(StringComparer.Ordinal),
+            snapshotIds.Order(StringComparer.Ordinal));
+        var request = new GoalIntakeRequestStore(workspace.SqliteStatePath).Get(key)!;
+        Assert.Equal(GoalIntakeRequestStates.Created, request.State);
+        var created = Assert.IsType<GoalSnapshot>(await repository.LoadGoalAsync(new GoalId(request.GoalId!)));
+        Assert.Equal(dependency.Id.Value, Assert.Single(created.DependsOn!));
+        Assert.Equal(item.Id, created.SourceBacklogItemId);
+    }
+
+    [Fact]
+    public async Task DependencyOmittedFromWorkingKernel_IntentResolvesStoredPrefix()
+    {
+        using var root = new TemporaryDirectory();
+        var workspace = CreateRefinedWorkspace(root.Path);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var stored = new AgentOrchestratorKernel();
+        var dependency = stored.CreateGoal("Dependency outside the conductor working set");
+        await repository.SaveAsync(stored);
+        var working = new AgentOrchestratorKernel();
+
+        const string key = "stored-dependency-prefix";
+        Assert.Contains("\"state\":\"still-committing\"", Execute(workspace, "goal", "Create a goal with a stored dependency",
+            "--depends-on", dependency.Id.Value[..12].ToUpperInvariant(), "--request-key", key));
+        var coordinator = OperatorIntentCoordinator.CreateDefault(workspace,
+            new GoalCreationOperatorIntentHandler(workspace, new CliGoalIntentConstruction(), repository));
+        using (ConductorLoopLease.Acquire(workspace.OrchestratorDirectory))
+            Assert.Contains("result=applied", Assert.Single(coordinator.ExecuteWorkspacePending(working)));
+
+        var created = Assert.Single(working.Goals);
+        Assert.Equal(dependency.Id, Assert.Single(created.DependsOn));
+        var snapshot = Assert.IsType<GoalSnapshot>(await repository.LoadGoalAsync(created.Id));
+        Assert.Equal(dependency.Id.Value, Assert.Single(snapshot.DependsOn!));
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int SnapshotTrace(uint kind, nint context, nint statement, nint argument);
+
+    [DllImport("e_sqlite3", EntryPoint = "sqlite3_trace_v2", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int TraceSnapshotRows(SQLitePCL.sqlite3 database, uint mask, SnapshotTrace callback, nint context);
+
+    [DllImport("e_sqlite3", EntryPoint = "sqlite3_sql", CallingConvention = CallingConvention.Cdecl)]
+    private static extern nint StatementSql(nint statement);
+
+    [DllImport("e_sqlite3", EntryPoint = "sqlite3_column_text", CallingConvention = CallingConvention.Cdecl)]
+    private static extern nint ColumnText(nint statement, int column);
 
     internal static string ApplyWorkspace(OrchestratorWorkspace workspace, int expectedExitCode = 0)
     {

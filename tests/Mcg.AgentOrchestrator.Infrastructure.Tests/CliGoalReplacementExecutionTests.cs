@@ -211,11 +211,16 @@ public sealed class CliGoalReplacementExecutionTests
         Assert.Contains(applyCalls, method => method.Name == "TransactGoalCreationWithOutboxAsync");
         Assert.Contains(applyCalls, method => method.DeclaringType == typeof(GoalCreationSideEffectDelivery) &&
             method.Name == nameof(GoalCreationSideEffectDelivery.DeliverPending));
-        var bind = Assert.Single(applyCalls.Where(method => method.DeclaringType?.DeclaringType == handler)
-            .SelectMany(References), method => method.DeclaringType == handler && method.Name == "BuildAndBind");
-        var bindCalls = References(bind).ToArray();
-        Assert.Contains(bindCalls, method => method.DeclaringType == typeof(IGoalIntentConstruction) &&
+        Assert.Contains(applyCalls, method => method.DeclaringType == typeof(GoalCreationLoadScope) &&
+            method.Name == nameof(GoalCreationLoadScope.ForPreparedGoal));
+        var preparationCalls = applyCalls.Where(method => method.DeclaringType == handler).SelectMany(References).ToArray();
+        Assert.Contains(preparationCalls, method => method.DeclaringType == typeof(GoalIntakeRequestStore) &&
+            method.Name == nameof(GoalIntakeRequestStore.Get));
+        Assert.Contains(preparationCalls, method => method.DeclaringType == typeof(IGoalIntentConstruction) &&
             method.Name == nameof(IGoalIntentConstruction.Build));
+        var bind = Assert.Single(applyCalls.Where(method => method.DeclaringType?.DeclaringType == handler),
+            method => References(method).Any(called => called.Name == nameof(GoalIntakeRequestStore.MarkCreated)));
+        var bindCalls = References(bind).ToArray();
         Assert.Contains(bindCalls, method => method.Name == nameof(AgentOrchestratorKernel.ReplaceGoalWithSnapshot));
         Assert.Contains(bindCalls, method => method.Name == nameof(GoalIntakeRequestStore.MarkCreated));
     }
