@@ -504,7 +504,7 @@ internal sealed partial class ConductorDriver
                 if (readable && attributableFailures.Count > 0)
                 {
                     budget.AppendFailures(evidence, criterion.Name, receipt.Path, receiptLineIndex,
-                        attributableFailures, ref remainingEvidenceEntries);
+                        attributableFailures.Select(failure => (failure, AcceptanceRetryEvidenceBudget.ResolveDisposition(criterion, failure.TestName))).ToArray(), ref remainingEvidenceEntries);
                     continue;
                 }
 
