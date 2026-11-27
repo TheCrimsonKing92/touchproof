@@ -34,24 +34,6 @@ internal static partial class CliCommandHandlers
     internal static Goal ResolveAttentionGoal(AgentOrchestratorKernel kernel, string goalPrefix) =>
         AttentionReadGoalSelection.Resolve(kernel, goalPrefix);
 
-    private static CollaborationItem ResolveAttentionItemById(
-        IReadOnlyList<CollaborationItem> items,
-        string itemId)
-    {
-        var matches = items
-            .Where(item => CollaborationItemLifecycle.IsReachUpType(item.Type))
-            .Where(item => item.Id.StartsWith(itemId, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        return matches.Count switch
-        {
-            1 => matches[0],
-            0 => throw new ArgumentException($"No attention item matches id '{itemId}'."),
-            _ => throw new ArgumentException(
-                $"Attention item id '{itemId}' is ambiguous ({matches.Count} matches); use the full item id from `attention show`.")
-        };
-    }
-
     internal static IReadOnlyList<HumanInputRequest> HumanWaitsForAttention(
         AgentOrchestratorKernel kernel, GoalId? goalId, bool includeHistory) =>
         AttentionHumanWaitQuery.Read(kernel, goalId, includeHistory);
@@ -287,57 +269,9 @@ internal static partial class CliCommandHandlers
                     ? CollaborationItemStore.OpenExisting(context.Workspace.OrchestratorDirectory)
                     : CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
 
-                // `attention dismiss --item <item-id>` resolves one item, including cross-goal items.
-                // The legacy goal-prefix selector remains available for bulk cleanup.
                 if (parts.Count > 1 && parts[1].Equals("dismiss", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (parts.Count == 4 && parts[2].Equals("--item", StringComparison.OrdinalIgnoreCase))
-                    {
-                        var item = ResolveAttentionItemById(
-                            store.ListAsync().GetAwaiter().GetResult(),
-                            parts[3]);
-                        if (CollaborationItemLifecycle.IsTerminal(item.Status))
-                        {
-                            throw new InvalidOperationException(
-                                $"Attention item '{parts[3]}' matched, but status is '{item.Status}'; nothing was dismissed.");
-                        }
-
-                        if (!store.TryResolveByIdAsync(item.Id, "dismissed by operator").GetAwaiter().GetResult())
-                        {
-                            throw new InvalidOperationException(
-                                $"Attention item '{parts[3]}' matched, but it was no longer open when dismissal was applied; nothing was dismissed.");
-                        }
-
-                        Console.WriteLine($"Dismissed attention item '{item.Id}'.");
-                        return false;
-                    }
-
-                    var explicitGoal = parts.Count == 4 && parts[2].Equals("--goal", StringComparison.OrdinalIgnoreCase);
-                    if ((parts.Count != 3 || parts[2].StartsWith("--", StringComparison.Ordinal)) && !explicitGoal)
-                        throw new ArgumentException(CliCommandHelp.AttentionUsage);
-
-                    var goalPrefix = explicitGoal ? parts[3] : parts[2];
-                    var goal = ResolveAttentionGoal(context.Kernel, goalPrefix);
-                    var open = store.GetAttentionQueueAsync().GetAwaiter().GetResult()
-                        .Where(item => string.Equals(item.GoalId, goal.Id.Value, StringComparison.OrdinalIgnoreCase))
-                        .ToList();
-
-                    if (open.Count == 0)
-                    {
-                        Console.WriteLine(
-                            $"Dismissed 0 of 0 open attention item(s) for goal '{goal.Id.Value}'.");
-                        return false;
-                    }
-
-                    var dismissed = open.Count(item =>
-                        store.TryResolveByIdAsync(item.Id, "dismissed by operator").GetAwaiter().GetResult());
-                    if (dismissed == 0)
-                    {
-                        throw new InvalidOperationException(
-                            $"Goal '{goal.Id.Value}' matched {open.Count} open attention item(s), but none remained eligible for dismissal.");
-                    }
-
-                    Console.WriteLine($"Dismissed {dismissed} of {open.Count} open attention item(s) for goal '{goal.Id.Value}'.");
+                    AttentionDismissCommand.Execute(parts, context, store);
                     return false;
                 }
 

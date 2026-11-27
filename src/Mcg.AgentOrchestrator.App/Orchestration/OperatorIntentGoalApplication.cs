@@ -18,6 +18,11 @@ internal abstract record OperatorIntentOfflineOutcome
 
 internal static class OperatorIntentGoalApplication
 {
+    // Terminal dismissals need a checkpoint without the side effects that prepare a goal for work.
+    internal static OperatorIntentExecutionResult ApplyTerminalDismissals(
+        AgentOrchestratorKernel kernel, Goal goal, OperatorIntentCoordinator intents, IReadOnlySet<string> dismissIds) =>
+        intents.ExecutePending(kernel, goal, dismissIds);
+
     internal static OperatorIntentGoalApplicationResult ApplyPending(
         AgentOrchestratorKernel kernel,
         Goal goal,
@@ -30,7 +35,7 @@ internal static class OperatorIntentGoalApplication
         var result = intents.ExecutePending(kernel, goal, intentIds, retryAnswerIds);
         goal = kernel.GetGoal(goal.Id);
         var lines = new List<string>();
-        if (result.MutatedGoalState && !supersessionOnly && goal.Status != GoalStatus.Completed)
+        if (result.MutatedGoalState && !result.OnlyDismissedHumanInput && !supersessionOnly && goal.Status != GoalStatus.Completed)
         {
             var invalidation = AcceptanceAttemptRetryInvalidation.Apply(
                 kernel,
