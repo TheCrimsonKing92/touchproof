@@ -11,6 +11,7 @@ internal sealed record OperatorIntentExecutionResult(
 {
     public bool RejectedAdjudication { get; init; }
     public bool PreserveGoalHold { get; init; }
+    public bool OnlyDismissedHumanInput { get; init; }
 }
 
 internal sealed partial class OperatorIntentCoordinator
@@ -214,6 +215,7 @@ internal sealed partial class OperatorIntentCoordinator
             // A rejected checkpoint can rebase the kernel onto stored state without our marker.
             // Resume the existing claim/expiry protocol; an in-memory completion is not authority.
             var preserveGoalHold = false;
+            var onlyDismissedHumanInput = true;
             uncommitted.RemoveAll(completion =>
             {
                 OperatorIntentRecord? stored;
@@ -225,10 +227,13 @@ internal sealed partial class OperatorIntentCoordinator
                 {
                     // An unreadable verb cannot prove that a repair is safe to release or resume.
                     preserveGoalHold = true;
+                    onlyDismissedHumanInput = false;
                     return false;
                 }
 
+                onlyDismissedHumanInput &= stored?.Verb == OperatorIntentVerbs.HumanInputDismiss;
                 if (stored is not null && (stored.Verb == OperatorIntentVerbs.CriterionEvidenceSupersede ||
+                    stored.Verb == OperatorIntentVerbs.HumanInputDismiss ||
                     OwnerQuestionAnswerHoldPreservation.ShouldPreserve(goal.CurrentHold, stored)))
                     preserveGoalHold = true;
 
@@ -245,7 +250,7 @@ internal sealed partial class OperatorIntentCoordinator
                 return new OperatorIntentExecutionResult(
                     MutatedGoalState: true,
                     [$"OPERATOR_INTENT goal={goal.Id.Value[..8]} result=waiting-for-state-commit count={uncommitted.Count}"])
-                    { PreserveGoalHold = preserveGoalHold };
+                    { PreserveGoalHold = preserveGoalHold, OnlyDismissedHumanInput = onlyDismissedHumanInput };
         }
 
         var mutated = false;
@@ -383,7 +388,7 @@ internal sealed partial class OperatorIntentCoordinator
                 lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result={(retryClarification == RetryClarificationHandling.Resumed ? "retry-resumed-pending-commit" : "applied-pending-commit")}");
                 mutated = true;
                 preserveHold = (appliedVerbs.Count == 0 || preserveHold) &&
-                    (intent.Verb == OperatorIntentVerbs.CriterionEvidenceSupersede ||
+                    (intent.Verb is OperatorIntentVerbs.CriterionEvidenceSupersede or OperatorIntentVerbs.HumanInputDismiss ||
                      OwnerQuestionAnswerHoldPreservation.ShouldPreserve(goal.CurrentHold, intent));
                 appliedVerbs.Add(intent.Verb);
                 if (!OperatorIntentBatchPolicy.CanShareTick(intent.Verb) &&
@@ -427,7 +432,8 @@ internal sealed partial class OperatorIntentCoordinator
         return new OperatorIntentExecutionResult(mutated, lines)
         {
             RejectedAdjudication = rejectedAdjudication,
-            PreserveGoalHold = appliedVerbs.Contains(OperatorIntentVerbs.TaskGraphRepair) || preserveHold
+            PreserveGoalHold = appliedVerbs.Contains(OperatorIntentVerbs.TaskGraphRepair) || preserveHold,
+            OnlyDismissedHumanInput = appliedVerbs is [OperatorIntentVerbs.HumanInputDismiss]
         };
     }
 
@@ -517,6 +523,7 @@ internal sealed partial class OperatorIntentCoordinator
     private static void ValidateCompletedDutyIntent(Goal goal, OperatorIntentRecord intent)
     {
         if (goal.Status == GoalStatus.Completed &&
+            intent.Verb != OperatorIntentVerbs.HumanInputDismiss &&
             intent.Verb != OperatorIntentVerbs.CriterionEvidenceSupersede &&
             (intent.Verb != OperatorIntentVerbs.CriterionEvidenceRecord ||
              !goal.CriterionEvidenceObligations.Any(item => item.Id ==
@@ -572,6 +579,9 @@ internal sealed partial class OperatorIntentCoordinator
                 return;
             case OperatorIntentVerbs.Answer:
                 ApplyAnswer(kernel, goal, intent);
+                return;
+            case OperatorIntentVerbs.HumanInputDismiss:
+                HumanInputDismissIntentHandler.Apply(kernel, goal, Deserialize<HumanInputDismissOperatorIntentPayload>(intent));
                 return;
             case OperatorIntentVerbs.GoalPriority:
                 var priorityPayload = Deserialize<GoalPriorityOperatorIntentPayload>(intent);
