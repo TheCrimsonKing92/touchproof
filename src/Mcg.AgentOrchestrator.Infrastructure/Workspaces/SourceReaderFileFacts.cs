@@ -27,6 +27,10 @@ internal sealed record SourceReaderFileFacts(
     [JsonIgnore]
     private SyntaxNode? SyntaxRoot { get; init; }
 
+    private const string IndexerName = "this[]";
+    private const string ImplicitConversionName = "operator implicit";
+    private const string ExplicitConversionName = "operator explicit";
+
     internal sealed record TypeFact(
         [property: JsonRequired] string Id,
         [property: JsonRequired] string Owner,
@@ -65,9 +69,9 @@ internal sealed record SourceReaderFileFacts(
             .Where(name => !string.IsNullOrWhiteSpace(name))
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         // These causes cannot be bounded by declaration/reference names in either changed version.
-        var unbounded = nodes.Any(node => node is OperatorDeclarationSyntax or ConversionOperatorDeclarationSyntax or
-                IndexerDeclarationSyntax or DelegateDeclarationSyntax ||
-            node is BaseTypeDeclarationSyntax and not ClassDeclarationSyntax ||
+        var unbounded = nodes.Any(node => node is BaseTypeDeclarationSyntax and not
+                (ClassDeclarationSyntax or StructDeclarationSyntax or InterfaceDeclarationSyntax or
+                    EnumDeclarationSyntax or RecordDeclarationSyntax) ||
             node is UsingDirectiveSyntax directive && directive.GlobalKeyword.IsKind(SyntaxKind.GlobalKeyword)) ||
             references.Any(name => IsCollectionBuilder(name) || name is
                 "InterpolatedStringHandler" or "InterpolatedStringHandlerAttribute" or
@@ -90,8 +94,12 @@ internal sealed record SourceReaderFileFacts(
     private static string[] GetDeclaredNames(IEnumerable<SyntaxNode> nodes) =>
         nodes.SelectMany(node => node switch
         {
+            RecordDeclarationSyntax record => RecordNames(record),
             BaseTypeDeclarationSyntax type => new[] { type.Identifier.ValueText },
             DelegateDeclarationSyntax type => new[] { type.Identifier.ValueText },
+            OperatorDeclarationSyntax op => new[] { OperatorName(op.OperatorToken.Text) },
+            ConversionOperatorDeclarationSyntax conversion => new[] { OperatorName(conversion.ImplicitOrExplicitKeyword.Text) },
+            IndexerDeclarationSyntax => new[] { IndexerName },
             MethodDeclarationSyntax method => new[] { method.Identifier.ValueText },
             PropertyDeclarationSyntax property => new[] { property.Identifier.ValueText },
             EventDeclarationSyntax member => new[] { member.Identifier.ValueText },
@@ -103,12 +111,25 @@ internal sealed record SourceReaderFileFacts(
         }).Where(name => !string.IsNullOrWhiteSpace(name)).SelectMany(NameVariants)
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
 
+    private static string OperatorName(string token) => "operator " + token;
+
+    private static IEnumerable<string> RecordNames(RecordDeclarationSyntax record)
+    {
+        yield return record.Identifier.ValueText;
+        yield return "operator ==";
+        yield return "operator !=";
+        if (record.ParameterList is not { } parameters) yield break;
+        yield return "Deconstruct";
+        foreach (var parameter in parameters.Parameters) yield return parameter.Identifier.ValueText;
+    }
+
     private static string[] NameVariants(string name) =>
         name.Length > 9 && name.EndsWith("Attribute", StringComparison.Ordinal) ? [name, name[..^9]] : [name];
 
     private static string[] GetDeclarationShapes(IEnumerable<SyntaxNode> nodes) =>
         nodes.Where(node => node is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax or BaseNamespaceDeclarationSyntax ||
-                node is ConstructorDeclarationSyntax or TypeParameterConstraintClauseSyntax ||
+                node is ConstructorDeclarationSyntax or TypeParameterConstraintClauseSyntax or EnumMemberDeclarationSyntax ||
+                node is OperatorDeclarationSyntax or ConversionOperatorDeclarationSyntax or IndexerDeclarationSyntax ||
                 node is PropertyDeclarationSyntax property && property.Modifiers.Any(SyntaxKind.RequiredKeyword) ||
                 node is FieldDeclarationSyntax field && (field.Modifiers.Any(SyntaxKind.ConstKeyword) ||
                     field.Modifiers.Any(SyntaxKind.RequiredKeyword)))
@@ -126,14 +147,23 @@ internal sealed record SourceReaderFileFacts(
             BaseTypeDeclarationSyntax type => string.Concat(type.AttributeLists.Select(list => list.WithoutTrivia().ToFullString())) +
                 $"{type.Kind()} {string.Join(" ", type.Modifiers.Select(token => token.ValueText))} " +
                 $"{type.Identifier.ValueText}`{(type as TypeDeclarationSyntax)?.TypeParameterList?.Parameters.Count ?? 0}" +
-                (type as TypeDeclarationSyntax)?.ParameterList?.WithoutTrivia().ToFullString(),
-            DelegateDeclarationSyntax type => $"delegate {string.Join(" ", type.Modifiers.Select(token => token.ValueText))} " +
-                $"{type.Identifier.ValueText}`{type.TypeParameterList?.Parameters.Count ?? 0}",
+                (type as TypeDeclarationSyntax)?.ParameterList?.WithoutTrivia().ToFullString() +
+                (type is ClassDeclarationSyntax ? null : type.BaseList?.WithoutTrivia().ToFullString()),
+            DelegateDeclarationSyntax type => type.WithoutTrivia().ToFullString(),
+            OperatorDeclarationSyntax op => op.WithBody(null).WithExpressionBody(null)
+                .WithSemicolonToken(default).WithoutTrivia().ToFullString(),
+            ConversionOperatorDeclarationSyntax conversion => conversion.WithBody(null).WithExpressionBody(null)
+                .WithSemicolonToken(default).WithoutTrivia().ToFullString(),
+            IndexerDeclarationSyntax indexer => indexer.WithAccessorList(null).WithExpressionBody(null)
+                .WithSemicolonToken(default).WithoutTrivia().ToFullString() + " " +
+                string.Join(" ", indexer.AccessorList?.Accessors.Select(accessor =>
+                    accessor.WithBody(null).WithExpressionBody(null).WithSemicolonToken(default)
+                        .WithoutTrivia().ToFullString()) ?? []),
             ConstructorDeclarationSyntax constructor => constructor.WithBody(null).WithExpressionBody(null)
                 .WithSemicolonToken(default).WithoutTrivia().ToFullString(),
             MethodDeclarationSyntax method => method.WithBody(null).WithExpressionBody(null)
                 .WithSemicolonToken(default).WithoutTrivia().ToFullString(),
-            TypeParameterConstraintClauseSyntax constraint => constraint.WithoutTrivia().ToFullString(),
+            TypeParameterConstraintClauseSyntax or EnumMemberDeclarationSyntax => node.WithoutTrivia().ToFullString(),
             PropertyDeclarationSyntax property when property.Modifiers.Any(SyntaxKind.RequiredKeyword) =>
                 property.WithAccessorList(null).WithExpressionBody(null).WithInitializer(null)
                     .WithSemicolonToken(default).WithoutTrivia().ToFullString(),
@@ -157,18 +187,44 @@ internal sealed record SourceReaderFileFacts(
     {
         CommonForEachStatementSyntax => ["GetEnumerator", "Current", "MoveNext", "Dispose",
             "GetAsyncEnumerator", "MoveNextAsync", "DisposeAsync", "GetAwaiter", "IsCompleted",
-            "GetResult", "OnCompleted", "UnsafeOnCompleted"],
+            "GetResult", "OnCompleted", "UnsafeOnCompleted", ImplicitConversionName, ExplicitConversionName],
         AwaitExpressionSyntax => ["GetAwaiter", "IsCompleted", "GetResult", "OnCompleted", "UnsafeOnCompleted"],
         UsingStatementSyntax => ["Dispose", "DisposeAsync", "GetAwaiter", "IsCompleted", "GetResult",
             "OnCompleted", "UnsafeOnCompleted"],
         LocalDeclarationStatementSyntax declaration when declaration.UsingKeyword.IsKind(SyntaxKind.UsingKeyword) =>
             ["Dispose", "DisposeAsync", "GetAwaiter", "IsCompleted", "GetResult", "OnCompleted", "UnsafeOnCompleted"],
-        TupleExpressionSyntax or DeclarationExpressionSyntax or PositionalPatternClauseSyntax or
+        TupleExpressionSyntax or DeclarationExpressionSyntax or
             ParenthesizedVariableDesignationSyntax => ["Deconstruct"],
+        // A positional pattern can also obtain elements through ITuple's indexer.
+        PositionalPatternClauseSyntax => ["Deconstruct", IndexerName],
         CollectionExpressionSyntax => ["Add", "GetEnumerator", "Current", "MoveNext", "Dispose", "Count", "Length"],
         InitializerExpressionSyntax initializer when initializer.IsKind(SyntaxKind.CollectionInitializerExpression) => ["Add"],
-        RangeExpressionSyntax or ListPatternSyntax => ["Length", "Count", "Slice"],
+        RangeExpressionSyntax => ["Length", "Count", "Slice"],
+        ListPatternSyntax => ["Length", "Count", "Slice", IndexerName],
+        ElementAccessExpressionSyntax or ElementBindingExpressionSyntax or ImplicitElementAccessSyntax => [IndexerName],
+        BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.LogicalAndExpression) =>
+            ["operator &", "operator true", "operator false"],
+        BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.LogicalOrExpression) =>
+            ["operator |", "operator true", "operator false"],
+        BinaryExpressionSyntax binary when binary.Kind() is not
+            (SyntaxKind.IsExpression or SyntaxKind.AsExpression or SyntaxKind.CoalesceExpression) =>
+            [OperatorName(binary.OperatorToken.Text)],
+        // The binary fallback can use a conversion when storing the result back into the left operand.
+        AssignmentExpressionSyntax assignment when assignment.Kind() is not
+            (SyntaxKind.SimpleAssignmentExpression or SyntaxKind.CoalesceAssignmentExpression) =>
+            [OperatorName(assignment.OperatorToken.Text), OperatorName(assignment.OperatorToken.Text.TrimEnd('=')),
+                ImplicitConversionName, ExplicitConversionName],
         PrefixUnaryExpressionSyntax prefix when prefix.IsKind(SyntaxKind.IndexExpression) => ["Length", "Count"],
+        PrefixUnaryExpressionSyntax prefix when prefix.Kind() is not
+            (SyntaxKind.AddressOfExpression or SyntaxKind.PointerIndirectionExpression) =>
+            [OperatorName(prefix.OperatorToken.Text)],
+        PostfixUnaryExpressionSyntax postfix when postfix.Kind() is
+            SyntaxKind.PostIncrementExpression or SyntaxKind.PostDecrementExpression =>
+            [OperatorName(postfix.OperatorToken.Text)],
+        CastExpressionSyntax => [ImplicitConversionName, ExplicitConversionName],
+        // Implicit conversions without dedicated syntax reach callers through declaration shapes.
+        IfStatementSyntax or WhileStatementSyntax or DoStatementSyntax or ForStatementSyntax { Condition: not null } or
+            ConditionalExpressionSyntax or CatchFilterClauseSyntax or WhenClauseSyntax => ["operator true"],
         QueryExpressionSyntax => ["Select", "SelectMany", "Where", "Join", "GroupJoin", "GroupBy",
             "OrderBy", "OrderByDescending", "ThenBy", "ThenByDescending", "Cast"],
         InterpolatedStringExpressionSyntax => ["AppendLiteral", "AppendFormatted"],

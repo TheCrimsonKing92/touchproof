@@ -173,27 +173,52 @@ public sealed class SourceReaderIncrementalAnalysisTests
         Assert.Equal(0, fresh.AnalysisCount);
     }
 
-    [Theory]
-    [InlineData("global-using")]
-    [InlineData("operator")]
-    [InlineData("type-kind")]
-    public void UnboundedChange_UsesFullAnalysis(string change)
+    [Fact]
+    public void GlobalUsingChange_UsesFullAnalysis()
     {
         using var storage = new Storage();
         var baseline = Base();
         Analyze(new(storage.Path), baseline);
         var candidate = new Dictionary<string, string>(baseline)
         {
-            ["tests/Spare0.cs"] = change switch
-            {
-                "global-using" => "global using System; public class Spare0 { public void Unique0() {} }",
-                "type-kind" => "public struct Spare0 { public void Unique0() {} }",
-                _ => "public class Spare0 { public static Spare0 operator +(Spare0 a, Spare0 b) => a; }"
-            }
+            ["tests/Spare0.cs"] = "global using System; public class Spare0 { public void Unique0() {} }"
         };
         var cache = new SourceReaderAnalysisCache(storage.Path);
         AssertEquivalent(Analyze(new(null), candidate), Analyze(cache, candidate));
         Assert.Equal(candidate.Count, cache.SemanticFileCount);
+    }
+
+    [Theory]
+    [InlineData("tests/Callback.cs", "public delegate void Callback();")]
+    [InlineData("tests/Spare0.cs", "public struct Spare0 { public void Unique0() {} }")]
+    [InlineData("tests/Spare0.cs", "public interface Spare0 { void Unique0(); }")]
+    [InlineData("tests/Spare0.cs", "public enum Spare0 { First }")]
+    [InlineData("tests/Spare0.cs", "public record Spare0(int Value);")]
+    [InlineData("tests/Spare0.cs", "public class Spare0 { public static Spare0 operator +(Spare0 a, Spare0 b) => a; }")]
+    [InlineData("tests/Spare0.cs", "public class Spare0 { public static implicit operator int(Spare0 value) => 0; }")]
+    [InlineData("tests/Spare0.cs", "public class Spare0 { public int this[int index] => 0; }")]
+    public void NewlyBoundedDeclaration_ReusesUnaffectedFiles(string path, string declaration)
+    {
+        using var storage = new Storage();
+        var baseline = Base();
+        baseline.Add("tests/Unrelated.cs", "public class Unrelated { public void Skip() {} }");
+        Analyze(new(storage.Path), baseline);
+        var candidate = new Dictionary<string, string>(baseline) { [path] = declaration };
+        var baselineFacts = DescribeFiles(baseline);
+        var candidateFacts = DescribeFiles(candidate);
+        var plan = Assert.IsType<HashSet<string>>(SourceReaderFileFacts.Plan(baselineFacts, candidateFacts));
+        Assert.NotNull(SourceReaderFileFacts.Plan(candidateFacts, baselineFacts));
+        Assert.Contains(path, plan);
+        Assert.DoesNotContain("tests/Unrelated.cs", plan);
+        Assert.DoesNotContain(Enumerable.Range(1, 7), index => plan.Contains($"tests/Spare{index}.cs"));
+
+        var extractions = new List<HashSet<string>?>();
+        var cache = new SourceReaderAnalysisCache(storage.Path);
+        var actual = Analyze(cache, candidate, extractions);
+        Assert.True(plan.SetEquals(Assert.IsType<HashSet<string>>(Assert.Single(extractions))));
+        Assert.Equal(plan.Count, cache.SemanticFileCount);
+        Assert.True(cache.SemanticFileCount < candidate.Count);
+        AssertEquivalent(Analyze(new(null), candidate), actual);
     }
 
     [Theory]
@@ -251,31 +276,23 @@ public sealed class SourceReaderIncrementalAnalysisTests
     }
 
     [Theory]
-    [InlineData("public class Bag { public static Bag operator +(Bag a, Bag b) => a; }")]
-    [InlineData("public class Bag { public static implicit operator int(Bag value) => 0; }")]
-    [InlineData("public class Bag { public int this[int index] => 0; }")]
-    [InlineData("public delegate void Callback();")]
-    [InlineData("global using System; public class Bag {}")]
-    [InlineData("public struct Bag {}")]
-    [InlineData("[CollectionBuilder(typeof(Bag), \"Create\")] public class Bag {}")]
-    [InlineData("[InterpolatedStringHandler] public class Bag {}")]
-    [InlineData("[AsyncMethodBuilder(typeof(Bag))] public class Bag {}")]
-    [InlineData("public class Bag { public int Count => 0; public int this[int index] => 0; }")]
-    public void IndependentUnboundedCause_KeepsNullPlanInEitherVersion(string declaration)
+    [InlineData("global using System;", "public class Bag { public int Count => 0; }")]
+    [InlineData("[CollectionBuilder(typeof(Bag), \"Create\")]", "public class Bag {}")]
+    [InlineData("[InterpolatedStringHandler]", "public class Bag {}")]
+    [InlineData("[AsyncMethodBuilder(typeof(Bag))]", "public class Bag {}")]
+    [InlineData("global using System;", "public struct Bag {}")]
+    [InlineData("[CollectionBuilder(typeof(Bag), \"Create\")]", "public class Bag { public int this[int index] => 0; }")]
+    [InlineData("[InterpolatedStringHandler]", "public struct Bag {}")]
+    [InlineData("[AsyncMethodBuilder(typeof(Bag))]", "public interface Bag {}")]
+    public void IndependentUnboundedCause_KeepsNullPlanInEitherVersion(string cause, string declaration)
     {
-        var before = Sources(new Dictionary<string, string> { ["tests/Bag.cs"] = "public class Bag {}" });
-        var after = Sources(new Dictionary<string, string> { ["tests/Bag.cs"] = declaration + " // changed" });
-        var baseline = before.Trees.Select(tree => SourceReaderFileFacts.Describe(before, tree)).ToArray();
-        var candidate = after.Trees.Select(tree => SourceReaderFileFacts.Describe(after, tree)).ToArray();
+        var baseline = DescribeFiles(new Dictionary<string, string> { ["tests/Bag.cs"] = "public class Bag {}" });
+        var candidate = DescribeFiles(new Dictionary<string, string> { ["tests/Bag.cs"] = $"{cause} {declaration}" });
         Assert.Null(SourceReaderFileFacts.Plan(baseline, candidate));
         Assert.Null(SourceReaderFileFacts.Plan(candidate, baseline));
-        // A name-only change is bounded; an independent cause above must override that permission.
-        var bounded = Sources(new Dictionary<string, string>
-        {
-            ["tests/Bag.cs"] = "public class Bag { public int Count => 0; }"
-        });
-        Assert.NotNull(SourceReaderFileFacts.Plan(baseline,
-            bounded.Trees.Select(tree => SourceReaderFileFacts.Describe(bounded, tree)).ToArray()));
+        var bounded = DescribeFiles(new Dictionary<string, string> { ["tests/Bag.cs"] = declaration });
+        Assert.NotNull(SourceReaderFileFacts.Plan(baseline, bounded));
+        Assert.NotNull(SourceReaderFileFacts.Plan(bounded, baseline));
     }
 
     [Fact]
@@ -424,21 +441,16 @@ public sealed class SourceReaderIncrementalAnalysisTests
         var cache = new SourceReaderAnalysisCache(storage.Path);
         var extractions = new List<HashSet<string>?>();
         var actual = Analyze(cache, candidate, extractions);
-        if (kind is "indexer" or "delegate-lambda")
+        // Removing the range prerequisite loses the previously resolved Run invocation.
+        // Its bounded plan must still run before the cache's lost-resolution safeguard.
+        var losesResolution = !creates && kind is "range-partial-length" or "range-base-length";
+        Assert.Equal(losesResolution ? 2 : 1, extractions.Count);
+        var paths = Assert.IsType<HashSet<string>>(extractions[0]);
+        if (losesResolution) Assert.Null(extractions[1]);
+        Assert.Contains("tests/Binding.cs", paths);
+        Assert.Contains("tests/Uses.cs", paths); // Does not spell the implicitly bound member.
+        if (kind is not ("indexer" or "delegate-lambda"))
         {
-            Assert.Null(Assert.Single(extractions));
-            Assert.Equal(candidate.Count, cache.SemanticFileCount);
-        }
-        else
-        {
-            // Removing the range prerequisite loses the previously resolved Run invocation.
-            // Its bounded plan must still run before the cache's lost-resolution safeguard.
-            var losesResolution = !creates && kind is "range-partial-length" or "range-base-length";
-            Assert.Equal(losesResolution ? 2 : 1, extractions.Count);
-            var paths = Assert.IsType<HashSet<string>>(extractions[0]);
-            if (losesResolution) Assert.Null(extractions[1]);
-            Assert.Contains("tests/Binding.cs", paths);
-            Assert.Contains("tests/Uses.cs", paths); // Does not spell the implicitly bound member.
             Assert.Contains("tests/Named.cs", paths);
             var memberNames = kind switch
             {
@@ -450,9 +462,9 @@ public sealed class SourceReaderIncrementalAnalysisTests
             foreach (var file in sources.Trees.Select(tree => SourceReaderFileFacts.Describe(sources, tree))
                          .Where(file => file.ReferencedNames.Intersect(memberNames, StringComparer.Ordinal).Any()))
                 Assert.Contains(file.Path, paths);
-            Assert.True(paths.Count < candidate.Count);
-            Assert.Equal(paths.Count + (losesResolution ? candidate.Count : 0), cache.SemanticFileCount);
         }
+        Assert.True(paths.Count < candidate.Count);
+        Assert.Equal(paths.Count + (losesResolution ? candidate.Count : 0), cache.SemanticFileCount);
         AssertEquivalent(Analyze(new(null), candidate), actual);
         Assert.Equal(creates, actual.ReaderOwners.Contains("UsesTests"));
         // The merged result must also be safe when loaded by another selection.
@@ -481,6 +493,120 @@ public sealed class SourceReaderIncrementalAnalysisTests
                 _ => $"public delegate void Callback({type} value);"
             };
         }
+    }
+
+    [Theory]
+    [InlineData("operator +", "public static Result operator +(Bag left, Bag right) => new Result();",
+        "(Factory.Make() + Factory.Make()).Run();")]
+    [InlineData("operator -", "public static Result operator -(Bag value) => new Result();",
+        "(-Factory.Make()).Run();")]
+    [InlineData("this[]", "public Result this[int index] => new Result();",
+        "Factory.Make()[0].Run();")]
+    [InlineData("this[]", "public Result this[int index] => new Result();",
+        "Factory.Make()?[0].Run();")]
+    [InlineData("this[]", "public int Length => 1; public Result this[int index] => new Result();",
+        "if (Factory.Make() is [var item]) item.Run();")]
+    public void UnspelledBindingChange_ReextractsConsumerAndMatchesFullAnalysis(
+        string reference, string member, string caller)
+    {
+        using var storage = new Storage();
+        var baseline = Base();
+        baseline.Add("tests/Plain.cs", "public class Plain { public void Run() {} }");
+        baseline.Add("tests/Reading.cs", Reader("Reading", "Run"));
+        baseline.Add("tests/Binding.cs", Binding("Plain"));
+        baseline.Add("tests/Factory.cs", "public static class Factory { public static Bag Make() => new Bag(); }");
+        baseline.Add("tests/Uses.cs", $"public class UsesTests {{ public void Act() {{ {caller} }} }}");
+        baseline.Add("tests/Unrelated.cs", """
+            public class Unrelated {
+                public void Skip() { Get(typeof(Unrelated).Assembly); }
+                private static void Get(object assembly) {}
+            }
+            """);
+        var before = Analyze(new(storage.Path), baseline);
+        Assert.DoesNotContain("UsesTests", before.ReaderOwners);
+        var candidate = new Dictionary<string, string>(baseline) { ["tests/Binding.cs"] = Binding("Reading") };
+
+        var facts = DescribeFiles(candidate);
+        Assert.Contains(reference, facts.Single(file => file.Path == "tests/Binding.cs").DeclaredNames);
+        Assert.Contains(reference, facts.Single(file => file.Path == "tests/Uses.cs").ReferencedNames);
+        var extractions = new List<HashSet<string>?>();
+        var cache = new SourceReaderAnalysisCache(storage.Path);
+        var actual = Analyze(cache, candidate, extractions);
+        var plan = Assert.IsType<HashSet<string>>(Assert.Single(extractions));
+        Assert.Contains("tests/Uses.cs", plan);
+        Assert.DoesNotContain("tests/Unrelated.cs", plan);
+        Assert.DoesNotContain(Enumerable.Range(0, 8), index => plan.Contains($"tests/Spare{index}.cs"));
+        Assert.Equal(plan.Count, cache.SemanticFileCount);
+        Assert.Single(actual.AssemblyScans);
+        AssertEquivalent(Analyze(new(null), candidate), actual);
+        Assert.Contains("UsesTests", actual.ReaderOwners);
+
+        string Binding(string result) => $"public class Bag {{ {member.Replace("Result", result, StringComparison.Ordinal)} }}";
+    }
+
+    [Fact]
+    public void ConversionChange_ReextractsCastAndImplicitOverloadCaller()
+    {
+        using var storage = new Storage();
+        var baseline = Base();
+        baseline.Add("tests/Reading.cs", Reader("Reading", "Run"));
+        baseline.Add("tests/Binding.cs", Binding("explicit"));
+        baseline.Add("tests/Factory.cs", "public static class Factory { public static Bag Make() => new Bag(); }");
+        baseline.Add("tests/Pick.cs", """
+            public static class Pick {
+                public static void Read(object value) {}
+                public static void Read(Reading value) { RepositorySourceSnapshotCache.Get("root"); }
+            }
+            """);
+        baseline.Add("tests/Cast.cs", "public class CastTests { public void Act() { ((Reading)Factory.Make()).Run(); } }");
+        baseline.Add("tests/Uses.cs", "public class UsesTests { public void Act() { Pick.Read(Factory.Make()); } }");
+        var before = Analyze(new(storage.Path), baseline);
+        Assert.Contains("CastTests", before.ReaderOwners);
+        Assert.DoesNotContain("UsesTests", before.ReaderOwners);
+        var candidate = new Dictionary<string, string>(baseline) { ["tests/Binding.cs"] = Binding("implicit") };
+
+        var facts = DescribeFiles(candidate);
+        Assert.Contains("operator implicit", facts.Single(file => file.Path == "tests/Binding.cs").DeclaredNames);
+        var castReferences = facts.Single(file => file.Path == "tests/Cast.cs").ReferencedNames;
+        Assert.Contains("operator explicit", castReferences);
+        Assert.Contains("operator implicit", castReferences);
+        var implicitCaller = facts.Single(file => file.Path == "tests/Uses.cs");
+        Assert.DoesNotContain("operator implicit", implicitCaller.ReferencedNames);
+        Assert.DoesNotContain("Bag", implicitCaller.ReferencedNames);
+        var extractions = new List<HashSet<string>?>();
+        var cache = new SourceReaderAnalysisCache(storage.Path);
+        var actual = Analyze(cache, candidate, extractions);
+        var plan = Assert.IsType<HashSet<string>>(Assert.Single(extractions));
+        Assert.Contains("tests/Cast.cs", plan);
+        Assert.Contains("tests/Uses.cs", plan);
+        Assert.Equal(plan.Count, cache.SemanticFileCount);
+        Assert.True(cache.SemanticFileCount < candidate.Count);
+        AssertEquivalent(Analyze(new(null), candidate), actual);
+        Assert.Contains("UsesTests", actual.ReaderOwners);
+
+        static string Binding(string kind) =>
+            $"public class Bag {{ public static {kind} operator Reading(Bag value) => new Reading(); }}";
+    }
+
+    [Theory]
+    [InlineData("a += b;", "operator +=", "operator +")]
+    [InlineData("checked { a += b; }", "operator +=", "operator +")]
+    [InlineData("a <<= 1;", "operator <<=", "operator <<", "operator implicit", "operator explicit")]
+    [InlineData("++a; a--;", "operator ++", "operator --")]
+    [InlineData("var result = a && b;", "operator &", "operator false")]
+    [InlineData("var result = a || b;", "operator |", "operator true")]
+    [InlineData("try {} catch when (a) {}", "operator true")]
+    [InlineData("switch (a) { case var b when b: break; }", "operator true")]
+    [InlineData("var result = new Bag { [0] = a };", "this[]")]
+    [InlineData("var result = a is (var b, var c);", "Deconstruct", "this[]")]
+    [InlineData("foreach (Bag item in a) {}", "operator explicit", "operator implicit")]
+    public void AlternativeBindingSyntax_ContributesImplicitReferences(string statement, params string[] references)
+    {
+        var file = Assert.Single(DescribeFiles(new Dictionary<string, string>
+        {
+            ["tests/Uses.cs"] = $"public class Uses {{ public void Act(Bag a, Bag b) {{ {statement} }} }}"
+        }));
+        Assert.All(references, reference => Assert.Contains(reference, file.ReferencedNames));
     }
 
     [Theory]
@@ -835,6 +961,12 @@ public sealed class SourceReaderIncrementalAnalysisTests
     private static ImpactReplayTestSourceIndex Sources(IReadOnlyDictionary<string, string> files) =>
         new(files.Select(pair => (SyntaxTree)CSharpSyntaxTree.ParseText(pair.Value, path: pair.Key)));
 
+    private static SourceReaderFileFacts[] DescribeFiles(IReadOnlyDictionary<string, string> files)
+    {
+        var sources = Sources(files);
+        return sources.Trees.Select(tree => SourceReaderFileFacts.Describe(sources, tree)).ToArray();
+    }
+
     private static SourceReaderAnalysisCache.Analysis Analyze(SourceReaderAnalysisCache cache,
         IReadOnlyDictionary<string, string> files, List<HashSet<string>?>? extractions = null) =>
         cache.GetOrAnalyze(Sources(files), (sources, paths) =>
@@ -847,6 +979,13 @@ public sealed class SourceReaderIncrementalAnalysisTests
     {
         Assert.Equal(expected.DeclaresSnapshotCache, actual.DeclaresSnapshotCache);
         Assert.Equal(expected.ReaderOwners, actual.ReaderOwners);
+        Assert.Equal(expected.AssemblyScans.Count, actual.AssemblyScans.Count);
+        foreach (var (before, after) in expected.AssemblyScans.Zip(actual.AssemblyScans))
+        {
+            Assert.Equal(before.ContentHash, after.ContentHash);
+            Assert.Equal(before.TextLength, after.TextLength);
+            Assert.Equal(before.CallPositions, after.CallPositions);
+        }
     }
 
     private sealed class Storage : IDisposable
