@@ -364,6 +364,9 @@ public sealed partial class AgentOrchestratorKernel
     public TaskSpec RecordFindingEvidenceRequest(GoalId goalId, TaskId taskId, PreTesterEvidenceEntry entry, string message) =>
         RecordFindingEvidence(goalId, taskId, message, entry, ProgressKind.FindingEvidenceRequestRecorded, "request");
 
+    public TaskSpec RecordFindingEvidenceRequest(GoalId goalId, TaskId taskId, FindingEvidenceRequestReceipt receipt, string message) =>
+        RecordFindingEvidence(goalId, taskId, message, null, ProgressKind.FindingEvidenceRequestRecorded, "request", receipt);
+
     public TaskSpec RecordFindingEvidenceRun(GoalId goalId, TaskId taskId, string message) =>
         RecordFindingEvidence(goalId, taskId, message, null, ProgressKind.FindingEvidenceRunRecorded, "run");
 
@@ -371,7 +374,7 @@ public sealed partial class AgentOrchestratorKernel
         RecordFindingEvidence(goalId, taskId, message, entry, ProgressKind.FindingEvidenceRunRecorded, "run");
 
     private TaskSpec RecordFindingEvidence(GoalId goalId, TaskId taskId, string message,
-        PreTesterEvidenceEntry? entry, ProgressKind kind, string description)
+        PreTesterEvidenceEntry? entry, ProgressKind kind, string description, FindingEvidenceRequestReceipt? receipt = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -381,7 +384,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new ArgumentException($"Finding evidence {description} message cannot be empty.", nameof(message));
         }
 
-        Append(goal, taskId, kind, trimmed, preTesterEvidence: entry);
+        Append(goal, taskId, kind, trimmed, preTesterEvidence: entry, findingEvidenceRequest: receipt);
         return task;
     }
 
@@ -1361,6 +1364,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Completed), GoalStatusTransitionRecorder.GoalLifecycleCompleteGoal);
+        DismissOpenDismissibleHumanInputForTerminalGoal(goal, GoalStatus.Completed);
         Append(goal, null, ProgressKind.GoalPolicyDecision, completeReason);
         return goal;
     }
@@ -1418,8 +1422,10 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(GoalStatus.Completed), GoalStatusTransitionRecorder.GoalLifecycleCompleteGoalFromMergeEvidence);
+        DismissOpenDismissibleHumanInputForTerminalGoal(goal, GoalStatus.Completed);
         if (!recoveringFromReceipt)
         {
+            // The landing sweep reads the final progress entry as its committed decision.
             Append(goal, null, ProgressKind.GoalPolicyDecision, completeReason);
         }
         return goal;
@@ -1502,6 +1508,8 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         GoalStatusTransitionRecorder.Record(_eventWriter, goal.SetStatus(terminalStatus), GoalStatusTransitionRecorder.GoalLifecycleStopGoal);
+        DismissOpenDismissibleHumanInputForTerminalGoal(goal, terminalStatus);
+        // Stop callers read the final progress entry as their committed lifecycle event.
         Append(
             goal,
             null,
@@ -2322,6 +2330,20 @@ public sealed partial class AgentOrchestratorKernel
         return resolved;
     }
 
+    private void DismissOpenDismissibleHumanInputForTerminalGoal(Goal goal, GoalStatus outcome)
+    {
+        lock (_humanInputRequestLock)
+        {
+            foreach (var request in _humanInputRequests.Values.Where(request =>
+                         request.GoalId == goal.Id && !request.IsCompleted && request.IsDismissible))
+            {
+                request.Dismiss(_clock.UtcNow);
+                Append(goal, request.TaskId, ProgressKind.HumanInputReceived,
+                    $"Dismissed human wait {request.Id.Value[..8]}: goal {outcome}.");
+            }
+        }
+    }
+
     private int CompleteOpenHumanInputRequestsForGoal(GoalId goalId, string resolution)
     {
         var goal = GetGoal(goalId);
@@ -2363,47 +2385,27 @@ public sealed partial class AgentOrchestratorKernel
         DateTimeOffset? latestHumanInputReceivedAt = null;
         foreach (var evt in goal.Timeline)
         {
-            if (evt.Kind == ProgressKind.GoalPolicyDecision &&
-                GoalParkResolution.IsParkResolution(evt.Message))
-            {
+            if (evt.Kind == ProgressKind.GoalPolicyDecision && GoalParkResolution.IsParkResolution(evt.Message))
                 latestParkDecisionAt = evt.OccurredAt;
-            }
-            else if (evt.Kind == ProgressKind.HumanInputReceived)
-            {
-                if (GoalParkResolution.IsParkResolution(evt.Message))
-                {
-                    continue;
-                }
-
+            else if (evt.Kind == ProgressKind.HumanInputReceived && !GoalParkResolution.IsParkResolution(evt.Message))
                 latestHumanInputReceivedAt = evt.OccurredAt;
-            }
         }
 
         return latestParkDecisionAt is not null && latestHumanInputReceivedAt > latestParkDecisionAt;
     }
 
-    private string? ResolveParkResolution(Goal goal)
+    private string? ResolveParkResolution(Goal goal) => goal.Status switch
     {
-        if (goal.Status == GoalStatus.Parked)
-        {
-            return goal.Timeline
-                .LastOrDefault(evt =>
-                    evt.Kind == ProgressKind.GoalPolicyDecision &&
-                    GoalParkResolution.IsParkResolution(evt.Message))
-                ?.Message ?? GoalParkResolution.Fallback;
-        }
-
-        if (goal.Status != GoalStatus.WaitingForHuman)
-        {
-            return null;
-        }
-
-        return _humanInputRequests.Values
+        GoalStatus.Parked => goal.Timeline.LastOrDefault(evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision && GoalParkResolution.IsParkResolution(evt.Message))
+            ?.Message ?? GoalParkResolution.Fallback,
+        GoalStatus.WaitingForHuman => _humanInputRequests.Values
             .Where(request => request.GoalId == goal.Id && !request.IsCompleted)
             .OrderByDescending(request => request.RequestedAt)
             .Select(request => request.Question)
-            .FirstOrDefault(GoalParkResolution.IsParkResolution);
-    }
+            .FirstOrDefault(GoalParkResolution.IsParkResolution),
+        _ => null
+    };
 
     public Goal GetGoal(GoalId goalId)
     {

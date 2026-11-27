@@ -15,6 +15,7 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
     internal HashSet<GoalId> FailureGoals { get; } = [];
     internal HashSet<GoalId> MarkerGoals { get; } = [];
     internal Dictionary<GoalId, ProviderHoldSeedEvidenceReader.ArchiveProjection> ArchiveEvidence { get; } = [];
+    internal HashSet<GoalId> FailedArchiveProjections { get; } = [];
 
     internal static async Task<ProviderHoldSeedDiscovery> ReadAsync(SqliteConnection connection,
         JsonSerializerOptions options, CancellationToken token, Action<GoalSnapshotReadObservation>? observe = null,
@@ -295,8 +296,9 @@ internal sealed class ProviderHoldSeedDiscovery(bool hasHistory)
         }
         catch (Exception exception) when (exception is InvalidDataException or JsonException or SqliteException)
         {
-            // Discovery requires less than replay. A selected goal with unusable evidence
-            // will still use the normal sparse and canonical fallback paths.
+            // Discovery can still nominate this goal. If selected, its canonical load
+            // must validate the archive before replay can use its history.
+            FailedArchiveProjections.Add(new(id));
             return null;
         }
         return ObserveArchiveProjection(id, projection, observe);

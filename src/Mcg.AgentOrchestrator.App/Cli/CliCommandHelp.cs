@@ -30,7 +30,9 @@ internal static class CliCommandHelp
     public const string AnswerUsage = "Usage: answer <request-id> <answer> [--gate-deliverable <id>...] | answer <request-id> --text-file <path> [--gate-deliverable <id>...]";
     public const string SupersedeUsage = "Usage: supersede <goal-id> <clarification-id> <answer> | supersede <goal-id> <clarification-id> --text-file <path>";
     public const string GateSatisfiedUsage = "Usage: gate-satisfied <request-id|task-note-record-id> <deliverable-id> <evidence> | gate-satisfied <request-id|task-note-record-id> <deliverable-id> --text-file <path>";
-    public const string AttentionUsage = "Usage: attention [list] --json | attention list --summary --json | attention list --json --summary | attention show [--goal] [<goal-id-prefix>] --json | attention show [--all|--include-parked] [--goal] <goal-id-prefix> | attention dismiss --item <item-id or full human-input request id> | attention dismiss [--goal] <goal-id-prefix> (collaboration items and human-input requests) | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> <answer> [--amendment accept|decline] [--json] | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> --text-file <path> [--operator-actor <id>] [--actor-kind Human|Agent] [--evidence <ref>] [--precedent <ref>] [--amendment accept|decline] [--route developer [--cause <RetryCause>]] [--idempotency-key <key>] [--json]";
+    private const string AttentionShowSyntax = "attention show [--all|--include-parked] [--limit <n>] [[--goal] <goal-id-prefix>]";
+    internal const string AttentionShowUsage = "Usage: " + AttentionShowSyntax;
+    public const string AttentionUsage = "Usage: attention [list] --json | attention list --summary --json | attention list --json --summary | attention show [--goal] [<goal-id-prefix>] --json | " + AttentionShowSyntax + " | attention dismiss --item <item-id or full human-input request id> | attention dismiss [--goal] <goal-id-prefix> (collaboration items and human-input requests) | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> <answer> [--amendment accept|decline] [--json] | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> --text-file <path> [--operator-actor <id>] [--actor-kind Human|Agent] [--evidence <ref>] [--precedent <ref>] [--amendment accept|decline] [--route developer [--cause <RetryCause>]] [--idempotency-key <key>] [--json]";
     public const string AbandonGoalUsage = "Usage: abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]";
     public const string CancelGoalUsage = "Usage: cancel-goal <goal-id-prefix> <reason> [--confirm-goal-stop] | cancel-goal <goal-id-prefix> --text-file <path> [--confirm-goal-stop]";
     public const string SupersedeGoalUsage = "Usage: supersede-goal <goal-id-prefix> <reason> [--confirm-goal-stop] | supersede-goal <goal-id-prefix> --text-file <path> [--confirm-goal-stop]";
@@ -384,8 +386,13 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry Attention = new(
         AttentionUsage + " | attention fleet [--json] [--limit N]",
-        "Show, dismiss, or answer operator attention items. Both dismiss forms cover collaboration items and human-input requests. Use top-level `answer` when supplying --gate-deliverable evidence. --json on the bare and list forms emits the mcg.attention agent envelope; on show (no-goal or goal-scoped) it emits the mcg.attention-show agent envelope; --all history has no JSON form yet. list --summary --json (either flag order) emits mcg.attention-summary with gateEvidence explicitly omitted.",
+        $"Show, dismiss, or answer operator attention items. Both dismiss forms cover collaboration items and human-input requests. Use top-level `answer` when supplying --gate-deliverable evidence. --json on the bare and list forms emits the mcg.attention agent envelope; on show (no-goal or goal-scoped) it emits the mcg.attention-show agent envelope; --all history has no JSON form yet. For show, --limit <n> requires --all or --include-parked and keeps the newest n rows per history section (default {AttentionHistoryLimit.DefaultRows}). list --summary --json (either flag order) emits mcg.attention-summary with gateEvidence explicitly omitted.",
         ["--all", "--include-parked", "--goal", "--item", "--text-file", "--operator-actor", "--actor-kind", "--evidence", "--precedent", "--amendment", "--route", "--cause", "--idempotency-key", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry AttentionShow = Attention with
+    {
+        Flags = Attention.Flags.Append("--limit").ToHashSet(StringComparer.OrdinalIgnoreCase)
+    };
 
     private static readonly CommandHelpEntry FleetCapacity = new(
         CliFleetCapacityQueryCommand.Usage,
@@ -1116,6 +1123,9 @@ internal static class CliCommandHelp
                 throw new ArgumentException($"Unknown option '{arg}'.{escapeHint}{suggestionText}{Environment.NewLine}{entry.Usage}");
             }
         }
+
+        if (entry == AttentionShow)
+            _ = AttentionReadGoalSelection.ParseShowArgs(args);
     }
 
     internal static void ValidateGoalCreationOptions(IReadOnlyList<string> args)
@@ -1379,7 +1389,9 @@ internal static class CliCommandHelp
         }
         if (args[0].Equals("attention", StringComparison.OrdinalIgnoreCase))
         {
-            entry = Attention;
+            entry = args.Count > 1 && args[1].Equals("show", StringComparison.OrdinalIgnoreCase)
+                ? AttentionShow
+                : Attention;
             return true;
         }
 

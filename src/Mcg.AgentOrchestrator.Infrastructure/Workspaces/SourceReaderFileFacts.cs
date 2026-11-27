@@ -347,26 +347,26 @@ internal sealed record SourceReaderFileFacts(
         tokens.Where(token => token.IsKind(SyntaxKind.IdentifierToken)).Select(token => token.ValueText)
             .Where(name => !string.IsNullOrWhiteSpace(name));
 
+    internal static bool WellFormed(SourceReaderFileFacts file)
+    {
+        static bool Names(string[]? values) => values is not null && values.All(value => !string.IsNullOrWhiteSpace(value));
+        return file.ContentHash is { Length: 64 } && file.ContentHash.All(Uri.IsHexDigit) &&
+            Names(file.DeclaredNames) && Names(file.ReferencedNames) && Names(file.TypeDeclarationShapes) &&
+            Names(file.DeclaredSymbolIds) && file.Types is not null && file.Members is not null &&
+            (file.AssemblyScans is not { } scans || scans.IsValid && scans.ContentHash == file.ContentHash) &&
+            file.Types.All(type => type is not null && !string.IsNullOrWhiteSpace(type.Id) &&
+                !string.IsNullOrWhiteSpace(type.Owner) && type.BaseList is not null) &&
+            file.Members.All(member => member is not null && !string.IsNullOrWhiteSpace(member.Id) &&
+                !string.IsNullOrWhiteSpace(member.Name) && !string.IsNullOrWhiteSpace(member.Owner) &&
+                !string.IsNullOrWhiteSpace(member.TypeId) && member.Ordinal >= 0 && Names(member.Parameters) &&
+                Names(member.Targets) && Names(member.InvocationTexts) && member.InvocationTargets is not null &&
+                member.InvocationTexts.Length == member.InvocationTargets.Length &&
+                member.InvocationTargets.All(Names));
+    }
+
     internal static bool Valid(SourceReaderFileFacts[] files)
     {
-        if (!HasUniquePaths(files)) return false;
-        static bool Names(string[]? values) => values is not null && values.All(value => !string.IsNullOrWhiteSpace(value));
-        foreach (var file in files)
-        {
-            if (file.ContentHash is not { Length: 64 } || !file.ContentHash.All(Uri.IsHexDigit) ||
-                !Names(file.DeclaredNames) || !Names(file.ReferencedNames) || !Names(file.TypeDeclarationShapes) ||
-                !Names(file.DeclaredSymbolIds) ||
-                file.Types is null || file.Members is null ||
-                file.AssemblyScans is { } scans && (!scans.IsValid || scans.ContentHash != file.ContentHash)) return false;
-            if (file.Types.Any(type => type is null || string.IsNullOrWhiteSpace(type.Id) ||
-                    string.IsNullOrWhiteSpace(type.Owner) || type.BaseList is null)) return false;
-            if (file.Members.Any(member => member is null || string.IsNullOrWhiteSpace(member.Id) ||
-                    string.IsNullOrWhiteSpace(member.Name) || string.IsNullOrWhiteSpace(member.Owner) ||
-                    string.IsNullOrWhiteSpace(member.TypeId) || member.Ordinal < 0 || !Names(member.Parameters) ||
-                    !Names(member.Targets) || !Names(member.InvocationTexts) || member.InvocationTargets is null ||
-                    member.InvocationTexts.Length != member.InvocationTargets.Length ||
-                    member.InvocationTargets.Any(targets => !Names(targets)))) return false;
-        }
+        if (!HasUniquePaths(files) || !files.All(WellFormed)) return false;
         var ids = files.SelectMany(file => file.DeclaredSymbolIds).ToHashSet(StringComparer.Ordinal);
         var members = files.SelectMany(file => file.Members).ToArray();
         if (members.Select(member => member.Id).Distinct(StringComparer.Ordinal).Count() != members.Length ||

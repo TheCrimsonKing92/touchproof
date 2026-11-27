@@ -586,7 +586,7 @@ internal static class SourceSizeRatchet
             // Goal 35c35d6d: three delegation lines connect diagnosis owned by a separate coordinator.
             // Goal 7ca0990d: two wiring lines carry the exact train plan and scoped admission reservation; same partials.
             // Goal ed4b8637 wires the explicit inventory execution hold into failed-goal recovery (+3 lines).
-            new SourceClassCeiling("ConductorDriver", 13366, 67),
+            new SourceClassCeiling("ConductorDriver", 13361, 67),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -636,7 +636,7 @@ internal static class SourceSizeRatchet
             // the Orchestration-to-Cli boundary; metric validation and auditing stay in CostGoalOutcomeMetric.
             // Measured 11024 lines across the existing 30 partials, with no extra headroom.
             // Goal a1a4aff1 adds three loop lifetime wiring lines. Notice processing lives in ProcessErrorModeEventObserver.
-            new SourceClassCeiling("CliCommandHandlers", 10801, 30),
+            new SourceClassCeiling("CliCommandHandlers", 10796, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -699,7 +699,7 @@ internal static class SourceSizeRatchet
             // recording remains in AnsweredOperatorHumanInputRecorder and existing callers default to Other.
             // Goal bc361051: carry the dispatch failure payload through existing timeline recording boundaries.
             // Goal 350ad330: declaration mutation and brief-section call; rendering remains in its own type.
-            new SourceClassCeiling("AgentOrchestratorKernel", 8932, 27),
+            new SourceClassCeiling("AgentOrchestratorKernel", 8931, 27),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted

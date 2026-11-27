@@ -344,7 +344,8 @@ public sealed class GoalSnapshotArchiveTerminalAgeTests
             tables.CommandText = """
                 SELECT name FROM sqlite_master
                 WHERE type = 'table'
-                  AND name NOT IN ('goals', 'goal_snapshot_archive', 'attention_archive_evidence', 'provider_hold_seed_evidence')
+                  AND name NOT IN ('goals', 'goal_snapshot_archive', 'attention_archive_evidence',
+                      'provider_hold_seed_evidence', 'provider_hold_index_stamp')
                 ORDER BY name
                 """;
             var names = new List<string>();

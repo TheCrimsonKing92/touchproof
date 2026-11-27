@@ -326,7 +326,7 @@ internal static class CliShadowStartCommand
         finally { if (Directory.Exists(reservation)) Directory.Delete(reservation); }
     }
 
-    private static void CopyStateDatabases(ShadowStartCopyPlan plan, ShadowStartHooks hooks,
+    internal static void CopyStateDatabases(ShadowStartCopyPlan plan, ShadowStartHooks hooks,
         Func<string, FileStream>? createOwnedStore, Action<string>? prepareStagedDatabase,
         CancellationToken cancellationToken)
     {
@@ -338,6 +338,13 @@ internal static class CliShadowStartCommand
             using var snapshot = new StoreInspectionSnapshot(store.Source,
                 stagingDirectory: plan.Retention == ShadowScratchRetention.Disposable ? Path.GetDirectoryName(store.Staged) : null,
                 createStagedFile: createOwnedStore, prepareStagedDatabase: prepareStagedDatabase);
+            // Establish the live WAL read view even for stores without a stamp table.
+            using (var pin = snapshot.Connection.CreateCommand())
+            {
+                pin.CommandText = "SELECT 1 FROM sqlite_schema LIMIT 1";
+                pin.ExecuteScalar();
+            }
+            var stamp = ProviderHoldIndexStamp.TryRead(snapshot.Connection, cancellationToken);
             createOwnedStore?.Invoke(store.Destination).Dispose();
             hooks.BeforeBackup?.Invoke(store);
             if (createOwnedStore is not null)
@@ -358,6 +365,8 @@ internal static class CliShadowStartCommand
                         throw new IOException($"Cannot configure the private backup journal: {store.Destination}.");
                 }
                 snapshot.Connection.BackupDatabase(copy);
+                if (ProviderHoldIndexStamp.TryRead(copy, cancellationToken) != stamp)
+                    throw new IOException($"The diagnostic copy did not preserve the provider-hold index stamp: {store.Destination}.");
             }
         }
     }
