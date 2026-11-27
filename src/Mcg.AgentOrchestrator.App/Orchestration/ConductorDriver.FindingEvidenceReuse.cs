@@ -98,15 +98,15 @@ internal sealed partial class ConductorDriver
         var findingRound = BuildFindingRoundFingerprint(trigger.TriggeringTask, round);
         var requestIdentity = BuildFindingEvidenceRequestIdentity(pendingFindings);
         var guard = $"candidate_sha={candidateSha}; finding_round={findingRound}; request_identity={requestIdentity}";
-        if (!goal.Timeline.Any(evt =>
-                evt.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
-                evt.TaskId == trigger.TriggeringTask.Id &&
-                evt.Message.Contains("disposition=pending-execution-gate;", StringComparison.Ordinal) &&
-                evt.Message.Contains(guard, StringComparison.Ordinal)))
+        if (FindingEvidenceRequestTimeline.FindPendingExecutionGate(
+                goal.Timeline, trigger.TriggeringTask.Id, candidateSha!, findingRound, guard) is null)
         {
-            _recordFindingEvidenceRequest(
-                goal.Id,
-                trigger.TriggeringTask.Id,
+            RecordFindingEvidenceRequestReceipt(
+                goal.Id, trigger.TriggeringTask.Id,
+                new FindingEvidenceRequestReceipt(
+                    guard, FindingEvidenceRequestReceipt.BuildRerunGuard(guard), trigger.TriggeringTask.Id.Value,
+                    candidateSha!, findingRound, FindingEvidenceRequestReceiptDecision.PendingExecutionGate,
+                    ReceiptId: null, OriginalReceiptId: null, Hold: FindingEvidenceRequestReceiptHold.PendingExecutionGate),
                 $"finding-evidence disposition=pending-execution-gate; role={trigger.TriggeringTask.RequiredRole}; " +
                 $"task_id={trigger.TriggeringTask.Id}; " +
                 $"finding_ids={string.Join(",", pendingFindings.Select(item => item.StableId))}; " +

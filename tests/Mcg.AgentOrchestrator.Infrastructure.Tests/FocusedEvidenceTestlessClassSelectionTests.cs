@@ -249,6 +249,117 @@ public sealed class FocusedEvidenceTestlessClassSelectionTests : RemoteFirstFocu
         AssertRetained(fixture, "SupportHelper");
     }
 
+    [Fact]
+    public void PersistedFacts_SecondApplyMatchesFirstWithoutParsing()
+    {
+        using var fixture = new Fixture();
+        Directory.CreateDirectory(Path.Combine(fixture.Root, ".orchestrator"));
+        fixture.Write(SupportSource);
+        var filter = ClassFilter("AlphaTests", "SupportHelper");
+        using var parses = FocusedEvidenceParsedRootCache.Observe(fixture.Root);
+
+        var first = Assert.Single(ApplyWithColdStores(out var firstDrops));
+        Assert.Equal("AlphaTests", Assert.Single(first.Filter!.Tokens).Value);
+        Assert.Equal("SupportHelper", Assert.Single(firstDrops).Selection);
+        Assert.Equal(Reason, Assert.Single(firstDrops[0].Reasons));
+        var sources = AssertPersistedSources(fixture);
+        Assert.Equal(2, sources.Length);
+        foreach (var source in sources)
+            Assert.Equal(1, parses.CountFor(source));
+
+        // RecordParse also increments ParseCount. Scoping the observation excludes other tests' parses.
+        var beforeSecondApply = parses.Total;
+        var second = Assert.Single(ApplyWithColdStores(out var secondDrops));
+        Assert.Equal(beforeSecondApply, parses.Total);
+        Assert.Equal((first.Target, first.Project), (second.Target, second.Project));
+        Assert.NotNull(second.Filter);
+        Assert.Equal((first.Filter.OriginalToken, first.Filter.CanonicalText),
+            (second.Filter.OriginalToken, second.Filter.CanonicalText));
+        Assert.Equal(first.Filter.Tokens.ToArray(), second.Filter.Tokens.ToArray());
+        var firstDrop = Assert.Single(firstDrops);
+        var secondDrop = Assert.Single(secondDrops);
+        Assert.Equal((firstDrop.Target, firstDrop.Project, firstDrop.Selection),
+            (secondDrop.Target, secondDrop.Project, secondDrop.Selection));
+        Assert.Equal(firstDrop.Reasons.ToArray(), secondDrop.Reasons.ToArray());
+
+        List<(string Target, string Project, FocusedEvidenceFilter? Filter)> ApplyWithColdStores(
+            out IReadOnlyList<FocusedEvidenceDroppedSelection> dropped)
+        {
+            using var store = UseColdStores();
+            return FocusedEvidenceTestlessClassSelection.Apply(fixture.Root, [("target", Project, filter)], [], out dropped);
+        }
+    }
+
+    [Theory]
+    [InlineData(TestedSource, SupportSource, "class Broken {", true)]
+    [InlineData("", SupportSource, "", true)]
+    [InlineData(TestedSource, "class SupportHelperHarness {}", "", true)]
+    [InlineData(TestedSource, SupportSource, "class SupportHelperTests { [Fact] void Runs() {} }", true)]
+    [InlineData(TestedSource, SupportSource, "#if HIDDEN\nclass SupportHelper {}\n#endif", true)]
+    [InlineData(TestedSource, "#if HIDDEN\n#endif\nclass SupportH\\u0065lper {}", "", true)]
+    [InlineData(TestedSource, "class SupportHelper : Base {}", "", true)]
+    [InlineData(TestedSource, "class SupportHelper { [CustomFact] void Help() {} }", "", true)]
+    [InlineData(TestedSource, "class SupportHelper { [Other.CustomTheoryAttribute] void Help() {} }", "", true)]
+    [InlineData(TestedSource, SupportSource, "#if HIDDEN\nclass Unrelated {}\n#endif", false)]
+    public void DecisionRule_PreservesPreChangeOutcome(string known, string selected, string other, bool retained)
+    {
+        using var fixture = new Fixture();
+        Directory.CreateDirectory(Path.Combine(fixture.Root, ".orchestrator"));
+        fixture.Write(SupportSource);
+        AssertSelection(retained: false);
+
+        fixture.Write(known, "Known.cs");
+        fixture.Write(selected);
+        fixture.Write(other, "Other.cs");
+        AssertSelection(retained);
+        Assert.Equal(3, AssertPersistedSources(fixture).Length);
+        using var parses = FocusedEvidenceParsedRootCache.Observe(fixture.Root);
+        AssertSelection(retained);
+        Assert.Equal(0, parses.Total);
+
+        void AssertSelection(bool retained)
+        {
+            using var store = UseColdStores();
+            var filter = ClassFilter("SupportHelper");
+            var result = FocusedEvidenceTestlessClassSelection.Apply(fixture.Root,
+                [("target", Project, filter)], [], out var dropped);
+            if (retained)
+            {
+                Assert.Same(filter, Assert.Single(result).Filter);
+                Assert.Empty(dropped);
+            }
+            else
+            {
+                Assert.Empty(result);
+                var drop = Assert.Single(dropped);
+                Assert.Equal(("target", Project, "SupportHelper"), (drop.Target, drop.Project, drop.Selection));
+                Assert.Equal(Reason, Assert.Single(drop.Reasons));
+            }
+        }
+    }
+
+    private static string[] AssertPersistedSources(Fixture fixture)
+    {
+        var directory = Path.Combine(fixture.Root, ".orchestrator", FocusedEvidenceDeclarationFactStore.DirectoryName);
+        var sources = FocusedEvidenceRequestResolver.EnumerateFocusedEvidenceSourceFiles(fixture.Root, Project).ToArray();
+        foreach (var source in sources)
+        {
+            var hash = AcceptanceTestClassSourceExtractStore.HashText(File.ReadAllText(source));
+            Assert.True(File.Exists(FocusedEvidenceDeclarationFactStore.EntryPath(directory, hash)), source);
+        }
+        return sources;
+    }
+
+    private static FocusedEvidenceFilter ClassFilter(params string[] selectors)
+    {
+        var request = string.Join('|', selectors);
+        return new(request, request, selectors.Select(selector =>
+            new FocusedEvidenceFilterToken(selector, selector, FocusedEvidenceTokenKind.Class, selector, selector)).ToArray());
+    }
+
+    private static IDisposable UseColdStores() => FocusedEvidenceDeclarationFactStore.Use(
+        new FocusedEvidenceDeclarationFactStore(new FocusedEvidenceParsedRootCache.Store(32)));
+
     private static void AssertRetained(Fixture fixture, string selector)
     {
         var checks = fixture.Plan(selector, out var coverage);

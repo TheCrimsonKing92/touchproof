@@ -84,7 +84,7 @@ internal static class SourceSizeRatchet
             // Goal 78053cf4 capture custody collaborator measured at 378 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.CaptureCustody.cs", 322),
             // Goal c60a7cb5 split focused-evidence request resolution into its own type.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.FocusedEvidenceRequestResolver.cs", 611),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.FocusedEvidenceRequestResolver.cs", 599),
             // Goal e3bb2a77 extracted acceptance child invocation into its own owner.
             // Goal 6a75c73d records the host test-settings binding after process start succeeds; its request
             // property moved with the request record into AcceptanceProcessRequest.cs (goal 18718c48).

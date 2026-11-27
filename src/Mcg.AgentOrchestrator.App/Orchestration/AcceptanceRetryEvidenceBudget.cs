@@ -9,8 +9,9 @@ internal sealed class AcceptanceRetryEvidenceBudget
     private const int MaxLineCharacters = 2_000;
     private const int MaxFailureCharacters = 8_000;
     private const int MaxEvidenceCharacters = 32_000;
+    private const string FailurePrefix = "[FAIL]";
     private readonly Dictionary<(string Name, string FirstMessageLine), string> _seen = new();
-    private readonly List<(int Index, string TrxPath)> _failures = [];
+    private readonly List<(int Index, string TrxPath, AcceptanceTrxFailure Failure, string LabeledPrefix)> _failures = [];
 
     internal static string BoundLine(string text)
     {
@@ -37,18 +38,46 @@ internal sealed class AcceptanceRetryEvidenceBudget
         return bounded?.ToString() ?? text;
     }
 
-    private static string FormatFailure(AcceptanceTrxFailure failure, string trxPath)
+    internal static AcceptanceRetryFailureDisposition ResolveDisposition(AcceptanceCheckResult check, string? identity)
+    {
+        if (string.IsNullOrWhiteSpace(identity))
+            return AcceptanceRetryFailureDisposition.NotRerun;
+
+        var laneRerun = check.LaneRerun;
+        if (laneRerun?.RerunFailingTestIdentities?.Contains(identity, StringComparer.Ordinal) == true ||
+            check.WithinAttemptRerun?.RerunFailingTestIdentities?.Contains(identity, StringComparer.Ordinal) == true)
+            return AcceptanceRetryFailureDisposition.Repeatable;
+
+        return laneRerun?.FirstFailingTestIdentities?.Contains(identity, StringComparer.Ordinal) == true
+            ? AcceptanceRetryFailureDisposition.PassedRetry
+            : AcceptanceRetryFailureDisposition.NotRerun;
+    }
+
+    private static string FormatLabeledPrefix(AcceptanceRetryFailureDisposition disposition) =>
+        disposition switch
+        {
+            AcceptanceRetryFailureDisposition.Repeatable => FailurePrefix + " [repeatable]",
+            AcceptanceRetryFailureDisposition.PassedRetry => FailurePrefix + " [passed retry]",
+            AcceptanceRetryFailureDisposition.NotRerun => FailurePrefix + " [not rerun]",
+            _ => throw new ArgumentOutOfRangeException(nameof(disposition), disposition, null)
+        };
+
+    private static string FormatFailure(
+        AcceptanceTrxFailure failure, string trxPath, int maxCharacters, string? labeledPrefix = null)
     {
         var message = string.IsNullOrEmpty(failure.Message) ? "failure message unavailable" : failure.Message;
         var stackTrace = string.IsNullOrEmpty(failure.StackTrace) ? "stack trace unavailable" : failure.StackTrace;
-        var entry = BoundLine($"[FAIL] {failure.TestName} ({failure.Outcome}){Environment.NewLine}{message}{Environment.NewLine}{stackTrace}");
-        if (entry.Length <= MaxFailureCharacters) return entry;
+        var entry = BoundLine($"{labeledPrefix ?? FailurePrefix} {failure.TestName} ({failure.Outcome}){Environment.NewLine}{message}{Environment.NewLine}{stackTrace}");
+        if (entry.Length <= maxCharacters) return entry;
 
-        var retained = MaxFailureCharacters;
+        var retained = maxCharacters;
         while (true)
         {
             var suffix = $"{Environment.NewLine}[truncated: {entry.Length - retained} chars omitted; full failure in {trxPath}]";
-            var available = Math.Max(0, MaxFailureCharacters - suffix.Length);
+            var available = Math.Max(0, maxCharacters - suffix.Length);
+            // The check's receipt line already gives the path when this entry has too little room.
+            if (labeledPrefix is not null && available < labeledPrefix.Length)
+                return entry[..maxCharacters];
             if (available == retained) return entry[..retained] + suffix;
             retained = available;
         }
@@ -56,11 +85,12 @@ internal sealed class AcceptanceRetryEvidenceBudget
 
     internal void AppendFailures(
         List<string> evidence, string criterionName, string trxPath, int receiptLineIndex,
-        IReadOnlyList<AcceptanceTrxFailure> failures, ref int remainingEvidenceEntries)
+        IReadOnlyList<(AcceptanceTrxFailure Failure, AcceptanceRetryFailureDisposition Disposition)> failures,
+        ref int remainingEvidenceEntries)
     {
         var omittedFailures = 0;
         var duplicatePaths = new List<string>();
-        foreach (var failure in failures)
+        foreach (var (failure, disposition) in failures)
         {
             if (string.IsNullOrWhiteSpace(failure.TestName))
             {
@@ -87,8 +117,8 @@ internal sealed class AcceptanceRetryEvidenceBudget
             }
 
             _seen.Add(key, trxPath);
-            _failures.Add((evidence.Count, trxPath));
-            evidence.Add(FormatFailure(failure, trxPath));
+            _failures.Add((evidence.Count, trxPath, failure, FormatLabeledPrefix(disposition)));
+            evidence.Add(FormatFailure(failure, trxPath, MaxFailureCharacters));
             remainingEvidenceEntries--;
         }
 
@@ -123,6 +153,20 @@ internal sealed class AcceptanceRetryEvidenceBudget
         for (var index = _failures.Count - 1; index >= retained; index--)
             evidence.RemoveAt(_failures[index].Index);
         if (summary.Length > 0) evidence.Add(summary);
+
+        // Use unlabeled lengths for both output admission and the retained failure prefix.
+        // Reserve complete labels even for failures shorter than their labeled prefix.
+        var retainedFailures = _failures.Take(retained);
+        var prefixOverhead = retainedFailures.Sum(failure =>
+            Math.Max(0, failure.LabeledPrefix.Length - evidence[failure.Index].Length));
+        var spareCharacters = MaxEvidenceCharacters - characters - summary.Length - prefixOverhead;
+        foreach (var (index, trxPath, failure, labeledPrefix) in retainedFailures)
+        {
+            var reservedLength = Math.Max(evidence[index].Length, labeledPrefix.Length);
+            var limit = (int)Math.Clamp(reservedLength + spareCharacters, labeledPrefix.Length, MaxFailureCharacters);
+            evidence[index] = FormatFailure(failure, trxPath, limit, labeledPrefix);
+            spareCharacters += reservedLength - evidence[index].Length;
+        }
         return evidence;
     }
 }
