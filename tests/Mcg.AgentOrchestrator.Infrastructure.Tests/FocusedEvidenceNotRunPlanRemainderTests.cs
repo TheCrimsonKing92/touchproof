@@ -74,6 +74,39 @@ public sealed class FocusedEvidenceNotRunPlanRemainderTests
     }
 
     [Fact]
+    public void FailedTrxConversion_UsesRetainedIdentitiesAlongsideNormalizedResults()
+    {
+        using var worktree = new Worktree();
+        worktree.Declare(InfrastructureTestsProject, "AlphaTests", "BetaTests", "GammaTests");
+        var check = VstestCheck("partial conversion");
+        var coverage = new FocusedEvidenceCoverage([
+            new("Infrastructure.Tests:AlphaTests|BetaTests|GammaTests", [check.Name])]);
+        var trx = Path.Combine(worktree.Root, "retained.trx");
+        File.WriteAllText(trx, """
+            <TestRun><Results>
+                <UnitTestResult testId="a" testName="Fixture.AlphaTests.Runs" outcome="Passed" />
+                <UnitTestResult testId="a" testName="Fixture.AlphaTests.Runs" outcome="Passed" />
+                <UnitTestResult testId="g" testName="Fixture.GammaTests.Skipped" outcome="NotExecuted" />
+            </Results></TestRun>
+            """);
+        var report = Path.Combine(worktree.Root, "normalized.ctrf.json");
+        NormalizedTestResultWriter.Write(report, "vstest", [Result("Fixture.BetaTests.Runs", TestResultStatus.Passed)]);
+        var result = new AcceptanceCheckResult(check.Name, true, 0, "", TestResultPaths: [trx], ExecutedTestCount: 3)
+        {
+            NormalizedTestResultPaths = [report]
+        };
+        result = NormalizedGateResultStep.Apply(result, trx, NormalizedGateResultStep.TrxSourceLabel);
+        Assert.Equal(NormalizedTestResultWriteFailure.WriteFailed, result.NormalizedTestResultWriteFailure?.Reason);
+        Assert.Equal(report, Assert.Single(result.NormalizedTestResultPaths!));
+
+        var plan = FocusedEvidenceNotRunPlan.Compare([check], [result], coverage, true, worktree.Root);
+
+        var missingCheck = Assert.Single(plan.Checks);
+        Assert.Equal(new FindingEvidenceSelection("Infrastructure.Tests", "GammaTests"),
+            Assert.Single(missingCheck.UndemonstratedSelections!));
+    }
+
+    [Fact]
     public void UnexecutedMethod_ReportsTheContainingClassProject()
     {
         using var worktree = new Worktree();

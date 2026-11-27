@@ -34,7 +34,8 @@ internal sealed record FocusedEvidenceNotRunPlan(IReadOnlyList<FocusedEvidenceNo
         var targetsByCheck = coverage.TargetToChecks
             .SelectMany(target => target.CheckNames.Select(checkName => (checkName, target)))
             .ToLookup(item => item.checkName, item => item.target, StringComparer.Ordinal);
-        var source = new NormalizedTestResultSource();
+        var normalizedSource = new NormalizedTestResultSource();
+        var trxSource = new TrxTestResultSource();
         var executedByPath = new Dictionary<string, string[]>(StringComparer.Ordinal);
         var stoppedAfterFailure = false;
         foreach (var check in planned)
@@ -72,8 +73,7 @@ internal sealed record FocusedEvidenceNotRunPlan(IReadOnlyList<FocusedEvidenceNo
                         .SelectMany(group =>
                         {
                             var executed = group.Key.CheckNames.SelectMany(name => resultsByName[name])
-                                .SelectMany(result => result.NormalizedTestResultPaths ?? [])
-                                .Distinct(StringComparer.Ordinal).SelectMany(ExecutedIdentities).ToArray();
+                                .SelectMany(ResultIdentities).ToArray();
                             return group.Where(item => !executed.Any(identity =>
                                 GoalAcceptanceVerifierTestTelemetry.IsFocusedEvidenceIdentityMatch(identity, item.Value)));
                         }).ToArray();
@@ -113,7 +113,20 @@ internal sealed record FocusedEvidenceNotRunPlan(IReadOnlyList<FocusedEvidenceNo
         return new(missing, results.SelectMany(result => result.SkippedTestIdentities ?? [])
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
 
-        string[] ExecutedIdentities(string path)
+        IEnumerable<string> ResultIdentities(AcceptanceCheckResult result)
+        {
+            var normalizedPaths = result.NormalizedTestResultPaths ?? [];
+            var identities = normalizedPaths.SelectMany(path => ExecutedIdentities(path, normalizedSource));
+            if (result.NormalizedTestResultWriteFailure is null)
+                return identities;
+
+            // A failed conversion can leave readable execution evidence in the retained TRX.
+            return identities.Concat((result.TestResultPaths ?? [])
+                .Where(path => !normalizedPaths.Contains(NormalizedTestResultWriter.PathFor(path), StringComparer.Ordinal))
+                .SelectMany(path => ExecutedIdentities(path, trxSource)));
+        }
+
+        string[] ExecutedIdentities(string path, ITestResultSource source)
         {
             if (!executedByPath.TryGetValue(path, out var identities))
             {
