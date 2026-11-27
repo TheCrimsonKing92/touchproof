@@ -72,12 +72,11 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
             Assert.Equal(1, goal.AutomaticAcceptanceRetryCount);
 
             var contextDirectory = WorkerContextArtifacts.Write(goal, task, root);
-            var brief = kernel.BuildTaskBrief(
+            var brief = kernel.BuildTaskBriefSource(
                 goal.Id,
                 task.Id,
                 workingDirectory: root,
-                contextDirectory: contextDirectory,
-                emitTypedSourceBoundaries: true);
+                contextDirectory: contextDirectory);
             var package = WorkerProfileDispatcher.BuildContextPackage(goal, task, root, contextDirectory, brief);
             var promptPath = Path.Combine(root, "prepared-prompt.md");
             File.WriteAllText(promptPath, WorkerContextPackageBuilder.Render(package));

@@ -279,7 +279,6 @@ public static partial class WorkerProfileDispatcher
             reviewerRoundTouchScope.TouchedAnchors,
             reviewerRoundTouchScope.Diagnostic,
             effectiveReviewRetryCap,
-            measureWithTypedSourceBoundaries: usesTypedContextPackage,
             changedExistingTests: changedExistingTests.Entries,
             changedExistingTestsDiagnostic: changedExistingTests.Diagnostic,
             acceptanceManifestPromptPath: WorkerAcceptanceManifestDisplayPath.ForPrompt(targetHome, workingDirectory),
@@ -287,7 +286,7 @@ public static partial class WorkerProfileDispatcher
             pinnedReviewerScope: excerptScope, reviewerScopeMissingFromDispatch: reviewerScopeMissingFromDispatch);
         var brief = usesTypedContextPackage
             ? briefSource.ToTaskBrief(string.Empty)
-            : briefSource.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false);
+            : briefSource.ProjectLegacyMarkedTextV1();
         if (!usesTypedContextPackage && linkedBacklogPointer is not null)
             brief = brief with { Content = brief.Content + "\n\n" + linkedBacklogPointer };
         if (!usesTypedContextPackage && preparationFindings.Count > 0)
@@ -301,7 +300,7 @@ public static partial class WorkerProfileDispatcher
                 task,
                 workingDirectory,
                 contextDirectory,
-                brief,
+                briefSource,
                 humanInputRequests: kernel.HumanInputRequests
                     .Where(request => request.GoalId == goal.Id)
                     .ToArray(),
@@ -315,8 +314,6 @@ public static partial class WorkerProfileDispatcher
                 comparisonBaseSha: currentMainIdentity,
                 workerProfile: profile,
                 priorContextPackageReceipt: priorDispatch?.ContextPackageReceipt,
-                typedSource: briefSource,
-                legacyIngressProgressRecorder: message => kernel.RecordTaskNote(goal.Id, task.Id, message, CriteriaCorrectionSource.WorkerResult),
                 deferredEvidence: task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer
                     ? deferredEvidenceResolver?.Invoke(goal, targetContext?.HeadCommit) : null,
                 generatedHandoff: generatedHandoff,
@@ -1716,7 +1713,7 @@ public static partial class WorkerProfileDispatcher
         TaskSpec task,
         string workingDirectory,
         string contextDirectory,
-        TaskBrief brief,
+        TaskBriefSource typedSource,
         ICollection<SemanticSourceObservation>? observedSources = null,
         IReadOnlyList<HumanInputRequest>? humanInputRequests = null,
         IReadOnlyList<string>? reviewerScopeChangedFiles = null,
@@ -1729,12 +1726,12 @@ public static partial class WorkerProfileDispatcher
         string? comparisonBaseSha = null,
         WorkerProfile? workerProfile = null,
         WorkerContextPackageReceipt? priorContextPackageReceipt = null,
-        TaskBriefSource? typedSource = null,
-        Action<string>? legacyIngressProgressRecorder = null,
         DeferredNoChangeEvidenceContext? deferredEvidence = null,
         string? generatedHandoff = null,
         string? linkedBacklogPointer = null)
     {
+        ArgumentNullException.ThrowIfNull(typedSource);
+
         var targetRole = task.RequiredRole;
         var registryPath = Path.Combine(contextDirectory, "artifact-registry.json");
         var registry = JsonSerializer.Deserialize<ContextArtifactRegistryDocument>(
@@ -2032,34 +2029,17 @@ public static partial class WorkerProfileDispatcher
             AddSource(WorkerContextSemanticSource.LegacyHandoffArtifact, recovered.LogicalIdentity, ContextArtifactKind.PriorTaskEvidence, recovered.Bytes);
         }
 
-        var legacyProjection = typedSource is null
-            ? WorkerContextProjectionResidual.ParseLegacyMarkedTextV1(
-                brief.Content,
-                targetRole,
-                goal.Id.Value,
-                legacyIngressProgressRecorder,
-                reviewerScopeTotalChangedFileCount > WorkerGitContext.ReviewerChangedFilePromptMaxFiles,
-                reviewerMergeTreeTotalConflictPathCount > WorkerGitContext.ReviewerChangedFilePromptMaxFiles)
-            : null;
-        var headerResidual = typedSource is null
-            ? legacyProjection!.HeaderResidual
-            : WorkerContextRenderer.CreateHeaderResidual(typedSource);
+        var headerResidual = WorkerContextRenderer.CreateHeaderResidual(typedSource);
         if (!string.IsNullOrWhiteSpace(headerResidual))
         {
             AddSource(WorkerContextSemanticSource.HeaderResidual, "brief/header-residual.md", ContextArtifactKind.OperatorInstructions, Encoding.UTF8.GetBytes(headerResidual));
         }
 
-        var residualBrief = typedSource is null
-            ? legacyProjection!.CurrentBrief
-            : WorkerContextRenderer.CreateCurrentBrief(
-                typedSource,
-                reviewerScopeTotalChangedFileCount > WorkerGitContext.ReviewerChangedFilePromptMaxFiles,
-                reviewerMergeTreeTotalConflictPathCount > WorkerGitContext.ReviewerChangedFilePromptMaxFiles);
+        var residualBrief = WorkerContextRenderer.CreateCurrentBrief(
+            typedSource,
+            reviewerScopeTotalChangedFileCount > WorkerGitContext.ReviewerChangedFilePromptMaxFiles,
+            reviewerMergeTreeTotalConflictPathCount > WorkerGitContext.ReviewerChangedFilePromptMaxFiles);
         AddSource(WorkerContextSemanticSource.CurrentBrief, "brief/current.md", ContextArtifactKind.OperatorInstructions, Encoding.UTF8.GetBytes(residualBrief));
-
-        if (typedSource is null &&
-            reviewFindingProjection?.Metrics.Mode == ReviewFindingHistoryProjectionMode.ContractRepair)
-            ReviewFindingContextProjector.ApplyCompactArtifactAllowList(artifacts);
 
         var builder = new WorkerContextPackageBuilder();
         var preparedWithoutManifest = builder.Prepare(targetRole, workingDirectory, artifacts) with

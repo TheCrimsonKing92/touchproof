@@ -205,7 +205,7 @@ public sealed class TaskBriefTests
         Assert.Contains("- Retain the build manifest.", header, StringComparison.Ordinal);
         Assert.Contains("- Sign the release bundle.", header, StringComparison.Ordinal);
         Assert.Contains("- Inspect the deployed build.", header, StringComparison.Ordinal);
-        Assert.DoesNotContain("## Refined Spec", brief.ProjectLegacyMarkedTextV1(false).Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("## Refined Spec", brief.ProjectLegacyMarkedTextV1().Content, StringComparison.Ordinal);
         Assert.Equal(new[]
         {
             RefinedSpecPointer,
@@ -2197,8 +2197,36 @@ public sealed class TaskBriefTests
             workingDirectory: "C:\\repo",
             contextDirectory: "C:\\repo\\.orchestrator-context\\goal",
             targetBranchName: branchName,
-            measureWithTypedSourceBoundaries: true,
-            workerToolsAvailable: workerToolsAvailable).ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: true).Content;
+            workerToolsAvailable: workerToolsAvailable).ProjectLegacyMarkedTextV1().Content;
+    }
+
+    [Xunit.Fact]
+    public void BuildTaskBriefSource_VerificationPlanStaysFullAtRenderedBudget()
+    {
+        const string planIdentity = "task/verification-plan.md";
+        const string branch = "goal/rendered-budget";
+        const string planLine = "Check the generated artifact.";
+        var task = new TaskSpec(TaskId.New(), "Keep the rendered verification plan.", AgentRole.Developer,
+            string.Join(Environment.NewLine, Enumerable.Repeat(planLine, 8)));
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal("Measure the rendered brief.", [task]);
+        var budget = AgentOrchestratorKernel.TaskBriefCharacterBudget(task.RequiredRole, usesFileAccessContext: true);
+        var baseline = Build(branch);
+        var baselineLength = baseline.ProjectLegacyMarkedTextV1().Content.Length;
+        Assert.True(baselineLength < budget, $"The {planIdentity} fixture needs room to pad to {budget}.");
+
+        var fittingBranch = branch + new string('x', budget - baselineLength);
+        var fitting = Build(fittingBranch);
+        var fittingText = fitting.ProjectLegacyMarkedTextV1().Content;
+        Assert.Equal(budget, fittingText.Length);
+        var decision = Assert.Single(fitting.BudgetDecisions, item => item.Identity.Value == planIdentity);
+        Assert.True(decision.Disposition == TaskBriefBudgetDisposition.Full,
+            $"{planIdentity} rendered {fittingText.Length} of {budget} characters with disposition {decision.Disposition}; expected Full.");
+        Assert.Contains(planLine, fittingText, StringComparison.Ordinal);
+
+        TaskBriefSource Build(string branchName) => kernel.BuildTaskBriefSource(
+            goal.Id, task.Id, workingDirectory: "C:\\repo", contextDirectory: "C:\\repo\\context",
+            targetBranchName: branchName);
     }
 
     [Xunit.Fact(DisplayName = "SdlcRoleRequirements_researcher_brief_includes_no_modify_repository_line")]

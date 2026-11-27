@@ -5,11 +5,10 @@ public sealed partial class AgentOrchestratorKernel
     private static TaskBriefBudgetSelection ApplyTaskBriefBudget(
         IReadOnlyList<TaskBriefSegment> segments,
         AgentRole role,
-        bool usesFileAccessContext,
-        bool measureWithTypedSourceBoundaries)
+        bool usesFileAccessContext)
     {
         var budget = TaskBriefCharacterBudget(role, usesFileAccessContext);
-        if (!usesFileAccessContext || CountTaskBriefCharacters(segments, measureWithTypedSourceBoundaries) <= budget)
+        if (!usesFileAccessContext || CountTaskBriefCharacters(segments) <= budget)
         {
             return CreateTaskBriefBudgetSelection(segments, new HashSet<LogicalArtifactIdentity>());
         }
@@ -33,7 +32,7 @@ public sealed partial class AgentOrchestratorKernel
                 collapsedIdentities.Add(identity);
             }
 
-            if (CountTaskBriefCharacters(collapsedSegments, measureWithTypedSourceBoundaries) <= budget)
+            if (CountTaskBriefCharacters(collapsedSegments) <= budget)
             {
                 break;
             }
@@ -57,30 +56,15 @@ public sealed partial class AgentOrchestratorKernel
                 .ToArray());
 
     private static int CountTaskBriefCharacters(
-        IReadOnlyList<TaskBriefSegment> segments,
-        bool includeTypedSourceBoundaries)
+        IReadOnlyList<TaskBriefSegment> segments)
     {
         var characterCount = 0;
         var lineCount = 0;
         foreach (var segment in segments)
         {
-            if (includeTypedSourceBoundaries && segment.TypedProjectionIdentity is { } identity)
-            {
-                characterCount += WorkerContextProjectionBoundary.Start(identity).Length;
-                lineCount++;
-            }
-
             foreach (var line in segment.Lines)
             {
-                characterCount += includeTypedSourceBoundaries
-                    ? WorkerContextProjectionBoundary.EscapeReservedLiteral(line).Length
-                    : line.Length;
-                lineCount++;
-            }
-
-            if (includeTypedSourceBoundaries && segment.TypedProjectionIdentity is { } closingIdentity)
-            {
-                characterCount += WorkerContextProjectionBoundary.End(closingIdentity).Length;
+                characterCount += line.Length;
                 lineCount++;
             }
         }

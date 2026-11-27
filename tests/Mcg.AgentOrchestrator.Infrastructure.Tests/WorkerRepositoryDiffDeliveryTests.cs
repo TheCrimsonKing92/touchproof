@@ -34,7 +34,7 @@ public sealed class WorkerRepositoryDiffDeliveryTests
             }));
             var task = new TaskSpec(TaskId.New(), "Inspect repository evidence", role);
             var goal = new AgentOrchestratorKernel().CreateGoal("Deliver repository evidence", [task]);
-            var brief = new TaskBrief(goal.Id, task.Id, role, task.Description, "## Instructions\nInspect the supplied evidence.");
+            var brief = TypedBriefSourceFixture.Create(goal, task, "Inspect the supplied evidence.");
 
             var package = WorkerProfileDispatcher.BuildContextPackage(goal, task, root, root, brief);
             var rendered = WorkerContextPackageBuilder.Render(package);

@@ -74,7 +74,7 @@ public sealed class ConductorBatchLoopTestsDeterministicStewardRoute : Conductor
         var context = Path.Combine(harness.Root, ".orchestrator-context", harness.Goal.Id.Value);
         Directory.CreateDirectory(context);
         File.WriteAllText(Path.Combine(context, "artifact-registry.json"), "{\"artifacts\":[]}");
-        var brief = harness.Kernel.BuildTaskBrief(harness.Goal.Id, harness.Task.Id,
+        var brief = harness.Kernel.BuildTaskBriefSource(harness.Goal.Id, harness.Task.Id,
             workingDirectory: harness.Root, contextDirectory: context);
         var package = WorkerProfileDispatcher.BuildContextPackage(
             harness.Goal, harness.Task, harness.Root, context, brief);
