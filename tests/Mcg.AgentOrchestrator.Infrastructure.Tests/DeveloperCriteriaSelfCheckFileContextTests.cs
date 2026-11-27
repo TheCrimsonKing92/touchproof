@@ -46,9 +46,9 @@ public sealed class DeveloperCriteriaSelfCheckFileContextTests : WorkerDispatchT
             File.ReadAllText(Path.Combine(directory, "packages", task.Id.Value, "criteria-self-check.md")));
 
         var source = kernel.BuildTaskBriefSource(goal.Id, task.Id, workingDirectory: root, contextDirectory: directory);
-        var brief = source.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false);
-        Xunit.Assert.Contains("Read criteria-self-check.md in the context directory before WORKER_RESULT.", brief.Content, StringComparison.Ordinal);
-        var package = WorkerProfileDispatcher.BuildContextPackage(goal, task, root, directory, brief, typedSource: source);
+        Xunit.Assert.Contains("Read criteria-self-check.md in the context directory before WORKER_RESULT.",
+            source.ProjectLegacyMarkedTextV1().Content, StringComparison.Ordinal);
+        var package = WorkerProfileDispatcher.BuildContextPackage(goal, task, root, directory, source);
         var artifact = Xunit.Assert.Single(package.Artifacts,
             item => item.Identity.Value == "context/criteria-self-check.md");
         Xunit.Assert.Equal(ContextDeliveryMode.MandatoryFile, artifact.DeliveryMode);

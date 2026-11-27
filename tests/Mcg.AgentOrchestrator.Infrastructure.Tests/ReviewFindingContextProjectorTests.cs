@@ -301,7 +301,7 @@ public sealed class ReviewFindingContextProjectorTests
     }
 
     [Xunit.Fact]
-    public void SameCandidateContractRepairUsesCompactAllowListWhileCandidateChangeFallsBackFull()
+    public void SameCandidateContractRepairKeepsEnvelopeAndCandidateChangeInspectsFull()
     {
         var root = CreateRoot();
         try
@@ -362,8 +362,6 @@ public sealed class ReviewFindingContextProjectorTests
                 Brief(goal, reviewer),
                 currentCandidateSha: candidateSha);
             Assert.Contains(compact.Artifacts, artifact => artifact.Identity.Value == "task/review-contract-repair-envelope.json");
-            Assert.DoesNotContain(compact.Artifacts, artifact => artifact.Identity.Value == "goal/objective.md");
-            Assert.DoesNotContain(compact.Artifacts, artifact => artifact.Identity.Value == "brief/current.md");
             Assert.Equal(ReviewFindingHistoryProjectionMode.ContractRepair, compact.ReviewFindingProjection!.Mode);
             var envelopeArtifact = Assert.Single(compact.Artifacts,
                 artifact => artifact.Identity.Value == "task/review-contract-repair-envelope.json");
@@ -1025,12 +1023,8 @@ public sealed class ReviewFindingContextProjectorTests
         Assert.Equal(expected, error.Reason);
     }
 
-    private static TaskBrief Brief(Goal goal, TaskSpec task) => new(
-        goal.Id,
-        task.Id,
-        task.RequiredRole,
-        task.Description,
-        $"# Agent Task Brief{Environment.NewLine}Goal: {goal.Objective}{Environment.NewLine}Goal id: {goal.Id.Value}{Environment.NewLine}## Instructions{Environment.NewLine}Review.");
+    private static TaskBriefSource Brief(Goal goal, TaskSpec task) =>
+        TypedBriefSourceFixture.Create(goal, task, "Review.");
 
     private static byte[] Recover(string root, WorkerContextArtifact artifact) => artifact.DeliveryMode switch
     {

@@ -55,7 +55,7 @@ public sealed class WorkerSpecificationDeliveryTests
         fixture.Kernel.RecordGoalRefinement(fixture.Goal.Id, old with { AcceptanceCriteria = ["revised exact criterion"] });
         var source = fixture.Kernel.BuildTaskBriefSource(fixture.Goal.Id, fixture.Task.Id);
         var package = WorkerProfileDispatcher.BuildContextPackage(fixture.Goal, fixture.Task, fixture.Root, fixture.Root,
-            source.ToTaskBrief(""), typedSource: source);
+            source);
         var view = WorkerSpecificationComparisonTests.Expand(Artifact(package, "goal/current-specification.json").AuthoritativeBytes!);
         Assert.Equal("revised exact criterion", view["AcceptanceCriteria"]![0]!.GetValue<string>());
         var history = Artifact(package, "goal/specification-history.json");
@@ -105,7 +105,7 @@ public sealed class WorkerSpecificationDeliveryTests
                 RoleVisibility = new[] { "Developer", "Tester", "Reviewer" }, HashVerified = true } }
         }));
         var package = WorkerProfileDispatcher.BuildContextPackage(fixture.Goal, fixture.Task, fixture.Root, fixture.Root,
-            fixture.Source.ToTaskBrief(""), typedSource: fixture.Source);
+            fixture.Source);
         var artifact = Artifact(package, "context/planner-plan.md");
         Assert.Equal(ContextDeliveryMode.MandatoryFile, artifact.DeliveryMode);
         Assert.Equal(bytes, artifact.AuthoritativeBytes);

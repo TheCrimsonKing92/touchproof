@@ -44,6 +44,22 @@ public sealed class OwnerProviderHoldActivityTests
         Assert.StartsWith($"{At.ToLocalTime():HH:mm:ss} {Goal[..8]} ", OwnerActivityLinePresentation.Line(row));
     }
 
+    [Theory]
+    [InlineData("api-")]
+    [InlineData("API-")]
+    public void DisplayName_ApiKeyBinding_RendersSameLabelForShortAndLegacy(string prefix)
+    {
+        const string shortHex = "0123456789abcdef";
+        const string legacyHex = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+        var shortLabel = OwnerProviderHoldNarration.DisplayName($"anthropic::{prefix}{shortHex}");
+        var legacyLabel = OwnerProviderHoldNarration.DisplayName($"anthropic::{prefix}{legacyHex}");
+
+        Assert.Equal("anthropic (API key)", shortLabel);
+        Assert.Equal(shortLabel, legacyLabel);
+        Assert.DoesNotContain(shortHex, shortLabel, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(legacyHex, legacyLabel, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void Narrate_UnavailableSchedule_ShowsUnavailableReason()
     {

@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -34,6 +35,10 @@ internal sealed class GoalCreationOperatorIntentHandler(
     OrchestratorWorkspace workspace, IGoalIntentConstruction construction,
     IOrchestratorStateOutboxRepository? outboxRepository = null)
 {
+    private static readonly Regex OpeningBacklogReference = new(
+        @"\A\s*\(?\s*backlog\s+([0-9a-f]{8,64})\s*\)?",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     private readonly GoalIntakeRequestStore _requests = new(workspace.SqliteStatePath);
     private readonly IOrchestratorStateOutboxRepository _repository =
         outboxRepository ?? new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
@@ -47,21 +52,45 @@ internal sealed class GoalCreationOperatorIntentHandler(
 
         GoalIntakeRequestRecord receipt;
         bool replayed;
+        GoalSnapshot? committedSnapshot = null;
         try
         {
-            // Construction needs the existing goals for dependency resolution, intake planning
-            // and source claims. The scoped writer saves only the new goal and its outbox.
-            var existing = _requests.Get(payload.RequestKey);
-            var ids = existing?.State == GoalIntakeRequestStates.StillCommitting
-                ? _repository.ListGoalMetadataAsync().GetAwaiter().GetResult().Select(goal => new GoalId(goal.Id)).ToArray()
-                : [];
-            (receipt, replayed) = _repository.TransactGoalCreationWithOutboxAsync(
-                new GoalCreationLoadScope(ids, []),
-                (kernel, _) => Task.FromResult(BuildAndBind(kernel, payload))).GetAwaiter().GetResult();
+            receipt = ReadReservation(payload);
+            replayed = receipt.State is GoalIntakeRequestStates.Created or GoalIntakeRequestStates.Failed;
+            if (!replayed)
+            {
+                var prepared = Prepare(workingKernel, payload);
+                var sourceItem = prepared.Snapshot.SourceBacklogItemId is { } sourceId
+                    ? new BacklogStore(workspace.BacklogStorePath).GetByExactIdAsync(sourceId).GetAwaiter().GetResult()
+                    : null;
+                var scope = GoalCreationLoadScope.ForPreparedGoal(prepared.Snapshot, sourceItem);
+                var preparedGoalId = new GoalId(prepared.Snapshot.Id);
+
+                (receipt, replayed) = _repository.TransactGoalCreationWithOutboxAsync<(
+                    GoalIntakeRequestRecord Receipt, bool Replayed)>(scope, (kernel, _) =>
+                {
+                    var current = ReadReservation(payload);
+                    if (current.State is GoalIntakeRequestStates.Created or GoalIntakeRequestStates.Failed)
+                        return Task.FromResult((false, (current, true), (IReadOnlyList<OrchestratorStateOutboxMessage>)[]));
+
+                    ValidatePrepared(kernel, prepared, payload, preparedGoalId);
+                    kernel.ReplaceGoalWithSnapshot(prepared.Snapshot);
+                    var bound = _requests.MarkCreated(payload.RequestKey, payload.Fingerprint, prepared.Snapshot.Id);
+                    IReadOnlyList<OrchestratorStateOutboxMessage> outbox =
+                    [
+                        GoalCreationSideEffectDelivery.CreateMessage(preparedGoalId,
+                            prepared.Collaboration.SnapshotEffects(), prepared.Events.SnapshotEffects()),
+                        GoalRefinementWorkCoordinator.CreateMessage(preparedGoalId)
+                    ];
+                    return Task.FromResult((true, (bound, false), outbox));
+                }).GetAwaiter().GetResult();
+                if (!replayed)
+                    committedSnapshot = prepared.Snapshot;
+            }
         }
         catch (ConstructionFailedException ex)
         {
-            // The state transaction has rolled back all goal and source-claim changes.
+            // Preparation is detached, and a failure during validation rolls back the state transaction.
             var cause = ex.InnerException!;
             try
             {
@@ -72,7 +101,7 @@ internal sealed class GoalCreationOperatorIntentHandler(
             {
                 throw new GoalCreationIntentDeferredException(failure);
             }
-            replayed = false;
+            replayed = receipt.State == GoalIntakeRequestStates.Created;
         }
         catch (Exception ex) when (ex is not InvalidReceiptException)
         {
@@ -90,7 +119,7 @@ internal sealed class GoalCreationOperatorIntentHandler(
         {
             if (!workingKernel.Goals.Any(goal => goal.Id == goalId))
             {
-                var snapshot = _repository.LoadGoalAsync(goalId).GetAwaiter().GetResult()
+                var snapshot = committedSnapshot ?? _repository.LoadGoalAsync(goalId).GetAwaiter().GetResult()
                     ?? throw new InvalidOperationException($"GOAL_INTAKE_RECEIPT_INVALID requestKey={payload.RequestKey} reason=created-goal-missing");
                 workingKernel.ReplaceGoalWithSnapshot(snapshot);
             }
@@ -110,9 +139,7 @@ internal sealed class GoalCreationOperatorIntentHandler(
         return replayed;
     }
 
-    private (bool ShouldSave, (GoalIntakeRequestRecord Receipt, bool Replayed) Result,
-        IReadOnlyList<OrchestratorStateOutboxMessage> OutboxMessages) BuildAndBind(
-        AgentOrchestratorKernel kernel, GoalCreationOperatorIntentPayload payload)
+    private GoalIntakeRequestRecord ReadReservation(GoalCreationOperatorIntentPayload payload)
     {
         var current = _requests.Get(payload.RequestKey);
         if (current is null || current.FingerprintVersion != GoalIntakeRequestStore.CurrentFingerprintVersion ||
@@ -120,29 +147,30 @@ internal sealed class GoalCreationOperatorIntentHandler(
         {
             throw new InvalidReceiptException($"GOAL_INTAKE_RECEIPT_INVALID requestKey={payload.RequestKey} reason=missing-or-mismatched-reservation");
         }
-        if (current.State is GoalIntakeRequestStates.Created or GoalIntakeRequestStates.Failed)
-            return (false, (current, true), []);
-        if (current.State != GoalIntakeRequestStates.StillCommitting)
+        if (current.State is not (GoalIntakeRequestStates.StillCommitting or GoalIntakeRequestStates.Created or GoalIntakeRequestStates.Failed))
             throw new InvalidReceiptException($"GOAL_INTAKE_RECEIPT_INVALID requestKey={payload.RequestKey} reason=unknown-state");
 
+        return current;
+    }
+
+    private PreparedCreation Prepare(AgentOrchestratorKernel workingKernel, GoalCreationOperatorIntentPayload payload)
+    {
+        var constructionKernel = AgentOrchestratorKernel.FromSnapshot(workingKernel.ExportSnapshot());
+        HydrateConstructionInputs(constructionKernel, payload);
         var events = new DeferredGoalLifecycleEventWriter();
         var collaboration = new DeferredGoalCreationCollaborationWriter(CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
         GoalSnapshot? prepared = null;
+        IReadOnlyCollection<string>? sourceDependencies = null;
         try
         {
-            // Prepare on a detached kernel so preconditions see the pre-creation state and
-            // nothing from a failed build can enter the live conductor's working set.
-            var constructionKernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
             try
             {
                 construction.Build(payload, constructionKernel, workspace, events, collaboration.RaiseAsync,
-                    (goal, sourceDependencies) =>
+                    (goal, dependencies) =>
                     {
                         GoalRefinementWorkCoordinator.RecordPending(constructionKernel, goal.Id);
                         prepared = constructionKernel.ExportGoalSnapshot(goal.Id);
-                        construction.ValidatePrepared(kernel, prepared, workspace, sourceDependencies,
-                            payload.AllowTerminalSourceClaimTakeover);
-                        GoalCreationSideEffectDelivery.BeforeStateCommit(goal.Id);
+                        sourceDependencies = dependencies;
                         // The shared CLI handler would next deliver side effects or start work.
                         // End construction here so those steps can only run after commit.
                         throw new ConstructionReadyException();
@@ -157,14 +185,121 @@ internal sealed class GoalCreationOperatorIntentHandler(
             throw new ConstructionFailedException(ex);
         }
 
-        var goalId = new GoalId(prepared.Id);
-        kernel.ReplaceGoalWithSnapshot(prepared);
-        var receipt = _requests.MarkCreated(payload.RequestKey, payload.Fingerprint, prepared.Id);
-        return (true, (receipt, false),
-        [
-            GoalCreationSideEffectDelivery.CreateMessage(goalId, collaboration.SnapshotEffects(), events.SnapshotEffects()),
-            GoalRefinementWorkCoordinator.CreateMessage(goalId)
-        ]);
+        return new(prepared, sourceDependencies, collaboration, events);
+    }
+
+    private void HydrateConstructionInputs(AgentOrchestratorKernel kernel, GoalCreationOperatorIntentPayload payload)
+    {
+        var arguments = payload.CreationArguments;
+        if (arguments.Any(argument =>
+            argument.Equals("--run", StringComparison.OrdinalIgnoreCase) ||
+            argument.Equals("--dispatch", StringComparison.OrdinalIgnoreCase)))
+            return;
+
+        var goalIds = FindExplicitDependencyIds(arguments);
+        var backlogPrefix = ReadBacklogItemFlag(arguments);
+        if (string.IsNullOrWhiteSpace(backlogPrefix))
+            backlogPrefix = OpeningBacklogReference.Match(payload.Objective).Groups[1].Value;
+        backlogPrefix = backlogPrefix.Trim();
+
+        BacklogItem? sourceItem = null;
+        try
+        {
+            if (backlogPrefix.Length > 0)
+                sourceItem = new BacklogStore(workspace.BacklogStorePath)
+                    .GetByIdPrefixAsync(backlogPrefix).GetAwaiter().GetResult();
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new ConstructionFailedException(ex);
+        }
+
+        if (sourceItem is not null)
+        {
+            var backlogIds = new List<string> { sourceItem.Id };
+            foreach (var dependency in sourceItem.Dependencies)
+            {
+                if (dependency.TargetKind == BacklogDependencyTargetKind.Goal)
+                    goalIds.Add(new GoalId(dependency.PrerequisiteId));
+                else
+                    backlogIds.Add(dependency.PrerequisiteId);
+            }
+            goalIds.UnionWith(_repository.ListBacklogRelatedGoalIdsAsync(backlogIds).GetAwaiter().GetResult());
+        }
+
+        var loadedIds = kernel.Goals.Select(goal => goal.Id).ToHashSet();
+        foreach (var id in goalIds.Except(loadedIds))
+        {
+            if (_repository.LoadGoalAsync(id).GetAwaiter().GetResult() is { } snapshot)
+                kernel.ReplaceGoalWithSnapshot(snapshot);
+        }
+    }
+
+    private static string? ReadBacklogItemFlag(IReadOnlyList<string> arguments)
+    {
+        const string flag = "--backlog-item";
+        const string inlinePrefix = flag + "=";
+        for (var index = 1; index < arguments.Count; index++)
+        {
+            var argument = arguments[index];
+            if (argument.StartsWith(inlinePrefix, StringComparison.OrdinalIgnoreCase))
+                return argument[inlinePrefix.Length..];
+            if (argument.Equals(flag, StringComparison.OrdinalIgnoreCase))
+                return index + 1 < arguments.Count ? arguments[index + 1] : null;
+        }
+
+        return null;
+    }
+
+    private HashSet<GoalId> FindExplicitDependencyIds(IReadOnlyList<string> arguments)
+    {
+        if (!arguments[0].Equals("goal", StringComparison.OrdinalIgnoreCase))
+            return [];
+
+        var prefixes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 1; index < arguments.Count - 1; index++)
+        {
+            if (!arguments[index].Equals("--depends-on", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var prefix = arguments[++index];
+            if (prefix.Length > 0 && prefix.All(char.IsAsciiHexDigit))
+                prefixes.Add(prefix);
+        }
+        if (prefixes.Count == 0)
+            return [];
+
+        // Stored goal ids are lower-case GUIDs. Read at most two ids per prefix so the CLI
+        // resolver still detects ambiguity when a match is outside the live kernel.
+        using var connection = StateDbConnectionFactory.Open(workspace.SqliteStatePath, StateDbConnectionProfile.QueryOnlyRead);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT id FROM goals WHERE id GLOB $prefix LIMIT 2";
+        var parameter = command.Parameters.AddWithValue("$prefix", "");
+        var ids = new HashSet<GoalId>();
+        foreach (var prefix in prefixes)
+        {
+            parameter.Value = prefix.ToLowerInvariant() + "*";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                ids.Add(new GoalId(reader.GetString(0)));
+        }
+
+        return ids;
+    }
+
+    private void ValidatePrepared(AgentOrchestratorKernel kernel, PreparedCreation prepared,
+        GoalCreationOperatorIntentPayload payload, GoalId goalId)
+    {
+        try
+        {
+            construction.ValidatePrepared(kernel, prepared.Snapshot, workspace, prepared.SourceDependencies,
+                payload.AllowTerminalSourceClaimTakeover);
+            GoalCreationSideEffectDelivery.BeforeStateCommit(goalId);
+        }
+        catch (Exception ex)
+        {
+            throw new ConstructionFailedException(ex);
+        }
     }
 
     private static string ResolveFailureCode(Exception exception)
@@ -183,6 +318,12 @@ internal sealed class GoalCreationOperatorIntentHandler(
             ? "GOAL_INTAKE_ARGUMENT_INVALID"
             : "GOAL_INTAKE_CREATE_FAILED";
     }
+
+    private sealed record PreparedCreation(
+        GoalSnapshot Snapshot,
+        IReadOnlyCollection<string>? SourceDependencies,
+        DeferredGoalCreationCollaborationWriter Collaboration,
+        DeferredGoalLifecycleEventWriter Events);
 
     private sealed class ConstructionFailedException(Exception cause) : Exception(cause.Message, cause);
     private sealed class ConstructionReadyException : Exception { }

@@ -121,7 +121,7 @@ public sealed class WorkerStandingRulesBriefTests
             Assert.Null(section.TypedProjectionIdentity);
             Assert.Null(section.CollapsedLines);
             Assert.Single(section.Lines);
-            var brief = source.ProjectLegacyMarkedTextV1(true).Content;
+            var brief = source.ProjectLegacyMarkedTextV1().Content;
             AssertSharedRules(ExtractRules(ReadRulesContent(brief, context.FullName)));
             Assert.DoesNotContain(WorkerStandingRules.Heading,
                 string.Join('\n', AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Developer)));

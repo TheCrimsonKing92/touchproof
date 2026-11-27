@@ -1,7 +1,5 @@
 using System;
 using System.IO;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Threading;
 
@@ -190,8 +188,8 @@ public static class ClaudeCliAuthProbe
         };
     }
 
-    internal static string? HoldIdentity(string? apiKey) => string.IsNullOrWhiteSpace(apiKey) ? null :
-        "api-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(apiKey))).ToLowerInvariant();
+    internal static string? HoldIdentity(string? apiKey, ClaudeApiHoldFingerprint? fingerprint = null) =>
+        string.IsNullOrWhiteSpace(apiKey) ? null : (fingerprint ?? ClaudeApiHoldFingerprint.ForMachine()).Compute(apiKey);
 }
 
 /// <summary>

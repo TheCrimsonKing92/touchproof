@@ -12,8 +12,17 @@ public sealed record PlannerBriefAmendmentRevisionPendingHold(
     public string Format() => JsonSerializer.Serialize(this);
     public ConductorAdvanceOutcome.Held ToOutcome(GoalLifecycleState state) =>
         new(state, Render(), Identity) { AmendmentRevisionPending = this };
+
+    public string NextCommands()
+    {
+        var goal = GoalId.Value[..Math.Min(8, GoalId.Value.Length)];
+        var request = RequestId.Value[..Math.Min(8, RequestId.Value.Length)];
+        var answer = $"attention answer {goal} {request} --text-file <path> --amendment";
+        return $"{answer} accept | {answer} decline | revise {goal} --brief-file <path> --reason <reason>";
+    }
+
     public string Render() =>
-        $"{State} criterion={CriterionIndex} request={RequestId.Value} " +
+        $"{State} goal={GoalId.Value} criterion={CriterionIndex} request={RequestId.Value} " +
         $"requestedBriefVersion={RequestedBriefVersion} currentBriefVersion={CurrentBriefVersion}. " +
-        "Amendment answered. Use --amendment accept to apply the proposed text, revise the brief, or use --amendment decline to replan.";
+        $"Amendment answered; next: {NextCommands()}";
 }

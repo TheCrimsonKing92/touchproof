@@ -101,7 +101,7 @@ public sealed class SpecClarificationStoreReferenceAuthorityTests
         fixture.AssertAbsent(prepared, goal, "excluded");
         if (state == "sibling")
         {
-            var brief = kernel.BuildTaskBriefSource(goal.Id, task.Id).ProjectLegacyMarkedTextV1(false).Content;
+            var brief = kernel.BuildTaskBriefSource(goal.Id, task.Id).ProjectLegacyMarkedTextV1().Content;
             Assert.Contains("## Clarifications and rulings", brief);
             Assert.Contains(excluded.Id.Value, brief);
             Assert.Contains(WorkerStoreReferenceFixture.Reference("excluded"), brief);

@@ -404,7 +404,8 @@ internal static partial class CliCommandHandlers
                 var (queue, printedCrossGoal) = PrintCrossGoalAttentionItems(context.Kernel, store);
                 PostLandingDutiesTextView.Print(context.Kernel.Goals);
                 EnvironmentHoldAttentionView.Print(context.Kernel.Goals);
-                PlannerBriefAmendmentHoldAttentionView.Print(context.Kernel, context.Kernel.Goals);
+                var amendmentWaits = PlannerBriefAmendmentHoldAttentionView.PrintListHolds(
+                    context.Kernel, context.Workspace, context.IsReadOnlyQuery, Console.Out);
                 var listNow = DateTimeOffset.UtcNow;
                 var ownerQuestionHeld = OwnerQuestionHoldAttentionView.Print(context.Kernel.Goals, listNow);
                 if (waits.Count > 0 || context.Kernel.Goals.Any(goal => goal.GateTestObligations
@@ -412,10 +413,9 @@ internal static partial class CliCommandHandlers
                 {
                     HumanWaitsTextView.Print(waits, listNow, goals: context.Kernel.Goals);
                 }
-                if (waits.Count > 0)
-                {
+                PlannerBriefAmendmentHoldAttentionView.PrintWaits(amendmentWaits, Console.Out);
+                if (waits.Count > 0 || (amendmentWaits.Length > 0 && queue.Count == 0))
                     return migratedHumanWaits > 0 || migratedCollaborationItems > 0;
-                }
 
                 if ((!printedCrossGoal && !ownerQuestionHeld) || queue.Count > 0) CollaborationItemsTextView.PrintAttentionQueue(queue);
                 return migratedHumanWaits > 0 || migratedCollaborationItems > 0;

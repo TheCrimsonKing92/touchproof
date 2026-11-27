@@ -146,9 +146,8 @@ internal sealed class DeferredNoChangeContextFixture : IDisposable
         var directory = Path.Combine(DataRoot, "context");
         Directory.CreateDirectory(directory);
         File.WriteAllText(Path.Combine(directory, "artifact-registry.json"), "{\"artifacts\":[]}");
-        // This overload uses the legacy marked-text ingress, which requires an Instructions boundary.
         return WorkerProfileDispatcher.BuildContextPackage(Goal, task, Worktree, directory,
-            new(Goal.Id, task.Id, task.RequiredRole, "Evidence", "## Instructions\nInspect evidence."),
+            TypedBriefSourceFixture.Create(Goal, task, "Inspect evidence."),
             currentCandidateSha: candidateSha ?? Candidate, deferredEvidence: context ?? Capture(candidateSha));
     }
 

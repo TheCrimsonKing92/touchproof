@@ -32,7 +32,7 @@ public sealed class PlannerGateTestSelectorFormRoutingTests : IDisposable
         var task = new TaskSpec(TaskId.New(), "Plan test evidence", AgentRole.Planner);
         var goal = kernel.CreateGoal("Choose runner selectors", [task]);
         var brief = kernel.BuildTaskBriefSource(goal.Id, task.Id, roleRequirementStack: stack, testCheckCommands: commands)
-            .ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false).Content;
+            .ProjectLegacyMarkedTextV1().Content;
         var context = WorkerContextArtifacts.Write(goal, task, worktree, targetHome: targetHome);
         var currentTask = File.ReadAllText(Path.Combine(context, "current-task.md"));
 

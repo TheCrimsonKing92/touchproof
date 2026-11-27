@@ -248,7 +248,7 @@ public sealed class GoalScopedClarificationAnswersBriefTests
     private static string Build(GoalContext context, AgentRole role) =>
         context.Kernel.BuildTaskBriefSource(
             context.Goal.Id, context.Goal.Tasks.Single(task => task.RequiredRole == role).Id)
-            .ProjectLegacyMarkedTextV1(false).Content;
+            .ProjectLegacyMarkedTextV1().Content;
 
     private static string[] EntryLines(string section) =>
         section.Split(Environment.NewLine).Where(line => line.StartsWith("- ", StringComparison.Ordinal)).ToArray();
