@@ -67,7 +67,7 @@ internal static class AcceptanceImpactSelectionReader
             : ReverseDependencyTestImpactReader.Read(checkout, productionSources, bypassCache: bypassCache,
                 propagateShippingSourceReach: true, changedLineRanges: changedLineRanges);
         var augmented = ImpactReplayChangedTestClassSelection.Read(checkout, changedTests, selection.TestClassNames, routing,
-            supportClosureThreshold);
+            supportClosureThreshold, sources: sources);
         selection = ImpactReplaySelectionAugmentation.Apply(selection, changedFiles, sources, classes, guards,
             out var declaredGuards, scopeChangedTestsByProject ? null : augmented.QualifiedClasses,
             testProjectDirectories, out var assemblyScans, scanFiles, scanChanges);

@@ -28,7 +28,8 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
         IReadOnlyList<ImpactReplayChangedSourceRouting.Project> testProjects, Func<ISet<string>> runnableClasses,
         ImpactReplayChangedSupportScanProbe? probe = null, int threshold = DefaultClosureThreshold,
         int maximumVisited = ImpactReplayChangedSupportReferrerClosure.DefaultMaximumVisited,
-        Func<string, IReadOnlyList<string>>? deletedSourceProjects = null)
+        Func<string, IReadOnlyList<string>>? deletedSourceProjects = null,
+        ImpactReplayTestSourceIndex? sources = null)
     {
         if (changedFiles.Count == 0) return ImpactReplayChangedSupportSelection.Empty;
         string Relative(string path) => Path.GetRelativePath(checkout, Path.GetFullPath(path, checkout)).Replace('\\', '/');
@@ -38,12 +39,20 @@ internal sealed class ImpactReplayChangedSupportReferenceScan
             .Order(StringComparer.Ordinal).ToArray();
         var owners = testProjects.SelectMany(project => project.Sources.Select(source => (source, project)))
             .ToLookup(item => item.source, item => item.project, StringComparer.OrdinalIgnoreCase);
+        var indexedTrees = new Dictionary<string, SyntaxTree>(StringComparer.OrdinalIgnoreCase);
+        if (sources is not null)
+            foreach (var tree in sources.Trees)
+                indexedTrees.TryAdd(tree.FilePath, tree);
         var trees = new Dictionary<string, SyntaxTree>(StringComparer.OrdinalIgnoreCase);
         foreach (var source in owners.Select(group => group.Key).Order(StringComparer.Ordinal))
         {
             try
             {
-                var tree = CSharpSyntaxTree.ParseText(File.ReadAllText(source), path: source);
+                var tree = indexedTrees.TryGetValue(source, out var indexedTree)
+                    ? indexedTree
+                    : CSharpSourceFileRootReader.Read(source).SyntaxTree;
+                if (!tree.FilePath.Equals(source, StringComparison.Ordinal))
+                    tree = tree.WithFilePath(source);
                 if (tree.GetDiagnostics().Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
                     return IncompleteInventory($"Changed test support source could not be parsed: {Path.GetRelativePath(checkout, source)}");
                 trees.Add(source, tree);
