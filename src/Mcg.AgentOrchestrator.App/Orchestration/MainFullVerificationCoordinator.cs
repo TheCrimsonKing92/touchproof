@@ -14,6 +14,7 @@ internal sealed class MainFullVerificationCoordinator(
     internal const string Event = "MAIN_FULL_VERIFICATION";
     private const int MaxHoldLines = 10;
     private readonly CancellationTokenSource _stop = new();
+    private readonly Lock _sync = new();
     private MainFullVerificationRecord? _active;
     private Task<(MainFullVerificationResult Result, DateTimeOffset CompletedAt)>? _execution;
     private bool _initialized;
@@ -45,17 +46,29 @@ internal sealed class MainFullVerificationCoordinator(
 
     internal MainFullVerificationScheduler.Decision Service(int waitingGoalGates, Func<bool> capacityAdmitted)
     {
-        Poll();
+        lock (_sync)
+            return ServiceCore(waitingGoalGates, capacityAdmitted);
+    }
+
+    private MainFullVerificationScheduler.Decision ServiceCore(int waitingGoalGates, Func<bool> capacityAdmitted)
+    {
+        PollCore();
+        if (_active is not null) return MainFullVerificationScheduler.Decision.NotDue;
+
         var now = clock();
-        var previous = store.Latest("admitted")?.AdmittedAt;
+        var previous = store.Latest("admitted");
         var interval = TimeSpan.FromSeconds(intervalSeconds);
-        if (_active is not null || (previous is { } admitted && now - admitted < interval))
+        var completed = previous is null ? null : store.Read(previous, "completed");
+        var retryDue = MainFullVerificationRetryPolicy.IsDue(completed, now);
+        var outstanding = previous is not null && completed is null;
+        if (outstanding || (!retryDue && !MainFullVerificationScheduler.IntervalElapsed(previous?.AdmittedAt, now, interval)))
             return MainFullVerificationScheduler.Decision.NotDue;
 
         var commit = mainTip();
-        var alreadyRequested = commit is not null && store.Contains(commit, "admitted");
-        var decision = MainFullVerificationScheduler.Decide(commit, alreadyRequested, previous, now, interval,
-            outstanding: false, waitingGoalGates, capacityAdmitted: true);
+        var retriesPrevious = commit is not null && retryDue && commit == previous?.Commit;
+        var alreadyRequested = commit is not null && (commit == previous?.Commit || store.Contains(commit, "admitted"));
+        var decision = MainFullVerificationScheduler.Decide(commit, alreadyRequested, previous?.AdmittedAt, now, interval,
+            outstanding, waitingGoalGates, capacityAdmitted: true, shortRetryDue: retriesPrevious);
         if (decision != MainFullVerificationScheduler.Decision.Admit) return decision;
         if (!capacityAdmitted() || reserve(commit!, _stop.Token) is not { } run)
             return MainFullVerificationScheduler.Decision.Deferred;
@@ -66,8 +79,12 @@ internal sealed class MainFullVerificationCoordinator(
             var passedWithUnconfirmed = store.Latest("completed", MainFullVerificationResult.PassedWithUnconfirmed);
             var lastPassed = (passedWithUnconfirmed?.CompletedAt > passed?.CompletedAt
                 ? passedWithUnconfirmed : passed ?? passedWithUnconfirmed)?.Commit;
-            var record = new MainFullVerificationRecord(commit!, now, intervalSeconds);
-            store.Write("admitted", record, now);
+            var record = store.ReserveAdmission(commit!, retriesPrevious ? previous!.Attempt : 0, now, intervalSeconds);
+            if (record is null)
+            {
+                run.Lease?.Dispose();
+                return MainFullVerificationScheduler.Decision.NotDue;
+            }
             var started = clock();
             record = record with { StartedAt = started };
             store.Write("started", record, started);
@@ -88,10 +105,16 @@ internal sealed class MainFullVerificationCoordinator(
 
     internal void Poll()
     {
+        lock (_sync)
+            PollCore();
+    }
+
+    private void PollCore()
+    {
         if (!_initialized)
         {
-            if (store.Latest("admitted") is { } pending && !store.Contains(pending.Commit, "completed"))
-                Complete(store.Latest("started") is { } started && started.Commit == pending.Commit ? started : pending,
+            if (store.Latest("admitted") is { } pending && store.Read(pending, "completed") is null)
+                Complete(store.Read(pending, "started") ?? pending,
                     new("interrupted", "conductor-generation-ended"), clock());
             _initialized = true;
         }
@@ -106,6 +129,8 @@ internal sealed class MainFullVerificationCoordinator(
 
         if (store.Latest("completed") is { } latest)
             PublishHold(latest);
+        if (store.Latest("completed", "incomplete") is { } incomplete)
+            PublishAttention(incomplete, "incomplete-item-raised", "incomplete");
     }
 
     private static MainFullVerificationResult Execute(MainFullVerificationRun run, string? lastPassed, CancellationToken token)
@@ -123,13 +148,13 @@ internal sealed class MainFullVerificationCoordinator(
         }
         catch (Exception ex)
         {
-            return new("incomplete", $"{ex.GetType().Name}: {ex.Message}");
+            return new("incomplete", $"{ex.GetType().Name}: {ex.Message}", FromRunException: true);
         }
     }
 
     private void Complete(MainFullVerificationRecord active, MainFullVerificationResult result, DateTimeOffset now)
     {
-        if (store.Contains(active.Commit, "completed")) return;
+        if (store.Read(active, "completed") is not null) return;
         var duration = Math.Max(0, (now - (active.StartedAt ?? active.AdmittedAt)).TotalSeconds);
         var completed = active with { CompletedAt = now, DurationSeconds = duration, Result = result };
         store.Write("completed", completed, now);
@@ -157,14 +182,26 @@ internal sealed class MainFullVerificationCoordinator(
             store.Write("hold-published", record, clock());
         }
 
-        if (store.Contains(record.Commit, "item-raised")) return;
-        var correlation = $"main-full-verification-failure:{record.Commit}";
+        PublishAttention(record, "item-raised", "failure");
+    }
+
+    private void PublishAttention(MainFullVerificationRecord record, string operation, string category)
+    {
+        if (store.Contains(record.Commit, operation)) return;
+        var correlation = $"main-full-verification-{category}:{record.Commit}";
         try
         {
             if (!items.ListAsync().GetAwaiter().GetResult().Any(item => item.CorrelationKey == correlation))
-                items.RaiseAsync(CollaborationItemType.Verify, null, $"Main full verification failed at {record.Commit}",
-                    JsonSerializer.Serialize(record), correlation).GetAwaiter().GetResult();
-            store.Write("item-raised", record, clock());
+            {
+                var result = record.Result!;
+                var body = result.Outcome == "incomplete"
+                    ? $"attempt={record.Attempt}/{MainFullVerificationRetryPolicy.MaxAttempts} detail={OneLine(result.Detail ?? "none")}"
+                    : JsonSerializer.Serialize(record);
+                items.RaiseAsync(CollaborationItemType.Verify, null,
+                    $"Main full verification {result.Outcome} at {record.Commit}", body, correlation)
+                    .GetAwaiter().GetResult();
+            }
+            store.Write(operation, record, clock());
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException or InvalidOperationException)
         {
@@ -176,11 +213,17 @@ internal sealed class MainFullVerificationCoordinator(
 
     public void Dispose()
     {
+        lock (_sync)
+            DisposeCore();
+    }
+
+    private void DisposeCore()
+    {
         try
         {
             if (_active is not null)
             {
-                Poll();
+                PollCore();
                 if (_active is { } active)
                 {
                     _stop.Cancel();

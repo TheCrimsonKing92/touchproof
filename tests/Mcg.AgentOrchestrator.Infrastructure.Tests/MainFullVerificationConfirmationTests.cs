@@ -132,7 +132,9 @@ public sealed class MainFullVerificationConfirmationTests
         Assert.Null(result.Failures);
         Assert.Equal([Third], result.Unconfirmed);
         Assert.DoesNotContain(lines, line => line.StartsWith("MAIN_FULL_VERIFICATION_HOLD ", StringComparison.Ordinal));
-        Assert.Empty(await items.ListAsync());
+        var item = Assert.Single(await items.ListAsync());
+        Assert.Equal(Mcg.AgentOrchestrator.Core.CollaborationItemType.Verify, item.Type);
+        Assert.Equal("main-full-verification-incomplete:current", item.CorrelationKey);
     }
 
     [Fact]
