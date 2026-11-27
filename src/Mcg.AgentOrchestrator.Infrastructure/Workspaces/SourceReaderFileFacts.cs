@@ -149,7 +149,7 @@ internal sealed record SourceReaderFileFacts(
                 $"{type.Identifier.ValueText}`{(type as TypeDeclarationSyntax)?.TypeParameterList?.Parameters.Count ?? 0}" +
                 (type as TypeDeclarationSyntax)?.ParameterList?.WithoutTrivia().ToFullString() +
                 (type is ClassDeclarationSyntax ? null : type.BaseList?.WithoutTrivia().ToFullString()),
-            DelegateDeclarationSyntax type => type.WithSemicolonToken(default).WithoutTrivia().ToFullString(),
+            DelegateDeclarationSyntax type => type.WithoutTrivia().ToFullString(),
             OperatorDeclarationSyntax op => op.WithBody(null).WithExpressionBody(null)
                 .WithSemicolonToken(default).WithoutTrivia().ToFullString(),
             ConversionOperatorDeclarationSyntax conversion => conversion.WithBody(null).WithExpressionBody(null)
