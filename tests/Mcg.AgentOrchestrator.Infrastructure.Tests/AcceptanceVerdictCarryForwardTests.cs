@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 using static ConductorDriverTests;
+using static ConductorDriverTestsLandingCompletionDecision;
 using static LandingExecutorTests;
 
 public sealed class AcceptanceVerdictCarryForwardTests : HostCapacityBoundTestBase
@@ -240,6 +241,12 @@ public sealed class AcceptanceVerdictCarryForwardTests : HostCapacityBoundTestBa
                 "verified=scripts/Invoke-ProcessLifecycleEvidenceHarness.ps1",
                 held.Reason,
                 StringComparison.Ordinal);
+            var decision = AssertDecisionAndPayload(held, "racing-landing-carry-forward", "Hold", 1, "main-advance-overlap",
+                held.Reason, "Verified", null);
+            AssertFact(decision, "disposition", "Overlap");
+            AssertFact(decision, "overlapKind", "Script");
+            AssertFact(decision, "landedPath", "docs/architecture-migration.md");
+            AssertFact(decision, "verifiedPath", "scripts/Invoke-ProcessLifecycleEvidenceHarness.ps1");
             Assert.Equal(
                 $"acceptance-revalidation:{ReadGit(fixture.Worktree, "rev-parse", "HEAD")}:" +
                 ReadGit(repo, "rev-parse", "main"),
@@ -399,6 +406,9 @@ public sealed class AcceptanceVerdictCarryForwardTests : HostCapacityBoundTestBa
                 StringComparison.Ordinal);
             Assert.Contains("revalidation required before landing", held.Reason, StringComparison.Ordinal);
             Assert.Contains("disposition=unknown", held.Reason, StringComparison.Ordinal);
+            var decision = AssertDecisionAndPayload(held, "racing-landing-carry-forward", "Hold", 2, "main-advance-unknown",
+                held.Reason, "Verified", null);
+            AssertFact(decision, "disposition", "Unknown");
             Assert.DoesNotContain(
                 GoalOperationJournal.Read(repo, fixture.Goal.Id).Entries,
                 entry => entry.Operation == "conductor:acceptance-main-advance-carry");
