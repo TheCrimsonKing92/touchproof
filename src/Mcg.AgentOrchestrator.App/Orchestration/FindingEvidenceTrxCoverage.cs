@@ -44,8 +44,7 @@ internal static class FindingEvidenceTrxCoverage
             {
                 if (!FindingEvidenceFilterSyntax.TryGetExpandableClass(selection.TestClass, out var token, out _))
                     return false; // Unknown coverage never grants continuation authority.
-                var matching = identities.Where(id => id == token || id.StartsWith(token + ".", StringComparison.Ordinal) ||
-                    id.EndsWith("." + token, StringComparison.Ordinal) || id.Contains("." + token + ".", StringComparison.Ordinal)).ToArray();
+                var matching = identities.Where(id => TrxResultClassNames.IsBoundaryMatch(id, token)).ToArray();
                 if (matching.Length == 0 || !HasExecutedIdentities(arm, matching, requirePassed)) return false;
             }
             return true;
@@ -193,8 +192,7 @@ internal static class FindingEvidenceTrxCoverage
                     {
                         failedCount++;
                     }
-                    executedClasses.Add(className);
-                    executedClasses.Add(className.Split('.').Last());
+                    executedClasses.UnionWith(TrxResultClassNames.Aliases(className));
                 }
             }
 
