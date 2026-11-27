@@ -51,6 +51,43 @@ public sealed class ReverseDependencyShippingMemberHopTests
     }
 
     [Fact]
+    public void SameHopShippingPeer_KeepsForwardingMemberReach()
+    {
+        using var repository = new Repository();
+        WriteStore(repository);
+        repository.Write("src/Fixture/Worker.cs", """
+            internal class Worker
+            {
+                internal static int Dispatch(System.Func<int> run) => run();
+                internal static int Run() => Store.Save();
+            }
+            """);
+        repository.Write(Hub, """
+            internal partial class Hub
+            {
+                internal static int Write() => Worker.Dispatch(Worker.Run);
+                internal static int Direct() => Store.Save();
+                internal static int Read() => 0;
+            }
+            """);
+        repository.Write("src/Fixture/Hub.Other.cs", """
+            internal partial class Hub
+            {
+                internal static int Audit() => 0;
+            }
+            """);
+        WriteHubTests(repository);
+        repository.WriteTest("DirectTests", "Hub.Direct()");
+        repository.WriteTest("AuditTests", "Hub.Audit()");
+
+        var selection = repository.Read(Store);
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Assert.Equal(["DirectTests", "WriteTests"], selection.TestClassNames);
+        Assert.Equal([("Hub", "DirectTests"), ("Hub", "WriteTests")], repository.ShippingReach);
+    }
+
+    [Fact]
     public void NonPartialSeed_KeepsDirectAndTransitiveCallers()
     {
         using var repository = new Repository();

@@ -250,7 +250,7 @@ internal static class ReverseDependencyTestImpactReader
 
             var seenPaths = changedPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var selectedTestClasses = new SortedSet<string>(StringComparer.Ordinal);
-            HashSet<string>? shippingFrontier = shippingReachDiagnostics is null ? null : new(StringComparer.Ordinal);
+            HashSet<string>? shippingFrontier = null;
             for (var hop = 1; hop <= MaximumDependencyHops; hop++)
             {
                 headroom = headroom with
@@ -314,16 +314,20 @@ internal static class ReverseDependencyTestImpactReader
                     }
                 }
 
+                if (hop == MaximumDependencyHops)
+                    break;
+
                 foreach (var consumer in consumers)
                 {
                     seenPaths.Add(consumer.Path);
                 }
 
-                if (shippingFrontier is not null && hop == 1)
-                    shippingFrontier.UnionWith(consumers.Where(file => !file.IsTargetTestProject)
+                if (propagateShippingSourceReach || shippingReachDiagnostics is not null)
+                    shippingFrontier = consumers.Where(file => !file.IsTargetTestProject)
                         .SelectMany(file => file.Symbols!.DeclaredTypes)
                         .Where(ReferencesFrontier)
-                        .Select(declaration => declaration.Name));
+                        .Select(declaration => declaration.Name)
+                        .ToHashSet(StringComparer.Ordinal);
 
                 frontier = MergeFrontier(consumers
                     .SelectMany(file => file.Symbols!.DeclaredTypes
@@ -337,7 +341,7 @@ internal static class ReverseDependencyTestImpactReader
                                 ? TestSelectionMode.AllReferencingClasses
                                 : TestSelectionMode.OwnedClassOnly,
                             ConsumerFilter(declaration, frontier, knownMembersByType,
-                                followShippingMembers: !file.IsTargetTestProject && propagateShippingSourceReach)))));
+                                !file.IsTargetTestProject && propagateShippingSourceReach ? shippingFrontier : null)))));
                 if (frontier.Length == 0)
                 {
                     break;
@@ -909,10 +913,10 @@ internal static class ReverseDependencyTestImpactReader
         CSharpTestClassScanner.SourceTypeDeclaration declaration,
         IReadOnlyList<FrontierSymbol> frontier,
         IReadOnlyDictionary<string, HashSet<string>> knownMembersByType,
-        bool followShippingMembers)
+        IReadOnlySet<string>? shippingFrontier)
     {
         var fallback = declaration.IsPartial ? MemberNames(declaration.Members) : null;
-        if (!followShippingMembers || declaration.UnattributedIdentifiers is not { } unattributed ||
+        if (shippingFrontier is null || declaration.UnattributedIdentifiers is not { } unattributed ||
             declaration.Members.Any(member => member.ReferencedIdentifiers is null))
             return fallback;
 
@@ -945,6 +949,13 @@ internal static class ReverseDependencyTestImpactReader
             if (!matchedMember)
                 return fallback;
         }
+
+        // A forwarding member can reach the change through another consumer on this hop,
+        // including through callbacks whose targets are outside this declaration.
+        foreach (var member in declaration.Members)
+            if (member.ReferencedIdentifiers!.Any(identifier =>
+                    identifier != declaration.Name && shippingFrontier.Contains(identifier)))
+                names.Add(member.Name);
 
         return CompleteMemberFilter(declaration.Members, names, unattributed) ?? fallback;
     }
