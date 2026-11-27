@@ -2458,7 +2458,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             {
                 projected = ids.Where(candidates.ArchiveEvidence.ContainsKey)
                     .Select(id => candidates.ArchiveEvidence[id].Evidence).ToArray();
-                var remaining = ids.Where(id => !candidates.ArchiveEvidence.ContainsKey(id)).ToArray();
+                var remaining = ids.Where(id => !candidates.ArchiveEvidence.ContainsKey(id) &&
+                    !candidates.FailedArchiveProjections.Contains(id)).ToArray();
                 if (remaining.Length != 0)
                     projected = projected.Concat(await ReadProviderHoldSeedEvidenceAsync(remaining, cancellationToken) ?? []).ToArray();
             }
