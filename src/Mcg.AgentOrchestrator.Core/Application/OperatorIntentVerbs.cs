@@ -19,6 +19,7 @@ public static class OperatorIntentVerbs
     public const string Retry = "retry";
     public const string CancelDispatch = "cancel-dispatch";
     public const string Answer = "answer";
+    public const string HumanInputDismiss = "human-input-dismiss";
     public const string VerifyManual = "verify-manual";
     public const string Adjudicate = "adjudicate";
     public const string ApprovePolicyChange = "approve-policy-change";
@@ -77,6 +78,8 @@ public enum OperatorAnswerTargetKind
     Clarification = 1,
     HumanInput = 2
 }
+
+public sealed record HumanInputDismissOperatorIntentPayload(string RequestId);
 
 public sealed record AnswerOperatorIntentPayload(
     OperatorAnswerTargetKind TargetKind,
