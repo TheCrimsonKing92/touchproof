@@ -116,8 +116,9 @@ public static class GoalReadinessPreflight
         var highRisk = FindHighRiskSignals(text);
         var external = ExternalSignals.Where(tokens.Contains).Order(StringComparer.OrdinalIgnoreCase).ToArray();
         var requiresWorkspace = goal.Tasks.Any(task => task.RequiredRole is AgentRole.Developer or AgentRole.Tester);
-        var worktree = (resolveWorktree ?? GoalWorktrees.TryResolve)(executionDirectory, goal.Id);
-        var hasWorkspace = !requiresWorkspace || worktree is not null;
+        var projection = GoalExecutionProjection.Build(goal, agents, executionDirectory, profiles, providerHoldScope,
+            now ?? DateTimeOffset.UtcNow, resolveWorktree);
+        var hasWorkspace = !requiresWorkspace || projection.LifecycleFacts.WorkspaceExists;
         var taskReports = BuildTaskReports(goal, agents);
         var allScopes = taskReports.SelectMany(task => task.FileScopes).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var fileScopeConfidence = allScopes.Length switch
@@ -128,7 +129,7 @@ public static class GoalReadinessPreflight
             _ => "high"
         };
 
-        var plannedTestLanes = PlannedTestLaneFindings(goal, worktree ?? executionDirectory, projectHomeDirectory);
+        var plannedTestLanes = PlannedTestLaneFindings(goal, projection.WorkspacePath ?? executionDirectory, projectHomeDirectory);
         var developers = goal.Tasks.Where(task => task.RequiredRole == AgentRole.Developer).ToArray();
         // Scout planning can repair the brief. Developer admission below always uses the blocking findings.
         var planningFirst = developers.Length > 0 && developers.All(task =>
@@ -139,7 +140,7 @@ public static class GoalReadinessPreflight
                 ? finding with { Severity = GoalReadinessSeverity.Warning }
                 : finding));
 
-        if (requiresWorkspace && worktree is null)
+        if (!hasWorkspace)
         {
             findings.Add(new GoalReadinessFinding(
                 GoalReadinessSeverity.Blocker,
@@ -195,14 +196,7 @@ public static class GoalReadinessPreflight
                 CanOverride: true));
         }
 
-        // Always evaluate the canonical dispatch verdict when profiles are available. Existing
-        // workspace/risk findings must not mask a held provider binding in ordinary status.
-        var readinessVerdict = profiles is not null
-            ? DispatchReadinessAssessment.Evaluate(
-                goal, providerHoldScope, agents, profiles, now ?? DateTimeOffset.UtcNow).Verdict
-            : DispatchReadinessRules.HasAssignedDispatchCandidates(goal)
-                ? (DispatchReadinessVerdict)new DispatchReadinessReady()
-                : new DispatchReadinessBlocked("No assigned dispatch candidates");
+        var readinessVerdict = projection.Verdict;
         switch (readinessVerdict)
         {
             case DispatchReadinessDeferred deferred:
