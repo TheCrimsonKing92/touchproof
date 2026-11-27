@@ -292,7 +292,9 @@ internal static class CSharpTestClassScanner
         int StartLine,
         int EndLine,
         IReadOnlyList<SourceMemberDeclaration> Members,
-        IReadOnlyList<SourceTypeDeclaration> NestedTypes);
+        IReadOnlyList<SourceTypeDeclaration> NestedTypes,
+        IReadOnlySet<string>? UnattributedIdentifiers = null,
+        IReadOnlySet<int>? UnattributedLines = null);
 
     internal sealed record SourceSymbols(
         IReadOnlyList<SourceTypeDeclaration> DeclaredTypes,
@@ -343,10 +345,28 @@ internal static class CSharpTestClassScanner
             classNames);
         return true;
 
+        bool IsReferencedIdentifier(int index) => tokens[index].IsIdentifier && !declarationNameIndexes.Contains(index);
+
         SourceTypeDeclaration ReadSourceTypeDeclaration(TypeDeclaration declaration)
         {
             var members = new List<SourceMemberDeclaration>();
             var nestedTypes = new List<SourceTypeDeclaration>();
+            var declarationStart = FindDeclarationStart(tokens, declaration.KeywordIndex);
+            var memberTokens = new bool[declaration.CloseBraceIndex - declarationStart + 1];
+            void AddMember(string name, int start, int end)
+            {
+                var identifiers = new HashSet<string>(StringComparer.Ordinal);
+                for (var index = start; index <= end; index++)
+                {
+                    memberTokens[index - declarationStart] = true;
+                    if (IsReferencedIdentifier(index))
+                        identifiers.Add(tokens[index].Value);
+                }
+
+                members.Add(new SourceMemberDeclaration(name, tokens[start].Line, tokens[end].Line, identifiers));
+            }
+
+            Action<string, int, int> addMember = AddMember;
             if (tokens[declaration.KeywordIndex].Value == "record")
             {
                 var parameterStart = declaration.NameIndex + 1;
@@ -360,7 +380,7 @@ internal static class CSharpTestClassScanner
                     var parameterEnd = FindMatching(tokens, parameterStart, "(", ")");
                     if (parameterEnd > parameterStart && parameterEnd <= declaration.CloseBraceIndex)
                     {
-                        ReadNamedSegments(tokens, parameterStart + 1, parameterEnd, members);
+                        ReadNamedSegments(tokens, parameterStart + 1, parameterEnd, addMember);
                     }
                 }
             }
@@ -375,7 +395,7 @@ internal static class CSharpTestClassScanner
                     continue;
                 }
 
-                var end = ReadMember(tokens, declaration, declarationsByKeyword, start, members, out var nested);
+                var end = ReadMember(tokens, declaration, declarationsByKeyword, start, addMember, out var nested);
                 if (nested is not null)
                 {
                     nestedTypes.Add(ReadSourceTypeDeclaration(nested));
@@ -384,32 +404,43 @@ internal static class CSharpTestClassScanner
                 start = end + 1;
             }
 
+            var referencedIdentifiers = new HashSet<string>(StringComparer.Ordinal);
+            var unattributedIdentifiers = new HashSet<string>(StringComparer.Ordinal);
+            var unattributedLines = new HashSet<int>();
+            for (var index = declarationStart; index <= declaration.CloseBraceIndex; index++)
+            {
+                var token = tokens[index];
+                var unattributed = !memberTokens[index - declarationStart];
+                if (unattributed)
+                    unattributedLines.Add(token.Line);
+
+                if (IsReferencedIdentifier(index))
+                {
+                    referencedIdentifiers.Add(token.Value);
+                    if (unattributed)
+                        unattributedIdentifiers.Add(token.Value);
+                }
+            }
+
             return new SourceTypeDeclaration(
                 declaration.Name,
                 declaration.IsPartial,
-                ReadReferencedIdentifiers(tokens, declaration, declarationNameIndexes),
-                tokens[FindDeclarationStart(tokens, declaration.KeywordIndex)].Line,
+                referencedIdentifiers,
+                tokens[declarationStart].Line,
                 tokens[declaration.CloseBraceIndex].Line,
                 members.Count == 0 ? [] : members.ToArray(),
-                nestedTypes.Count == 0 ? [] : nestedTypes.ToArray());
+                nestedTypes.Count == 0 ? [] : nestedTypes.ToArray(),
+                unattributedIdentifiers,
+                unattributedLines);
         }
     }
-
-    private static IReadOnlySet<string> ReadReferencedIdentifiers(
-        IReadOnlyList<Token> tokens,
-        TypeDeclaration declaration,
-        IReadOnlySet<int> declarationNameIndexes) =>
-        Enumerable.Range(declaration.KeywordIndex, declaration.CloseBraceIndex - declaration.KeywordIndex + 1)
-            .Where(index => tokens[index].IsIdentifier && !declarationNameIndexes.Contains(index))
-            .Select(index => tokens[index].Value)
-            .ToHashSet(StringComparer.Ordinal);
 
     private static int ReadMember(
         IReadOnlyList<Token> tokens,
         TypeDeclaration owner,
         IReadOnlyDictionary<int, TypeDeclaration> declarationsByKeyword,
         int start,
-        List<SourceMemberDeclaration> members,
+        Action<string, int, int> addMember,
         out TypeDeclaration? nested)
     {
         nested = null;
@@ -428,8 +459,7 @@ internal static class CSharpTestClassScanner
                 candidate.CloseBraceIndex < owner.CloseBraceIndex &&
                 FindDeclarationStart(tokens, index) == start)
             {
-                members.Add(new SourceMemberDeclaration(candidate.Name, tokens[start].Line,
-                    tokens[candidate.CloseBraceIndex].Line));
+                addMember(candidate.Name, start, candidate.CloseBraceIndex);
                 nested = candidate;
                 return candidate.CloseBraceIndex;
             }
@@ -507,7 +537,7 @@ internal static class CSharpTestClassScanner
 
         if (constantStart >= 0)
         {
-            ReadNamedSegments(tokens, constantStart, end, members, (tokens[start].Line, tokens[end].Line));
+            ReadNamedSegments(tokens, constantStart, end, addMember, (start, end));
         }
         else if (methodName < 0 || tokens[methodName].Value != owner.Name ||
                  (methodName > start && tokens[methodName - 1].Value == "."))
@@ -515,7 +545,7 @@ internal static class CSharpTestClassScanner
             var nameIndex = methodName >= 0 ? methodName : propertyName;
             if (nameIndex >= 0)
             {
-                members.Add(new SourceMemberDeclaration(tokens[nameIndex].Value, tokens[start].Line, tokens[end].Line));
+                addMember(tokens[nameIndex].Value, start, end);
             }
         }
 
@@ -526,8 +556,8 @@ internal static class CSharpTestClassScanner
         IReadOnlyList<Token> tokens,
         int start,
         int end,
-        List<SourceMemberDeclaration> members,
-        (int StartLine, int EndLine)? sharedSpan = null)
+        Action<string, int, int> addMember,
+        (int Start, int End)? sharedSpan = null)
     {
         var segmentStart = start;
         var nameIndex = -1;
@@ -538,8 +568,8 @@ internal static class CSharpTestClassScanner
             {
                 if (nameIndex >= 0)
                 {
-                    var (startLine, endLine) = sharedSpan ?? (tokens[segmentStart].Line, tokens[index - 1].Line);
-                    members.Add(new SourceMemberDeclaration(tokens[nameIndex].Value, startLine, endLine));
+                    var (memberStart, memberEnd) = sharedSpan ?? (segmentStart, index - 1);
+                    addMember(tokens[nameIndex].Value, memberStart, memberEnd);
                 }
 
                 segmentStart = index + 1;
