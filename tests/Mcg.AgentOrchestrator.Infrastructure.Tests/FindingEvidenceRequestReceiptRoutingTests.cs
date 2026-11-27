@@ -109,6 +109,7 @@ public sealed class FindingEvidenceRequestReceiptRoutingTests
         using var interrupted = new RoutingFixture(rerunFault);
         var terminal = rerunFault ? CandidateRerunUnusable : CandidateRerunRed;
         var statePath = Path.Combine(interrupted.Root, "state.db");
+        _ = StateDbMigrations.EnsureUpToDate(statePath);
         var repository = new SqliteOrchestratorStateRepository(statePath);
         var driver = interrupted.CreateDriver(receipt =>
         {
@@ -181,7 +182,7 @@ public sealed class FindingEvidenceRequestReceiptRoutingTests
             receipt => Assert.Equal(legacy.Receipt(CandidateRerunRequested), receipt),
             receipt => Assert.Equal(legacy.Receipt(terminal, RerunId), receipt));
 
-        using var typed = new RoutingFixture();
+        using var typed = new RoutingFixture(taskId: legacy.Task.Id);
         typed.WriteTyped(typed.Receipt(BaselineArmAbsent, OriginalId), "Baseline unavailable.");
         typed.WriteTyped(typed.Receipt(terminal, RerunId), "Rerun completed.");
         Assert.True(typed.Resume(typed.CreateDriver(), out var expected));
@@ -282,10 +283,10 @@ public sealed class FindingEvidenceRequestReceiptRoutingTests
         private readonly ConductorFocusedEvidenceRequestContext _context = new(Round, "receipt-routing-batch", []);
         private readonly bool _rerunFault;
 
-        public RoutingFixture(bool rerunFault = false)
+        public RoutingFixture(bool rerunFault = false, TaskId? taskId = null)
         {
             Kernel = new AgentOrchestratorKernel();
-            Task = new TaskSpec(TaskId.New(), "Review focused evidence", AgentRole.Reviewer);
+            Task = new TaskSpec(taskId ?? TaskId.New(), "Review focused evidence", AgentRole.Reviewer);
             Goal = Kernel.CreateGoal("Route typed receipts", [Task]);
             var finding = EvidenceFindingWithRequest("Run focused evidence", "receipt-route");
             _batch = new("receipt-routing-batch", "Infrastructure.Tests:ConductorDriverTests",
