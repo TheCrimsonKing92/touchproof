@@ -42,6 +42,7 @@ public sealed class GoalSnapshotArchiveTerminalAgeTests
         var after = fixture.GoalRows();
         var archive = fixture.ArchiveRows();
         Assert.Equal(old.Select(g => g.Id).Order(StringComparer.Ordinal), archive.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(old.Select(g => g.Id).Order(StringComparer.Ordinal), fixture.ProviderHoldEvidenceGoalIds());
         Assert.Equal(before[recent.Id], after[recent.Id]);
         foreach (var original in old)
         {
@@ -325,11 +326,27 @@ public sealed class GoalSnapshotArchiveTerminalAgeTests
             return rows;
         }
 
+        public List<string> ProviderHoldEvidenceGoalIds()
+        {
+            using var connection = Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT goal_id FROM provider_hold_seed_evidence ORDER BY goal_id";
+            using var reader = command.ExecuteReader();
+            var ids = new List<string>();
+            while (reader.Read()) ids.Add(reader.GetString(0));
+            return ids;
+        }
+
         public string OtherTableRows()
         {
             using var connection = Open();
             using var tables = connection.CreateCommand();
-            tables.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT IN ('goals', 'goal_snapshot_archive', 'attention_archive_evidence') ORDER BY name";
+            tables.CommandText = """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table'
+                  AND name NOT IN ('goals', 'goal_snapshot_archive', 'attention_archive_evidence', 'provider_hold_seed_evidence')
+                ORDER BY name
+                """;
             var names = new List<string>();
             using (var reader = tables.ExecuteReader())
                 while (reader.Read()) names.Add(reader.GetString(0));
