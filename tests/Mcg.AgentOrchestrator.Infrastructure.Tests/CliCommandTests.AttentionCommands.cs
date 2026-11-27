@@ -192,12 +192,15 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
             kernel,
             workspace);
 
-        Xunit.Assert.Equal(
+        Xunit.Assert.StartsWith(
             $"Dismissed 2 of 2 open attention item(s) for goal '{target.Id.Value}'.{Environment.NewLine}",
             dismissed);
-        Xunit.Assert.Equal(
+        Xunit.Assert.StartsWith(
             $"Dismissed 0 of 0 open attention item(s) for goal '{target.Id.Value}'.{Environment.NewLine}",
             repeated);
+        const string zeroHumanInputCounts = "human-input-dismiss-queued=0 non-dismissible-skipped=0";
+        Xunit.Assert.Contains($"collaboration-dismissed=2 {zeroHumanInputCounts}", dismissed);
+        Xunit.Assert.Contains($"collaboration-dismissed=0 {zeroHumanInputCounts}", repeated);
         var items = await store.ListAsync();
         Xunit.Assert.Equal(
             CollaborationItemStatus.Resolved,
