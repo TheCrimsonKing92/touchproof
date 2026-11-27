@@ -140,7 +140,10 @@ internal static class PromptContextFormatter
     public static string FormatTimelineEvent(ProgressEvent evt, bool includeTimestamp, TaskComplexity complexity)
     {
         var timestamp = includeTimestamp ? $"{evt.OccurredAt:u} " : string.Empty;
-        return $"- {timestamp}{evt.Kind}: {TrimTimelineMessage(evt.Message, complexity)}";
+        var message = evt.Kind == ProgressKind.OperatorTaskNote
+            ? evt.Message
+            : TrimTimelineMessage(evt.Message, complexity);
+        return $"- {timestamp}{evt.Kind}: {message}";
     }
 
     public static IReadOnlyList<ProgressEvent> SelectPromptTimelineEvents(IEnumerable<ProgressEvent> events, int maxEvents)
