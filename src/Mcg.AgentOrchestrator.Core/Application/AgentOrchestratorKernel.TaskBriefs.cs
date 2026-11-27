@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Core;
 
@@ -369,16 +370,9 @@ public sealed partial class AgentOrchestratorKernel
         var practiceLines = EngineeringPracticePromptRenderer.RenderBriefSection(
             task.RequiredRole,
             MatchEngineeringPractices(goal, task, reviewerScopeChangedFiles));
-        if (practiceLines.Count > 0)
-        {
-            segments.Add(TaskBriefSegment.Fixed(practiceLines));
-        }
+        AddFixedSection(practiceLines);
 
-        var standingRuleLines = WorkerStandingRules.RenderBriefSection(task.RequiredRole, contextDirectory, stack: roleRequirementStack);
-        if (standingRuleLines.Count > 0)
-        {
-            segments.Add(TaskBriefSegment.Fixed(standingRuleLines));
-        }
+        AddFixedSection(WorkerStandingRules.RenderBriefSection(task.RequiredRole, contextDirectory, stack: roleRequirementStack));
 
         ReviewerChangedFileScopeBriefSection.AppendTo(
             segments, task, integrationBranchPromptName,
@@ -388,19 +382,10 @@ public sealed partial class AgentOrchestratorKernel
 
         if (!string.IsNullOrWhiteSpace(task.VerificationPlan))
         {
-            segments.Add(TaskBriefSegment.Projected(
-                "task/verification-plan.md",
-                [
-                    "## Verification Plan",
-                    PromptContextFormatter.TrimVerificationPlanBlock(task.VerificationPlan, complexity),
-                    string.Empty
-                ],
-                [
-                    "## Verification Plan",
-                    "Read current-task.md in the context directory for the full verification plan; inline plan collapsed to stay under the role file-access prompt budget.",
-                    string.Empty
-                ],
-                collapsePriority: 50));
+            AddProjectedSection("task/verification-plan.md", "## Verification Plan",
+                [PromptContextFormatter.TrimVerificationPlanBlock(task.VerificationPlan, complexity)],
+                "Read current-task.md in the context directory for the full verification plan; inline plan collapsed to stay under the role file-access prompt budget.",
+                collapsePriority: 50);
         }
 
         segments.AddRange(RetryCorrectionObligationBriefSection.RenderRetryFeedbackProjection(task));
@@ -447,87 +432,47 @@ public sealed partial class AgentOrchestratorKernel
             segments.Add(TaskBriefSegment.Fixed(prerequisiteEvidenceSection.Lines));
         }
         segments.AddRange(ClarificationsAndRulingsDigest.RenderSegments(GoalScopedClarificationAnswersQuery.Select(HumanInputRequests, goal, taskId), goal.AuthoritativeBrief.Version));
-        var frozenFactRulingLines = FrozenFactRulingBriefSection.Render(HumanInputRequests, goalId, task.RequiredRole);
-        if (frozenFactRulingLines.Count > 0)
-            segments.Add(TaskBriefSegment.Fixed(frozenFactRulingLines));
+        AddFixedSection(FrozenFactRulingBriefSection.Render(HumanInputRequests, goalId, task.RequiredRole));
+        AddFixedSection(ChangedExistingTestsBriefSection.Render(task.RequiredRole, changedExistingTests, changedExistingTestsDiagnostic));
 
-        var changedExistingTestLines = ChangedExistingTestsBriefSection.Render(task.RequiredRole, changedExistingTests, changedExistingTestsDiagnostic);
-        if (changedExistingTestLines.Count > 0)
-            segments.Add(TaskBriefSegment.Fixed(changedExistingTestLines));
-
-        if (task.LastExecution is not null)
+        if (task.LastExecution is { } lastExecution)
         {
-            segments.Add(TaskBriefSegment.Projected(
-                "task/last-model-output.txt",
-                [
-                    "## Last Model Output",
-                    PromptContextFormatter.TrimEvidenceBlock(task.LastExecution.Output, complexity),
-                    string.Empty
-                ],
-                [
-                    "## Last Model Output",
-                    "Read current-task.md in the context directory for last model output; inline output collapsed to stay under the role file-access prompt budget.",
-                    string.Empty
-                ],
-                collapsePriority: 30));
+            AddProjectedSection("task/last-model-output.txt", "## Last Model Output",
+                [PromptContextFormatter.TrimEvidenceBlock(lastExecution.Output, complexity)],
+                "Read current-task.md in the context directory for last model output; inline output collapsed to stay under the role file-access prompt budget.",
+                collapsePriority: 30);
         }
 
-        if (task.LastDispatch is not null)
+        if (task.LastDispatch is { } lastDispatch)
         {
-            segments.Add(TaskBriefSegment.Projected(
-                "task/last-dispatch.json",
+            AddProjectedSection("task/last-dispatch.json", "## Last Dispatch",
                 [
-                    "## Last Dispatch",
-                    $"Worker: {task.LastDispatch.WorkerName}",
-                    $"Command: {PromptContextFormatter.TrimPromptBlock(task.LastDispatch.Command)}",
-                    $"Working directory: {task.LastDispatch.WorkingDirectory}",
-                    string.Empty
+                    $"Worker: {lastDispatch.WorkerName}",
+                    $"Command: {PromptContextFormatter.TrimPromptBlock(lastDispatch.Command)}",
+                    $"Working directory: {lastDispatch.WorkingDirectory}"
                 ],
-                [
-                    "## Last Dispatch",
-                    "Read current-task.md in the context directory for last dispatch details; inline command collapsed to stay under the role file-access prompt budget.",
-                    string.Empty
-                ],
-                collapsePriority: 20));
+                "Read current-task.md in the context directory for last dispatch details; inline command collapsed to stay under the role file-access prompt budget.",
+                collapsePriority: 20);
         }
 
-        if (task.LastVerification is not null)
+        if (task.LastVerification is { } verification)
         {
-            segments.Add(TaskBriefSegment.Fixed(
-                [
-                    "## Last Verification",
-                    $"Command: {task.LastVerification.Command}",
-                    $"Exit code: {task.LastVerification.ExitCode}",
-                    $"Verification history count: {task.VerificationHistory.Count}"
-                ]));
-            segments.Add(TaskBriefSegment.Projected(
-                "task/last-verification/stdout",
-                [
-                    $"Stdout: {PromptContextFormatter.TrimEvidenceBlock(task.LastVerification.StandardOutput, complexity)}",
-                ],
-                [
-                    "Read current-task.md in the context directory for stdout; inline verification output collapsed to stay under the role file-access prompt budget.",
-                ],
+            segments.Add(TaskBriefSegment.Fixed([
+                "## Last Verification",
+                $"Command: {verification.Command}",
+                $"Exit code: {verification.ExitCode}",
+                $"Verification history count: {task.VerificationHistory.Count}"
+            ]));
+            segments.Add(TaskBriefSegment.Projected("task/last-verification/stdout",
+                [$"Stdout: {PromptContextFormatter.TrimEvidenceBlock(verification.StandardOutput, complexity)}"],
+                ["Read current-task.md in the context directory for stdout; inline verification output collapsed to stay under the role file-access prompt budget."],
                 collapsePriority: 40));
-            var stderrLines = new[]
-            {
-                $"Stderr: {PromptContextFormatter.TrimEvidenceBlock(task.LastVerification.StandardError, complexity)}"
-            };
-            if (task.LastVerification.AuthoritativeStandardError is not null)
-            {
-                segments.Add(TaskBriefSegment.Projected(
-                    "task/last-verification/stderr",
-                    stderrLines,
-                    [
-                        "Read current-task.md in the context directory for stderr; inline verification error collapsed to stay under the role file-access prompt budget."
-                    ],
-                    collapsePriority: 40));
-            }
-            else
-            {
-                segments.Add(TaskBriefSegment.Fixed(stderrLines));
-            }
-
+            var stderrLines = new[] { $"Stderr: {PromptContextFormatter.TrimEvidenceBlock(verification.StandardError, complexity)}" };
+            segments.Add(verification.AuthoritativeStandardError is not null
+                ? TaskBriefSegment.Projected("task/last-verification/stderr", stderrLines,
+                    ["Read current-task.md in the context directory for stderr; inline verification error collapsed to stay under the role file-access prompt budget."],
+                    collapsePriority: 40)
+                : TaskBriefSegment.Fixed(stderrLines));
             segments.Add(TaskBriefSegment.Fixed([string.Empty]));
         }
 
@@ -535,11 +480,7 @@ public sealed partial class AgentOrchestratorKernel
         segments.AddRange(ReviewerEvidenceBriefSection.BuildCandidateEvidenceSegments(goal, task,
             string.IsNullOrWhiteSpace(targetHeadCommit) ? task.PreReviewEvidenceReceipt?.CandidateSha : targetHeadCommit));
 
-        var sliceBatchParentReview = ReviewerEvidenceBriefSection.BuildSliceBatchParentReviewBriefBlock(goal, task, _goals.Values);
-        if (sliceBatchParentReview.Count > 0)
-        {
-            segments.Add(TaskBriefSegment.Fixed(sliceBatchParentReview));
-        }
+        AddFixedSection(ReviewerEvidenceBriefSection.BuildSliceBatchParentReviewBriefBlock(goal, task, _goals.Values));
 
         var priorEvidence = usesFileAccessContext
             ? PromptContextFormatter.BuildPriorTaskEvidencePointerLines(goal.Tasks, taskId)
@@ -551,9 +492,8 @@ public sealed partial class AgentOrchestratorKernel
                 ? "Full evidence available at .orchestrator-handoff.md relative to the working directory."
                 : "Full evidence available in the context files; keep inline prior evidence as orientation only.");
             priorEvidenceLines.Add(string.Empty);
-            if (task.RequiredRole is AgentRole.Developer or AgentRole.Tester or AgentRole.Reviewer)
-            {
-                segments.Add(TaskBriefSegment.Projected(
+            segments.Add(task.RequiredRole is AgentRole.Developer or AgentRole.Tester or AgentRole.Reviewer
+                ? TaskBriefSegment.Projected(
                     "context/prior-task-evidence.md",
                     priorEvidenceLines,
                     [
@@ -562,12 +502,8 @@ public sealed partial class AgentOrchestratorKernel
                         "When a completed Planner is present, read its complete Durable Planner Plan in prior-task-evidence.md before implementation; otherwise open fuller evidence only when needed.",
                         string.Empty
                     ],
-                    collapsePriority: 10));
-            }
-            else
-            {
-                segments.Add(TaskBriefSegment.Fixed(priorEvidenceLines));
-            }
+                    collapsePriority: 10)
+                : TaskBriefSegment.Fixed(priorEvidenceLines));
         }
         else if (priorEvidence.Count > 0)
         {
@@ -617,6 +553,16 @@ public sealed partial class AgentOrchestratorKernel
             selection.Segments,
             selection.Decisions,
             prerequisiteEvidenceSection.TrimmedRequestIds);
+
+        void AddFixedSection(IReadOnlyList<string> lines)
+        {
+            if (lines.Count > 0)
+                segments.Add(TaskBriefSegment.Fixed(lines));
+        }
+
+        void AddProjectedSection(string identity, string heading, IReadOnlyList<string> body, string collapsedLine, int collapsePriority) =>
+            segments.Add(TaskBriefSegment.Projected(identity, [heading, .. body, string.Empty],
+                [heading, collapsedLine, string.Empty], collapsePriority));
     }
 
     private static IReadOnlyList<ReviewFinding> ApplyHumanInputSupersedeFindingResolutions(
@@ -664,25 +610,77 @@ public sealed partial class AgentOrchestratorKernel
         IReadOnlyList<HumanInputRequest> requests,
         IReadOnlyList<HumanInputAnswerRecord> clarificationAnswerHistory)
     {
-        IReadOnlyList<string> Apply(IReadOnlyList<string> lines)
+        IReadOnlyList<string> RetractLines(IReadOnlyList<string> lines, bool preservePathCoordinates = false)
         {
-            return lines
-                .Select(line => HumanInputRetractionPolicy.Apply(
-                    line,
-                    requests,
-                    clarificationAnswerHistory))
-                .ToArray();
+            if (lines.Count == 0)
+                return lines;
+
+            var joined = string.Join('\n', lines);
+            var filtered = HumanInputRetractionPolicy.Apply(joined, requests, clarificationAnswerHistory);
+            if (string.Equals(joined, filtered, StringComparison.Ordinal))
+                return lines;
+
+            var split = filtered.Split('\n');
+            return (preservePathCoordinates && split.Length != lines.Count) || lines.Any(line => line.Contains('\n'))
+                ? RestoreTaskBriefLineBoundaries(lines, joined, filtered, preservePathCoordinates, requests, clarificationAnswerHistory)
+                : split;
         }
 
-        return segments
-            .Select(segment => segment with
-            {
-                Lines = Apply(segment.Lines),
-                CollapsedLines = segment.CollapsedLines is null
-                    ? null
-                    : Apply(segment.CollapsedLines)
-            })
-            .ToArray();
+        return segments.Select(segment => segment with
+        {
+            Lines = RetractLines(segment.Lines, segment.ReviewerChangedFiles is not null ||
+                segment.MergeConflictPaths is not null || segment.ConvergenceChangedFiles is not null),
+            CollapsedLines = segment.CollapsedLines is { } collapsedLines ? RetractLines(collapsedLines) : null
+        }).ToArray();
+    }
+
+    private static IReadOnlyList<string> RestoreTaskBriefLineBoundaries(
+        IReadOnlyList<string> lines, string joined, string filtered, bool preservePathCoordinates,
+        IReadOnlyList<HumanInputRequest> requests, IReadOnlyList<HumanInputAnswerRecord> clarificationAnswerHistory)
+    {
+        // Only changed lists with ambiguous LF boundaries need match positions. Replay the
+        // policy's literal match precedence to distinguish identical fragments at different offsets.
+        var recordsByRequest = requests.Where(request => request.AnswerHistory.Any(answer => answer.IsRetracted)).ToArray();
+        var supersededIds = recordsByRequest.Select(request => request.Id).ToHashSet();
+        var current = requests.Select(request => request.AuthoritativeAnswer?.Text)
+            .Concat(clarificationAnswerHistory.Where(answer => !answer.IsRetracted).Select(answer => answer.Text));
+        var retracted = recordsByRequest.SelectMany(request => request.AnswerHistory)
+            .Concat(clarificationAnswerHistory)
+            .Where(answer => answer.IsRetracted)
+            .Select(answer => answer.Text)
+            .Concat(requests.Where(request => supersededIds.Contains(request.Id) ||
+                (request.SupersededByRequestId is not null && supersededIds.Contains(request.SupersededByRequestId)))
+                .Select(request => request.DerivedBlockerEvidence));
+        var currentTexts = current.OfType<string>().Where(text => !string.IsNullOrWhiteSpace(text)).ToHashSet(StringComparer.Ordinal);
+        var retractedTexts = retracted.OfType<string>().Where(text => !string.IsNullOrWhiteSpace(text))
+            .Except(currentTexts, StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
+        var alternatives = currentTexts.Concat(retractedTexts).OrderByDescending(text => text.Length).Select(Regex.Escape);
+        var pattern = $@"(?<![\p{{L}}\p{{N}}])(?:{string.Join('|', alternatives)})(?![\p{{L}}\p{{N}}])";
+        var deletions = Regex.Matches(joined, pattern, RegexOptions.CultureInvariant)
+            .Where(match => retractedTexts.Contains(match.Value)).ToArray();
+
+        var rebuilt = new List<string>(lines.Count);
+        var separator = -1;
+        var removedLength = 0;
+        var nextDeletion = 0;
+        var start = 0;
+        foreach (var line in lines.Take(lines.Count - 1))
+        {
+            separator += line.Length + 1;
+            while (nextDeletion < deletions.Length && deletions[nextDeletion].Index + deletions[nextDeletion].Length <= separator)
+                removedLength += deletions[nextDeletion++].Length;
+
+            var deleted = nextDeletion < deletions.Length && deletions[nextDeletion].Index <= separator;
+            if (deleted && !preservePathCoordinates)
+                continue;
+
+            var end = (deleted ? deletions[nextDeletion].Index : separator) - removedLength;
+            rebuilt.Add(filtered[start..end]);
+            start = deleted ? end : end + 1;
+        }
+
+        rebuilt.Add(filtered[start..]);
+        return rebuilt;
     }
 
     public static int TaskBriefCharacterBudget(AgentRole role, bool usesFileAccessContext) =>
