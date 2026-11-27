@@ -44,7 +44,7 @@ internal static class FocusedEvidenceBareSelectorResolution
 
             var classes = FocusedEvidenceRequestResolver.EnumerateFocusedEvidenceSourceFiles(worktreePath, target)
                 .Where(path => stems.Contains(Path.GetFileNameWithoutExtension(path)))
-                .SelectMany(ReadDeclaredClasses).Distinct();
+                .SelectMany(path => ReadDeclaredClasses(path, worktreePath)).Distinct();
             var names = classes.GroupBy(item => item.SimpleName, StringComparer.Ordinal)
                 .SelectMany(group => group.Count() == 1 ? new[] { group.Key } : group.Select(item => item.QualifiedName))
                 .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
@@ -57,14 +57,12 @@ internal static class FocusedEvidenceBareSelectorResolution
         return string.Empty;
     }
 
-    private static FocusedEvidenceParsedRootCache.DeclaredTypeName[] ReadDeclaredClasses(string path)
+    internal static FocusedEvidenceParsedRootCache.DeclaredTypeName[] ReadDeclaredClasses(string path, string worktreePath)
     {
         try
         {
-            return FocusedEvidenceRequestResolver.ParseCSharpRoot(path).DescendantNodes().OfType<TypeDeclarationSyntax>()
-                .Where(type => type is ClassDeclarationSyntax ||
-                    type is RecordDeclarationSyntax record && record.ClassOrStructKeyword.RawKind != (int)SyntaxKind.StructKeyword)
-                .Select(FocusedEvidenceParsedRootCache.GetDeclaredTypeName).ToArray();
+            return FocusedEvidenceDeclarationFactStore.Current.Read(path, worktreePath).Types
+                .Where(type => type.IsClassOrNonStructRecord).Select(type => type.Name).ToArray();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
