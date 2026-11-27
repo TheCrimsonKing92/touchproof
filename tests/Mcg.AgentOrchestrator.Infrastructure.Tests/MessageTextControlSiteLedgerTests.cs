@@ -115,6 +115,9 @@ public sealed class MessageTextControlSiteLedgerTests
     public void AddedCallInTemporarySourceCopyIsReportedOverLedgerCount()
     {
         var root = VerifiedRepositoryRoot.Find();
+        var ledger = ReadLedger(File.ReadAllText(Path.Combine(root, LedgerPath)));
+        Assert.Empty(ledger.Violations);
+
         var temporaryRoot = Directory.CreateTempSubdirectory("message-text-ledger-").FullName;
 
         try
@@ -123,11 +126,7 @@ public sealed class MessageTextControlSiteLedgerTests
             Directory.CreateDirectory(Path.GetDirectoryName(copy)!);
             File.Copy(Path.Combine(root, IntentCoordinatorPath), copy);
             var baseline = ScanMessageCalls(temporaryRoot);
-            // Give the copy its own ceiling so the negative control stays valid as production calls retire.
-            var ceiling = baseline.GetValueOrDefault(IntentCoordinatorPath);
-            var ledger = ReadLedger(
-                $"{LedgerHeader}\n{IntentCoordinatorPath}\t{ceiling}\tdisplay-only\t-\t-\t-\tTemporary fixture");
-            Assert.Empty(ledger.Violations);
+            var baselineCount = baseline.GetValueOrDefault(IntentCoordinatorPath);
             Assert.Empty(CompareMessageCounts(baseline, ledger.Rows));
 
             File.AppendAllText(copy, """
@@ -143,7 +142,7 @@ public sealed class MessageTextControlSiteLedgerTests
                 .Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error));
 
             var scan = ScanMessageCalls(temporaryRoot);
-            Assert.Equal(ceiling + 1, scan[IntentCoordinatorPath]);
+            Assert.Equal(baselineCount + 1, scan[IntentCoordinatorPath]);
             var violation = Assert.Single(CompareMessageCounts(scan, ledger.Rows));
             Assert.Equal(IntentCoordinatorPath, violation.Path);
             Assert.Equal(ViolationKind.OverCount, violation.Kind);
