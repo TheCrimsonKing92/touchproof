@@ -18,6 +18,11 @@ internal abstract record OperatorIntentOfflineOutcome
 
 internal static class OperatorIntentGoalApplication
 {
+    // Terminal dismissals need a checkpoint without the side effects that prepare a goal for work.
+    internal static OperatorIntentExecutionResult ApplyTerminalDismissals(
+        AgentOrchestratorKernel kernel, Goal goal, OperatorIntentCoordinator intents, IReadOnlySet<string> dismissIds) =>
+        intents.ExecutePending(kernel, goal, dismissIds);
+
     internal static OperatorIntentGoalApplicationResult ApplyPending(
         AgentOrchestratorKernel kernel,
         Goal goal,

@@ -148,7 +148,8 @@ internal static class ConductorOperatorIntentBoundary
                         .Select(intent => intent.Id).ToFrozenSet(StringComparer.Ordinal);
                     if (dismissIds.Count > 0)
                     {
-                        var dismissals = operatorIntents.ExecutePending(kernel, goal, dismissIds);
+                        var dismissals = OperatorIntentGoalApplication.ApplyTerminalDismissals(
+                            kernel, goal, operatorIntents, dismissIds);
                         result.Lines.AddRange(dismissals.ProgressLines);
                         if (dismissals.MutatedGoalState) result.ChangedGoalIds.Add(goalId);
                         result.UnavailableGoalIds.Add(target.Key);

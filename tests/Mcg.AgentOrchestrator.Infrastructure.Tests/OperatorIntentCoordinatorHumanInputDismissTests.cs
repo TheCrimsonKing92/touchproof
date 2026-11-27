@@ -102,7 +102,8 @@ public sealed class OperatorIntentCoordinatorHumanInputDismissTests
             var workspace = OrchestratorWorkspace.ForDirectory(_root);
             Intents = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
             Collaboration = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
-            Coordinator = new OperatorIntentCoordinator(Intents, decisions: Collaboration);
+            Coordinator = new OperatorIntentCoordinator(Intents, decisions: Collaboration,
+                goalStateVersionResolver: _ => 0);
         }
 
         internal AgentOrchestratorKernel Kernel { get; } = new();
