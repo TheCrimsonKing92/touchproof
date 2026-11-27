@@ -18,8 +18,7 @@ public sealed partial class AgentOrchestratorKernel
         int? reviewerMergeTreeTotalConflictPathCount = null,
         IReadOnlyList<ReviewFindingLocation>? reviewerRoundTouchedAnchors = null,
         string? reviewerRoundTouchProofDiagnostic = null,
-        ReviewRetryCapReceipt? reviewRetryCap = null,
-        bool emitTypedSourceBoundaries = false)
+        ReviewRetryCapReceipt? reviewRetryCap = null)
     {
         var source = BuildTaskBriefSource(
             goalId,
@@ -37,8 +36,7 @@ public sealed partial class AgentOrchestratorKernel
             reviewerMergeTreeTotalConflictPathCount,
             reviewerRoundTouchedAnchors,
             reviewerRoundTouchProofDiagnostic,
-            reviewRetryCap,
-            measureWithTypedSourceBoundaries: emitTypedSourceBoundaries);
-        return source.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries);
+            reviewRetryCap);
+        return source.ProjectLegacyMarkedTextV1();
     }
 }

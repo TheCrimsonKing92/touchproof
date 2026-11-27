@@ -173,7 +173,6 @@ public sealed partial class AgentOrchestratorKernel
         IReadOnlyList<ReviewFindingLocation>? reviewerRoundTouchedAnchors = null,
         string? reviewerRoundTouchProofDiagnostic = null,
         ReviewRetryCapReceipt? reviewRetryCap = null,
-        bool measureWithTypedSourceBoundaries = false,
         IReadOnlyList<ChangedExistingTest>? changedExistingTests = null,
         string? changedExistingTestsDiagnostic = null, string? acceptanceManifestPromptPath = null,
         string? integrationBranchPromptName = null, ProjectStack? roleRequirementStack = ProjectStack.Dotnet, IReadOnlyDictionary<string, string>? repositoryWorktrees = null, IReadOnlyList<string?>? testCheckCommands = null, bool workerToolsAvailable = false,
@@ -542,8 +541,7 @@ public sealed partial class AgentOrchestratorKernel
         var selection = ApplyTaskBriefBudget(
             retractedSegments,
             task.RequiredRole,
-            usesFileAccessContext,
-            measureWithTypedSourceBoundaries);
+            usesFileAccessContext);
 
         return new TaskBriefSource(
             goal.Id,

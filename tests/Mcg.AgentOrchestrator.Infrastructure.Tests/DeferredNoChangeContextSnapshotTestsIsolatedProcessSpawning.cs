@@ -165,7 +165,7 @@ public sealed class DeferredNoChangeContextSnapshotTestsIsolatedProcessSpawning
     }
 
     [Fact]
-    public void CompactRepairKeepsExistingExclusionWhileNormalTesterReceivesEvidence()
+    public void CompactRepairRetainsEvidenceAndNextTesterReceivesGreenProof()
     {
         using var fixture = new DeferredNoChangeContextFixture();
         fixture.Complete();
@@ -182,7 +182,7 @@ public sealed class DeferredNoChangeContextSnapshotTestsIsolatedProcessSpawning
         var compact = fixture.Package();
 
         Assert.Equal(ReviewFindingHistoryProjectionMode.ContractRepair, compact.ReviewFindingProjection!.Mode);
-        Assert.DoesNotContain(compact.Artifacts, artifact => artifact.Identity.Value.StartsWith("goal/deferred-no-change", StringComparison.Ordinal));
+        Assert.Single(compact.Artifacts, artifact => artifact.Identity.Value == "goal/deferred-no-change-evidence.json");
         Assert.Contains(compact.Artifacts, artifact => artifact.Identity.Value == "task/review-contract-repair-envelope.json");
         var nextTester = fixture.AddTester();
         Assert.True(DeferredNoChangeContextFixture.Summary(fixture.Package(nextTester)).GetProperty("Receipts")[0].GetProperty("CurrentGreenProof").GetBoolean());
