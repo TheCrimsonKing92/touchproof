@@ -342,7 +342,8 @@ public sealed class GateObligationSelectorPreAdmissionTests
     public void CandidateInventory_DirtyWorktreeNamesFirstFailure()
     {
         using var fixture = new Case("PlannedTests");
-        var root = fixture.Evidence.Root;
+        using var repository = new GitWorkspaceLaunchFixture();
+        var root = repository.Root;
         Assert.Equal(0, GitCli.Run(root, "init").ExitCode);
         var path = Path.Combine(root, "fixture.txt");
         File.WriteAllText(path, "committed");
