@@ -1,20 +1,13 @@
-using Microsoft.CodeAnalysis.CSharp.Syntax;
-
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class FocusedEvidenceMethodResolver
 {
-    internal static IReadOnlyList<string> FindTestMethodNames(IReadOnlyList<string> classFiles, string className) =>
+    internal static IReadOnlyList<string> FindTestMethodNames(
+        IReadOnlyList<string> classFiles, string className, string? worktreePath = null) =>
         classFiles
-            .SelectMany(path => FocusedEvidenceRequestResolver.ParseCSharpRoot(path)
-                .DescendantNodes()
-                .OfType<TypeDeclarationSyntax>())
-            .Where(declaration => FocusedEvidenceRequestResolver.FocusedEvidenceTypeMatches(declaration, className))
-            .SelectMany(declaration => declaration.Members.OfType<MethodDeclarationSyntax>())
-            .Where(method => method.AttributeLists
-                .SelectMany(list => list.Attributes)
-                .Any(attribute => IsTestAttribute(attribute.Name.ToString())))
-            .Select(method => method.Identifier.ValueText)
+            .SelectMany(path => FocusedEvidenceDeclarationFactStore.Current.Read(path, worktreePath).Types)
+            .Where(type => FocusedEvidenceParsedRootCache.FocusedEvidenceTypeMatches(type.Name, className))
+            .SelectMany(type => type.TestMethodNames)
             .ToArray();
 
     internal static bool IsTestAttribute(string attributeName)

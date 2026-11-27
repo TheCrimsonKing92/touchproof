@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -11,26 +12,52 @@ internal static class AttentionReadGoalSelection
         value.Equals("--all", StringComparison.OrdinalIgnoreCase) ||
         value.Equals("--include-parked", StringComparison.OrdinalIgnoreCase);
 
-    internal static (bool IncludeHistory, string? GoalPrefix) ParseShowArgs(IReadOnlyList<string> parts)
+    internal static (bool IncludeHistory, string? GoalPrefix, AttentionHistoryLimit Limit) ParseShowArgs(
+        IReadOnlyList<string> parts)
     {
-        var args = parts.Skip(2).Where(part => !string.IsNullOrWhiteSpace(part)).ToList();
+        var args = new List<string>();
+        AttentionHistoryLimit? overrideLimit = null;
+        for (var index = 2; index < parts.Count; index++)
+        {
+            var arg = parts[index];
+            if (arg.Equals("--limit", StringComparison.OrdinalIgnoreCase))
+            {
+                if (overrideLimit is not null || index + 1 == parts.Count)
+                    throw new ArgumentException(CliCommandHelp.AttentionShowUsage);
+
+                overrideLimit = AttentionHistoryLimit.Parse(parts[++index]);
+            }
+            else if (arg.StartsWith("--limit=", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException(CliCommandHelp.AttentionShowUsage);
+            }
+            else if (!string.IsNullOrWhiteSpace(arg))
+            {
+                args.Add(arg);
+            }
+        }
+
         var includeHistory = args.RemoveAll(IsAttentionAllFlag) > 0;
+        if (overrideLimit is not null && !includeHistory)
+            throw new ArgumentException(CliCommandHelp.AttentionShowUsage);
+
+        var limit = overrideLimit ?? AttentionHistoryLimit.Default;
         if (args.Count == 0)
         {
-            return (includeHistory, null);
+            return (includeHistory, null, limit);
         }
 
         if (args[0].Equals("--goal", StringComparison.OrdinalIgnoreCase))
         {
             if (args.Count < 2)
             {
-                throw new ArgumentException("Usage: attention show [--all|--include-parked] [--goal] <goal-id-prefix>");
+                throw new ArgumentException(CliCommandHelp.AttentionShowUsage);
             }
 
-            return (includeHistory, args[1]);
+            return (includeHistory, args[1], limit);
         }
 
-        return (includeHistory, args[0]);
+        return (includeHistory, args[0], limit);
     }
 
     internal static IReadOnlyList<GoalId>? ReadPostLandingDutyGoalIds(
@@ -111,5 +138,107 @@ internal static class AttentionReadGoalSelection
             .Select(id => new GoalId(id))
             .ToArray();
         return new Result(false, ids);
+    }
+}
+
+internal static class AttentionShowParkedState
+{
+    private static string ParkedAttentionResolution(Goal goal) => goal.Timeline
+        .LastOrDefault(evt => evt.Kind == ProgressKind.GoalPolicyDecision &&
+            GoalParkResolution.IsParkResolution(evt.Message))?.Message ?? GoalParkResolution.Fallback;
+
+    internal static int ResolveOpenItems(AgentOrchestratorKernel kernel, CollaborationItemStore store)
+    {
+        var resolved = 0;
+        foreach (var goal in kernel.Goals.Where(goal => goal.Status == GoalStatus.Parked))
+            resolved += store.ResolveOpenForGoalAsync(goal.Id.Value, ParkedAttentionResolution(goal)).GetAwaiter().GetResult();
+        return resolved;
+    }
+
+    internal static Dictionary<string, string> ReadResolutions(AgentOrchestratorKernel kernel)
+    {
+        var resolutions = kernel.Goals.Where(goal => goal.Status == GoalStatus.Parked)
+            .ToDictionary(goal => goal.Id.Value, ParkedAttentionResolution, StringComparer.Ordinal);
+        var waitingGoals = kernel.Goals.Where(goal => goal.Status == GoalStatus.WaitingForHuman)
+            .Select(goal => goal.Id).ToHashSet();
+        if (waitingGoals.Count == 0)
+            return resolutions;
+
+        foreach (var wait in kernel.HumanInputRequests
+            .Where(wait => waitingGoals.Contains(wait.GoalId) && !wait.IsCompleted &&
+                GoalParkResolution.IsParkResolution(wait.Question))
+            .OrderByDescending(wait => wait.RequestedAt))
+        {
+            resolutions.TryAdd(wait.GoalId.Value, wait.Question);
+        }
+
+        return resolutions;
+    }
+
+    internal static IReadOnlyList<HumanInputRequest> ProjectWaits(
+        IReadOnlyList<HumanInputRequest> waits, AgentOrchestratorKernel kernel,
+        IReadOnlyDictionary<string, string> parkedResolutions, DateTimeOffset now)
+    {
+        if (parkedResolutions.Count == 0)
+            return waits;
+
+        return waits.Select(wait =>
+        {
+            if (wait.IsCompleted || !HumanWaitPolicyDefaults.BlocksActiveWork(wait.Kind) ||
+                !parkedResolutions.TryGetValue(wait.GoalId.Value, out var resolution))
+                return wait;
+
+            var displayWait = HumanInputRequest.FromSnapshot(wait.ToSnapshot());
+            displayWait.Complete(resolution, now, briefVersion: kernel.GetGoal(wait.GoalId).AuthoritativeBrief.Version);
+            return displayWait;
+        }).ToArray();
+    }
+
+    internal static IReadOnlyList<CollaborationItem> ProjectItems(
+        IReadOnlyList<CollaborationItem> items, IReadOnlyDictionary<string, string> parkedResolutions, DateTimeOffset now)
+    {
+        if (parkedResolutions.Count == 0)
+            return items;
+
+        return items.Select(item => item.GoalId is not null && !CollaborationItemLifecycle.IsTerminal(item.Status) &&
+            parkedResolutions.TryGetValue(item.GoalId, out var resolution)
+                ? item with { Status = CollaborationItemStatus.Resolved, Resolution = resolution, ResolvedAt = now }
+                : item).ToArray();
+    }
+
+    internal static void PrintDecisions(
+        OrchestratorWorkspace workspace, IReadOnlyCollection<Goal> goals, CollaborationItemStore store,
+        IReadOnlyDictionary<string, string> parkedResolutions, DateTimeOffset now)
+    {
+        var resolvedIds = parkedResolutions.Count == 0 ? [] : store.GetAttentionQueueAsync().GetAwaiter().GetResult()
+            .Where(item => item.GoalId is not null && parkedResolutions.ContainsKey(item.GoalId))
+            .Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
+        if (resolvedIds.Count == 0)
+        {
+            AttentionShowDecisionsTextView.PrintThenDuties(workspace, goals);
+            return;
+        }
+
+        // This view sees the resolutions the writer fallback previously recorded during show.
+        var decisions = OwnerDecisionReader.ReadAsync(OwnerQuestionReadModelFactory.ForWorkspace(workspace))
+            .GetAwaiter().GetResult();
+        var entries = decisions.Entries.Where(entry => !resolvedIds.Contains(entry.ItemId)).ToArray();
+        Console.WriteLine($"Decisions ({entries.Length}):");
+        if (entries.Length == 0)
+            Console.WriteLine("  none");
+        foreach (var entry in entries)
+        {
+            TimeSpan? age = entry.RaisedAt is { } raisedAt
+                ? TimeSpan.FromTicks(Math.Max(0, (now - raisedAt).Ticks)) : null;
+            var text = entry.Text.Replace("\r\n", "\n").Replace('\r', '\n').Replace("\n", "\n    ");
+            Console.WriteLine($"  [{entry.Kind}] {entry.GoalPrefix} item={entry.ItemId} age={OwnerConsoleBoardRenderer.Age(age)}: {text}");
+        }
+
+        var hidden = decisions.Snapshot.Hidden.Where(item => !resolvedIds.Contains(item.Question.ItemId)).ToArray();
+        var reasons = string.Join(", ", hidden.GroupBy(item => item.Reason)
+            .OrderBy(group => group.Key, StringComparer.Ordinal).Select(group => $"{group.Key}={group.Count()}"));
+        Console.WriteLine($"Hidden decisions: {hidden.Length}{(hidden.Length == 0 ? "" : $" ({reasons})")}");
+        Console.WriteLine();
+        PostLandingDutiesTextView.Print(goals);
     }
 }

@@ -1626,13 +1626,13 @@ public sealed class Goal
     private static ProgressEventSnapshot SnapshotProgressEvent(ProgressEvent evt) => new(
         evt.GoalId.Value, evt.TaskId?.Value, evt.Kind, evt.Message, evt.OccurredAt, evt.RequeueSkipped,
         evt.OperatorGates, evt.OperatorIntentApplied, evt.HumanInputSuperseded, evt.TickOutcome, evt.Failure,
-        evt.OperatorIntentCreatedAt, evt.PreTesterEvidence);
+        evt.OperatorIntentCreatedAt, evt.PreTesterEvidence, evt.FindingEvidenceRequest);
 
     private static ProgressEvent RestoreProgressEvent(ProgressEventSnapshot evt) => new(
         new GoalId(evt.GoalId), evt.TaskId is null ? null : new TaskId(evt.TaskId),
         evt.Kind, evt.Message, evt.OccurredAt, evt.RequeueSkipped, evt.OperatorGates,
         evt.OperatorIntentApplied, evt.HumanInputSuperseded, evt.TickOutcome, evt.Failure,
-        evt.OperatorIntentCreatedAt, evt.PreTesterEvidence);
+        evt.OperatorIntentCreatedAt, evt.PreTesterEvidence, evt.FindingEvidenceRequest);
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
     {
