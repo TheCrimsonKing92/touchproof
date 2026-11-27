@@ -51,6 +51,32 @@ public sealed class MainFullVerificationConfirmationTests
     }
 
     [Fact]
+    public void FailedCheckWithoutTestIdentityKeepsRunIncompleteAfterPassingRerun()
+    {
+        using var fixture = new ConductorVerbStartTests.Fixture();
+        const string unnamedCheck = "tests-with-missing-results";
+        var absent = Path.Combine(fixture.Workspace.ExecutionDirectory, "absent.trx");
+        var verification = ReadFailures(fixture, First);
+        verification = verification with
+        {
+            Checks = [.. verification.Checks!, new(unnamedCheck, false, 1, null, TestResultPaths: [absent])]
+        };
+        var reruns = new List<string>();
+
+        var result = Conclude(verification, (test, _) =>
+        {
+            reruns.Add(test);
+            return new(Unconfirmed);
+        });
+
+        Assert.Equal("incomplete", result.Outcome);
+        Assert.Contains(unnamedCheck, result.Detail);
+        Assert.Equal([First], reruns);
+        Assert.Equal([First], result.Unconfirmed);
+        Assert.Empty(result.Failures!);
+    }
+
+    [Fact]
     public async Task CoordinatorReportsUnconfirmedNamesWithoutPublishingHold()
     {
         using var fixture = new ConductorVerbStartTests.Fixture();

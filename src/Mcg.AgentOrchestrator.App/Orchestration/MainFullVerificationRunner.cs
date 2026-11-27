@@ -69,9 +69,18 @@ internal sealed class MainFullVerificationRunner(
         Func<string, CancellationToken, MainFullVerificationRerun> rerun, CancellationToken cancellationToken)
     {
         var result = Interpret(verification, attribute);
-        return result.Outcome == "failed"
-            ? MainFullVerificationConfirmation.Confirm(result.Failures!, rerun, cancellationToken)
-            : result;
+        if (result.Failures is not { Count: > 0 } failures)
+            return result;
+
+        var confirmation = MainFullVerificationConfirmation.Confirm(failures, rerun, cancellationToken);
+        if (result.Outcome != "incomplete")
+            return confirmation;
+
+        return confirmation with
+        {
+            Outcome = "incomplete",
+            Detail = confirmation.Detail is null ? result.Detail : $"{result.Detail}. {confirmation.Detail}"
+        };
     }
 
     internal static MainFullVerificationResult Interpret(AcceptanceVerificationResult verification,
@@ -97,9 +106,22 @@ internal sealed class MainFullVerificationRunner(
                 ? new("passed") : new("incomplete", "required-test-checks-unproven");
         }
 
-        var tests = failed.SelectMany(ReadFailedTests).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
-        return tests.Length == 0 ? new("incomplete", "fatal-test-identity-unavailable") :
-            new("failed", Failures: attribute(tests));
+        var tests = new SortedSet<string>(StringComparer.Ordinal);
+        var unnamedChecks = new List<string>();
+        foreach (var check in failed)
+        {
+            var names = ReadFailedTests(check).ToArray();
+            if (names.Length == 0)
+                unnamedChecks.Add(check.Name);
+            tests.UnionWith(names);
+        }
+
+        var detail = unnamedChecks.Count > 0
+            ? $"fatal-test-identity-unavailable: {string.Join(", ", unnamedChecks)}" : null;
+        if (tests.Count == 0)
+            return new("incomplete", detail ?? "fatal-test-identity-unavailable");
+
+        return new(detail is null ? "failed" : "incomplete", detail, attribute(tests.ToArray()));
     }
 
     private static IEnumerable<string> ReadFailedTests(AcceptanceCheckResult check)
