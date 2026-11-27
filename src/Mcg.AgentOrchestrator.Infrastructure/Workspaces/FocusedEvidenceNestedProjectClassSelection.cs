@@ -70,7 +70,7 @@ internal static class FocusedEvidenceNestedProjectClassSelection
         try
         {
             return FocusedEvidenceRequestResolver.EnumerateFocusedEvidenceSourceFiles(worktreePath, project)
-                .Select(path => new SourceDeclarations(path, CSharpSourceFileRootReader.ReadFile(path).Names))
+                .Select(path => new SourceDeclarations(path, FocusedEvidenceDeclarationFactStore.Current.Read(path, worktreePath)))
                 .ToArray();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -88,7 +88,7 @@ internal static class FocusedEvidenceNestedProjectClassSelection
         foreach (var source in sources)
         {
             // Launch filters can match a substring, so a parent-owned match keeps the selector.
-            if (!source.Names.Any(name => name.QualifiedName.Contains(containingClass, StringComparison.OrdinalIgnoreCase)))
+            if (!source.Facts.Types.Any(type => type.QualifiedName.Contains(containingClass, StringComparison.OrdinalIgnoreCase)))
                 continue;
 
             var owner = RepositoryProjectOwnership.FindNestedProjectFile(worktreePath, projectDirectory, source.Path);
@@ -100,6 +100,5 @@ internal static class FocusedEvidenceNestedProjectClassSelection
         return firstOwner;
     }
 
-    private sealed record SourceDeclarations(
-        string Path, System.Collections.Immutable.ImmutableArray<FocusedEvidenceParsedRootCache.DeclaredTypeName> Names);
+    private sealed record SourceDeclarations(string Path, FocusedEvidenceDeclarationFacts Facts);
 }
