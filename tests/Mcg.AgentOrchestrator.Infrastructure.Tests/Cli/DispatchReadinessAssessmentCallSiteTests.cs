@@ -56,8 +56,11 @@ public sealed class DispatchReadinessAssessmentCallSiteTests
                 StringComparison.Ordinal))
             .Select(path => Path.GetRelativePath(root, path).Replace('\\', '/')).ToArray();
         Assert.Equal("src/Mcg.AgentOrchestrator.App/Orchestration/DispatchReadinessAssessment.cs", Assert.Single(callers));
-        foreach (var file in new[] { "ConductorDriver.cs", "GoalReadinessPreflight.cs", "CrossGoalSubscriptionStartPlanner.cs" })
+        foreach (var file in new[] { "GoalExecutionProjection.cs", "CrossGoalSubscriptionStartPlanner.cs" })
             Assert.Contains("DispatchReadinessAssessment.Evaluate(",
+                File.ReadAllText(Path.Combine(app, "Orchestration", file)));
+        foreach (var file in new[] { "ConductorDriver.cs", "GoalReadinessPreflight.cs" })
+            Assert.Contains("GoalExecutionProjection.Build(",
                 File.ReadAllText(Path.Combine(app, "Orchestration", file)));
     }
 
