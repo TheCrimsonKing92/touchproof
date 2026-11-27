@@ -36,7 +36,7 @@ public sealed class DeveloperWorkerResultContextSectionTests
         Assert.DoesNotContain("trailing-output-excluded", section);
         Assert.True(section.IndexOf(block, StringComparison.Ordinal) <
             section.IndexOf("Developer's own account", StringComparison.Ordinal));
-        Assert.Equal(1, Count(source.ProjectLegacyMarkedTextV1(false).Content, Heading));
+        Assert.Equal(1, Count(source.ProjectLegacyMarkedTextV1().Content, Heading));
     }
 
     [Theory]

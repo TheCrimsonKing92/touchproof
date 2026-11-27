@@ -794,11 +794,13 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
             var conflictPaths = Enumerable.Range(0, WorkerGitContext.ReviewerChangedFilePromptMaxFiles + 2)
                 .Select(index => $"src/conflict-{index:D3}-漢.cs")
                 .ToArray();
-            var inlinePreview = string.Join(Environment.NewLine, changedPaths.Take(WorkerGitContext.ReviewerChangedFilePromptMaxFiles));
-            var brief = BriefFor(
-                goal,
-                task,
-                $"## Reviewer Changed-File Scope{Environment.NewLine}{inlinePreview}{Environment.NewLine}- Omitted 1 additional changed file.");
+            var brief = kernel.BuildTaskBriefSource(
+                goal.Id, task.Id, workingDirectory: root, contextDirectory: contextDirectory,
+                reviewerScopeChangedFiles: changedPaths, reviewerScopeMergeBase: new string('a', 40),
+                reviewerScopeTotalChangedFileCount: changedPaths.Length, reviewerMergeTreeClean: false,
+                reviewerMergeTreeConflictPaths: conflictPaths, reviewerMergeTreeTotalConflictPathCount: conflictPaths.Length);
+            var preview = Assert.Single(brief.Segments, segment => segment.ReviewerChangedFiles is not null);
+            Assert.Contains($"- {changedPaths[0]}", preview.Lines);
 
             var package = WorkerProfileDispatcher.BuildContextPackage(
                 goal,
@@ -845,7 +847,9 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
                 $"MANDATORY READ: identity={conflictArtifact.Identity.Value}; purpose={conflictArtifact.Kind}; path={conflictArtifact.MandatoryRelativePath}; bytes={conflictArtifact.AuthoritativeByteCount}; sha256={conflictArtifact.ContentHash}",
                 rendered,
                 StringComparison.Ordinal);
-            Assert.Contains(changedPaths[0], rendered, StringComparison.Ordinal);
+            Assert.Contains($"Changed files: {changedPaths.Length}; complete path list", rendered, StringComparison.Ordinal);
+            Assert.Contains($"Conflicting paths: {conflictPaths.Length}; complete path list", rendered, StringComparison.Ordinal);
+            Assert.DoesNotContain(changedPaths[0], rendered, StringComparison.Ordinal);
             Assert.DoesNotContain(changedPaths[^1], rendered, StringComparison.Ordinal);
             Assert.DoesNotContain(conflictPaths[0], rendered, StringComparison.Ordinal);
             Assert.DoesNotContain(conflictPaths[^1], rendered, StringComparison.Ordinal);
@@ -1992,8 +1996,8 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
     [Xunit.Fact]
     public void HeaderResidualRetainsAllInstructionsWhileRemovingTypedAndOperationalProjections()
     {
-        var brief = string.Join("\n",
-        [
+        var header = new[]
+        {
             "# Agent Task Brief",
             "<!-- ACCUMULATED_RETRY_FEEDBACK_START -->",
             "bounded retry projection",
@@ -2014,13 +2018,12 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
             "Current target context:",
             "- Branch: goal/test",
             "- HEAD commit: abc123",
-            "## Instructions",
-            "worker instruction"
-        ]);
+        };
+        var task = new TaskSpec(TaskId.New(), "Test the header residual.", AgentRole.Developer);
+        var goal = new AgentOrchestratorKernel().CreateGoal("Preserve header instructions.", [task]);
+        var source = TypedBriefSourceFixture.Create(goal, task, "worker instruction", header);
 
-        var residual = WorkerContextProjectionResidual
-            .ParseLegacyMarkedTextV1(brief, AgentRole.Developer)
-            .HeaderResidual;
+        var residual = WorkerContextRenderer.CreateHeaderResidual(source);
 
         Assert.Contains("Decision context: do not attempt", residual, StringComparison.Ordinal);
         Assert.Contains("newly introduced mandatory instruction", residual, StringComparison.Ordinal);
@@ -2032,40 +2035,37 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
     }
 
     [Xunit.Fact]
-    public void HeaderResidualRestoresReservedLiteralsBeforeCanonicalProjectionRemoval()
+    public void HeaderResidualPreservesLiteralProjectionMarkerText()
     {
-        var literalBoundary = WorkerContextProjectionBoundary.Start(
-            new LogicalArtifactIdentity("context/research-notes.md"));
-        var brief = string.Join("\n",
-        [
+        const string literalBoundary = "<!-- WORKER_CONTEXT_TYPED_PROJECTION_START:context/research-notes.md -->";
+        var header = new[]
+        {
             "# Agent Task Brief",
-            WorkerContextProjectionBoundary.EscapeReservedLiteral($"Goal: full goal projection {literalBoundary}"),
+            $"Goal: full goal projection {literalBoundary}",
             "Goal id: goal-id",
             "Goal status: Active",
-            WorkerContextProjectionBoundary.EscapeReservedLiteral($"Operator instruction preserves {literalBoundary}"),
-            WorkerContextProjectionBoundary.EscapeReservedLiteral($"Task: full task projection {literalBoundary}"),
+            $"Operator instruction preserves {literalBoundary}",
+            $"Task: full task projection {literalBoundary}",
             "Task role: Developer",
             "Task status: Assigned",
             "Task id: task-id",
-            "## Instructions",
-            "worker instruction"
-        ]);
+        };
+        var task = new TaskSpec(TaskId.New(), "Test the header residual.", AgentRole.Developer);
+        var goal = new AgentOrchestratorKernel().CreateGoal("Preserve header instructions.", [task]);
+        var source = TypedBriefSourceFixture.Create(goal, task, "worker instruction", header);
 
-        var residual = WorkerContextProjectionResidual
-            .ParseLegacyMarkedTextV1(brief, AgentRole.Developer)
-            .HeaderResidual;
+        var residual = WorkerContextRenderer.CreateHeaderResidual(source);
 
-        Assert.DoesNotContain(WorkerContextProjectionBoundary.LiteralPrefix, residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("WORKER_CONTEXT_TYPED_PROJECTION_LITERAL:", residual, StringComparison.Ordinal);
         Assert.DoesNotContain("goal projection", residual, StringComparison.Ordinal);
         Assert.DoesNotContain("task projection", residual, StringComparison.Ordinal);
         Assert.Contains($"Operator instruction preserves {literalBoundary}", residual, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
-    public void TypedBriefRetractsBoundaryShapedStaleAnswerBeforeEscaping()
+    public void TypedBriefRetractsBoundaryShapedStaleAnswer()
     {
-        var literalBoundary = WorkerContextProjectionBoundary.Start(
-            new LogicalArtifactIdentity("context/collision.md"));
+        const string literalBoundary = "<!-- WORKER_CONTEXT_TYPED_PROJECTION_START:context/collision.md -->";
         var staleAnswer = $"stale-choice {literalBoundary}";
         var task = new TaskSpec(TaskId.New(), "Implement the corrected choice.", AgentRole.Developer);
         var kernel = new AgentOrchestratorKernel();
@@ -2078,14 +2078,11 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
             "corrected-choice",
             HumanInputAnswerOrigin.Operator);
 
-        var brief = kernel.BuildTaskBrief(
-            goal.Id,
-            task.Id,
-            emitTypedSourceBoundaries: true).Content;
+        var brief = kernel.BuildTaskBriefSource(goal.Id, task.Id).ProjectLegacyMarkedTextV1().Content;
 
         Assert.Contains("corrected-choice", brief, StringComparison.Ordinal);
         Assert.DoesNotContain("stale-choice", brief, StringComparison.Ordinal);
-        Assert.DoesNotContain(WorkerContextProjectionBoundary.LiteralPrefix, brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("WORKER_CONTEXT_TYPED_PROJECTION_LITERAL:", brief, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -2626,25 +2623,12 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
         Assert.True((File.GetAttributes(junctionPath) & FileAttributes.ReparsePoint) != 0);
     }
 
-    private static TaskBrief BriefFor(
+    private static TaskBriefSource BriefFor(
         Goal goal,
         TaskSpec task,
         string instruction,
-        string? headerResidual = null) => new(
-        goal.Id,
-        task.Id,
-        task.RequiredRole,
-        task.Description,
-        $"""
-        # Agent Task Brief
-        Goal: {goal.Objective}
-        Goal id: {goal.Id.Value}
-        Task: {task.Description}
-        Task role: {task.RequiredRole}
-        {headerResidual}
-        ## Instructions
-        {instruction}
-        """);
+        string? headerResidual = null) =>
+        TypedBriefSourceFixture.Create(goal, task, instruction, headerResidual is null ? [] : [headerResidual]);
 
     private sealed record ExpectedSemanticSource(
         string Name, string LogicalIdentity, string Marker, AgentRole Role = AgentRole.Developer);
