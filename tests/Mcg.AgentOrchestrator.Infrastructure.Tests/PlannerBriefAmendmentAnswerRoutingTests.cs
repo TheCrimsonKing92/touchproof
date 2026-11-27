@@ -459,7 +459,7 @@ public sealed class PlannerBriefAmendmentAnswerRoutingTests : WorkerDispatchTest
         f.Kernel = AgentOrchestratorKernel.FromSnapshot(snapshot.Deserialize<OrchestratorSnapshot>()!);
     }
 
-    private static void ExecuteAttentionAnswer(Fixture f, OrchestratorWorkspace workspace, string[] answerArgs)
+    internal static void ExecuteAttentionAnswer(Fixture f, OrchestratorWorkspace workspace, string[] answerArgs)
     {
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var profiles = WorkerProfileCatalog.Default();
@@ -469,7 +469,7 @@ public sealed class PlannerBriefAmendmentAnswerRoutingTests : WorkerDispatchTest
             f.Kernel, workspace, ref agents, new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal));
     }
 
-    private sealed class Fixture : IDisposable
+    internal sealed class Fixture : IDisposable
     {
         internal string Root { get; } = CreateTempDirectory();
         internal AgentOrchestratorKernel Kernel { get; set; } = new();
