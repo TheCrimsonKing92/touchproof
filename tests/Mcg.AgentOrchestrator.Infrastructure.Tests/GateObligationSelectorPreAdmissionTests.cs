@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Parallel-safe: kernels and evidence files are fixture-owned; revision and inventory I/O is injected.
+// Parallel-safe: kernels, evidence files and git fixtures are isolated per case.
 public sealed class GateObligationSelectorPreAdmissionTests
 {
     internal const string Candidate = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -171,10 +171,10 @@ public sealed class GateObligationSelectorPreAdmissionTests
     }
 
     [Theory]
-    [InlineData("null")]
-    [InlineData("empty")]
-    [InlineData("throws")]
-    public void InventoryUnavailable_HoldsWithoutAnswer(string scenario)
+    [InlineData("null", "inventory reader returned no inventory")]
+    [InlineData("empty", "declared inventory is empty")]
+    [InlineData("throws", "IOException: inventory read failed")]
+    public void InventoryUnavailable_HoldsWithoutAnswer(string scenario, string detail)
     {
         using var fixture = new Case("PlannedTests");
         var calls = 0;
@@ -191,7 +191,9 @@ public sealed class GateObligationSelectorPreAdmissionTests
             }, _ => Assert.Fail("Unavailable inventory must not record a rebind"));
         Assert.Equal(1, calls);
         Assert.True(result.Hold);
-        Assert.Contains(Candidate, Assert.Single(result.HoldLines));
+        var line = Assert.Single(result.HoldLines);
+        Assert.Contains(Candidate, line);
+        Assert.Contains(detail, line);
         Assert.Empty(fixture.Kernel.HumanInputRequests);
         Assert.Empty(fixture.Developer.CriterionRetryFeedback);
         Assert.Equal(0, fixture.Goal.AutomaticAcceptanceRetryCount);
@@ -207,7 +209,7 @@ public sealed class GateObligationSelectorPreAdmissionTests
         Assert.Equal(new[] { fixture.Goal.Id.Value }, held);
         var line = Assert.Single(lines);
         Assert.Contains("selector-not-found: PlannedTests", line);
-        Assert.Contains($"inventory unavailable at candidate {Candidate}", line);
+        Assert.Contains($"inventory unavailable at candidate {Candidate}: goal workspace is unavailable", line);
         Assert.Contains(fixture.Goal.Id.Value,
             ConductorBatchLoop.TrainIneligibleCriterionEvidenceGoalIds([fixture.Goal], held));
         Assert.Empty(fixture.Kernel.HumanInputRequests);
@@ -321,14 +323,46 @@ public sealed class GateObligationSelectorPreAdmissionTests
     {
         var reads = 0;
         var scans = 0;
-        var result = GateObligationSelectorPreAdmissionClassifier.ReadCandidateInventory(Candidate,
-            () => ++reads == 1 && changesDuringScan ? Candidate : NextCandidate,
-            () => { scans++; return Inventory("PlannedTestsLauncher"); });
-        Assert.Null(result);
+        using var fixture = new Case("PlannedTests");
+        var result = GateObligationSelectorPreAdmissionClassifier.ApplyWithCandidateInventory(
+            fixture.Kernel, fixture.Goal, fixture.Evidence.OrchestratorDirectory, Candidate,
+            () => GateObligationSelectorPreAdmissionClassifier.ReadCandidateInventory(Candidate,
+                () => (++reads == 1 && changesDuringScan ? Candidate : NextCandidate, null),
+                () => { scans++; return Inventory("PlannedTestsLauncher"); }), _ => Assert.Fail("Do not record a rebind"));
+        var cause = changesDuringScan ? "worktree revision changed during inventory scan" : "candidate revision mismatch";
+        Assert.Contains($"inventory unavailable at candidate {Candidate}: {cause} (worktree HEAD {NextCandidate})",
+            Assert.Single(result.HoldLines));
         Assert.Equal(changesDuringScan ? 1 : 0, scans);
         Assert.Equal(changesDuringScan ? 2 : 1, reads);
         Assert.Single(GateObligationSelectorPreAdmissionClassifier.ReadCandidateInventory(Candidate,
-            () => Candidate, () => Inventory("PlannedTestsLauncher"))!);
+            () => (Candidate, null), () => Inventory("PlannedTestsLauncher")).Classes!);
+    }
+
+    [Fact]
+    public void CandidateInventory_DirtyWorktreeNamesFirstFailure()
+    {
+        using var fixture = new Case("PlannedTests");
+        using var repository = new GitWorkspaceLaunchFixture();
+        var root = repository.Root;
+        Assert.Equal(0, GitCli.Run(root, "init").ExitCode);
+        var path = Path.Combine(root, "fixture.txt");
+        File.WriteAllText(path, "committed");
+        Assert.Equal(0, GitCli.Run(root, "add", "--force", "fixture.txt").ExitCode);
+        Assert.Equal(0, GitCli.Run(root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+            "-c", "commit.gpgsign=false", "commit", "-m", "fixture").ExitCode);
+        var clean = GateObligationSelectorPreAdmissionClassifier.ReadWorktreeRevision(root);
+        Assert.Null(clean.UnavailableCause);
+        Assert.NotNull(clean.Revision);
+        Assert.NotEqual(Candidate, clean.Revision);
+        File.WriteAllText(path, "dirty");
+
+        var result = GateObligationSelectorPreAdmissionClassifier.ApplyWithCandidateInventory(
+            fixture.Kernel, fixture.Goal, fixture.Evidence.OrchestratorDirectory, Candidate,
+            () => GateObligationSelectorPreAdmissionClassifier.ReadCandidateInventory(Candidate,
+                () => GateObligationSelectorPreAdmissionClassifier.ReadWorktreeRevision(root),
+                () => throw new InvalidOperationException("Dirty worktree reached the scan")), _ => Assert.Fail("Do not record a rebind"));
+        Assert.Contains($"inventory unavailable at candidate {Candidate}: worktree is not clean at the candidate",
+            Assert.Single(result.HoldLines));
     }
 
     [Theory]
@@ -370,6 +404,79 @@ public sealed class GateObligationSelectorPreAdmissionTests
         Assert.True(result.Hold);
         Assert.Contains("pre-admission classification unavailable", Assert.Single(result.HoldLines));
         Assert.Empty(fixture.Kernel.HumanInputRequests);
+    }
+
+    [Fact]
+    public void DeclaredInventory_ResolvesTransitiveConstantsWithoutImportingTestClasses()
+    {
+        using var fixture = new Case("ReferencedCollectionTests");
+        var root = fixture.Evidence.Root;
+        WriteInventoryProjects(root);
+        WriteProject(root, "Core.Tests", "../Bridge/Bridge.csproj");
+        WriteProject(root, "Bridge", "../Shared/Shared.csproj");
+        WriteProject(root, "Shared", "../Core.Tests/Core.Tests.csproj");
+        File.WriteAllText(Path.Combine(root, "tests", "Shared", "SharedCollections.cs"), """
+            namespace Fixture;
+            public static class SharedCollections { public const string Serial = "SharedSerial"; }
+            public class ReferencedOnlyTests { [Xunit.Fact] public void Runs() { } }
+            """);
+        File.WriteAllText(Path.Combine(root, "tests", "Core.Tests", "ReferencedCollectionTests.cs"), """
+            namespace Fixture;
+            [Xunit.Collection(SharedCollections.Serial)]
+            public class ReferencedCollectionTests { [Xunit.Fact] public void Runs() { } }
+            """);
+
+        var inventory = GateObligationSelectorPreAdmissionClassifier.ReadDeclaredInventory(root);
+
+        var test = Assert.Single(inventory, item => item.FullName == "Fixture.ReferencedCollectionTests");
+        Assert.Equal("SharedSerial", test.Collection);
+        Assert.False(test.CollectionUnknown);
+        Assert.DoesNotContain(inventory, item => item.FullName == "Fixture.ReferencedOnlyTests");
+    }
+
+    [Fact]
+    public void DeclaredInventory_UnknownCollectionsKeepClassesSelectable()
+    {
+        using var fixture = new Case("UnknownTests");
+        var root = fixture.Evidence.Root;
+        WriteInventoryProjects(root);
+        File.WriteAllText(Path.Combine(root, "tests", "Core.Tests", "Collections.cs"), """
+            namespace First { public static class Shared { public const string Name = "First"; } }
+            namespace Second { public static class Shared { public const string Name = "Second"; } }
+            namespace Fixture
+            {
+                [Xunit.Collection("Literal")]
+                public class LiteralTests { [Xunit.Fact] public void Runs() { } }
+                [Xunit.Collection(Undefined.Name)]
+                public partial class UnknownTests : LiteralTests { }
+                public partial class UnknownTests { }
+                public class InheritedUnknownTests : UnknownTests { }
+                [Xunit.Collection(Shared.Name)]
+                public class AmbiguousTests { [Xunit.Fact] public void Runs() { } }
+            }
+            """);
+
+        var inventory = GateObligationSelectorPreAdmissionClassifier.ReadDeclaredInventory(root);
+
+        Assert.Collection(inventory,
+            item => Assert.Equal(new("Fixture.AcceptanceCriteriaParserTests", null), item),
+            item => Assert.Equal(new("Fixture.AmbiguousTests", null, CollectionUnknown: true), item),
+            item => Assert.Equal(new("Fixture.CandidateIdentityTests", null), item),
+            item => Assert.Equal(new("Fixture.GoalRepositoriesCandidateIdentityTests", null), item),
+            item => Assert.Equal(new("Fixture.InheritedUnknownTests", null, CollectionUnknown: true), item),
+            item => Assert.Equal(new("Fixture.LiteralTests", "Literal"), item),
+            item => Assert.Equal(new("Fixture.UnknownTests", null, CollectionUnknown: true), item));
+        Assert.False(fixture.Apply(inventory).Hold);
+        Assert.Empty(fixture.Kernel.HumanInputRequests);
+    }
+
+    private static void WriteProject(string root, string project, string reference)
+    {
+        var directory = Path.Combine(root, "tests", project);
+        Directory.CreateDirectory(directory);
+        new XDocument(new XElement("Project", new XElement("ItemGroup",
+            new XElement("ProjectReference", new XAttribute("Include", reference)))))
+            .Save(Path.Combine(directory, project + ".csproj"));
     }
 
     private static void WriteInventoryProjects(string root)

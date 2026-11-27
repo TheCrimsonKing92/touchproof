@@ -42,15 +42,26 @@ internal static class GateObligationSelectorPreAdmissionClassifier
         }).ToArray();
     }
 
+    internal sealed record CandidateInventory(IReadOnlyList<AcceptanceTestClassDescriptor>? Classes,
+        string? UnavailableCause = null);
+
     // The scanner reads a worktree. Both observations must bind it to this admission candidate.
-    internal static IReadOnlyList<AcceptanceTestClassDescriptor>? ReadCandidateInventory(
-        string candidateRevision, Func<string> readRevision,
+    internal static CandidateInventory ReadCandidateInventory(
+        string candidateRevision, Func<(string? Revision, string? UnavailableCause)> readRevision,
         Func<IReadOnlyList<AcceptanceTestClassDescriptor>> scan)
     {
-        if (!ConductorGitRevisionReader.IsValid(candidateRevision) ||
-            !string.Equals(readRevision(), candidateRevision, StringComparison.Ordinal)) return null;
+        if (!ConductorGitRevisionReader.IsValid(candidateRevision)) return new(null, "invalid candidate revision");
+        var before = readRevision();
+        if (before.UnavailableCause is { } beforeCause) return new(null, beforeCause);
+        if (!string.Equals(before.Revision, candidateRevision, StringComparison.Ordinal))
+            return new(null, $"candidate revision mismatch (worktree HEAD {before.Revision})");
+
         var inventory = scan();
-        return string.Equals(readRevision(), candidateRevision, StringComparison.Ordinal) ? inventory : null;
+        var after = readRevision();
+        if (after.UnavailableCause is { } afterCause) return new(null, afterCause);
+        return string.Equals(after.Revision, candidateRevision, StringComparison.Ordinal)
+            ? new(inventory)
+            : new(null, $"worktree revision changed during inventory scan (worktree HEAD {after.Revision})");
     }
 
     internal static IReadOnlyList<AcceptanceTestClassDescriptor> ReadDeclaredInventory(string root,
@@ -70,7 +81,11 @@ internal static class GateObligationSelectorPreAdmissionClassifier
     }
 
     internal static Result Apply(AgentOrchestratorKernel kernel, Goal goal, string? orchestratorDirectory,
-        string candidateRevision, Func<IReadOnlyList<AcceptanceTestClassDescriptor>?> readInventory, Action<string> emit)
+        string candidateRevision, Func<IReadOnlyList<AcceptanceTestClassDescriptor>?> readInventory, Action<string> emit) =>
+        ApplyWithCandidateInventory(kernel, goal, orchestratorDirectory, candidateRevision, () => new(readInventory()), emit);
+
+    internal static Result ApplyWithCandidateInventory(AgentOrchestratorKernel kernel, Goal goal, string? orchestratorDirectory,
+        string candidateRevision, Func<CandidateInventory> readInventory, Action<string> emit)
     {
         var pending = orchestratorDirectory is null
             ? GateTestObligationEffectiveSelectors.Current(goal)
@@ -82,7 +97,8 @@ internal static class GateObligationSelectorPreAdmissionClassifier
                     GateTestObligationEvaluator.Outcome.Waived or GateTestObligationEvaluator.Outcome.TraitExcluded or
                     GateTestObligationEvaluator.Outcome.AllSkipped))
             .Select(result => result.Obligation).ToArray();
-        var inventory = new Lazy<IReadOnlyList<AcceptanceTestClassDescriptor>?>(readInventory);
+        var inventory = new Lazy<CandidateInventory>(() => ConductorGitRevisionReader.IsValid(candidateRevision)
+            ? readInventory() : new(null, "invalid candidate revision"));
         var holds = new List<string>();
         foreach (var obligation in pending.Where(item => GateTestObligationRepositoryKey.IsHome(item.RepositoryKey)))
         {
@@ -96,9 +112,12 @@ internal static class GateObligationSelectorPreAdmissionClassifier
                     var rebinds = AnsweredSelectorRebinding.For(goal, obligation, kernel.HumanInputRequests);
                     var existing = rebinds.SingleOrDefault(item => item.OldClass == selector);
                     var considered = existing?.NewClass ?? selector;
-                    if (!ConductorGitRevisionReader.IsValid(candidateRevision) || inventory.Value is not { Count: > 0 } classes)
+                    var candidateInventory = inventory.Value;
+                    if (candidateInventory.Classes is not { Count: > 0 } classes)
                     {
-                        Hold($"inventory unavailable at candidate {candidateRevision}; candidate classes considered: none");
+                        var cause = candidateInventory.UnavailableCause ?? (candidateInventory.Classes is null
+                            ? "inventory reader returned no inventory" : "declared inventory is empty");
+                        Hold($"inventory unavailable at candidate {candidateRevision}: {cause}; candidate classes considered: none");
                         continue;
                     }
                     var classification = Classify([considered], classes).Single();
@@ -159,17 +178,12 @@ internal static class GateObligationSelectorPreAdmissionClassifier
             var revision = ready.Projection.CandidateRevision;
             try
             {
-                var result = Apply(kernel, goal, workspace?.OrchestratorDirectory, revision, () =>
+                var result = ApplyWithCandidateInventory(kernel, goal, workspace?.OrchestratorDirectory, revision, () =>
                 {
-                    if (workspace is null) return null;
+                    if (workspace is null) return new(null, "goal workspace is unavailable");
                     var root = workspace.ResolveExecutionDirectory(goal.Id);
-                    return ReadCandidateInventory(revision, () =>
-                    {
-                        var status = GitCli.Run(root, "status", "--porcelain", "--untracked-files=normal");
-                        if (!status.Succeeded || status.DrainTimedOut || !string.IsNullOrWhiteSpace(status.Output)) return "";
-                        var head = GitCli.Run(root, "rev-parse", "--verify", "HEAD");
-                        return head.Succeeded && !head.DrainTimedOut ? head.Output.Trim() : "";
-                    }, () => ReadDeclaredInventory(root, workspace.ProjectHomeDirectoryOrNull));
+                    return ReadCandidateInventory(revision, () => ReadWorktreeRevision(root),
+                        () => ReadDeclaredInventory(root, workspace.ProjectHomeDirectoryOrNull));
                 }, emit);
                 if (!result.Hold) continue;
                 held.Add(goal.Id.Value);
@@ -184,6 +198,15 @@ internal static class GateObligationSelectorPreAdmissionClassifier
             }
         }
         return held;
+    }
+
+    internal static (string? Revision, string? UnavailableCause) ReadWorktreeRevision(string root)
+    {
+        var status = GitCli.Run(root, "status", "--porcelain", "--untracked-files=normal");
+        if (!status.Succeeded || status.DrainTimedOut) return (null, "git status failed");
+        if (!string.IsNullOrWhiteSpace(status.Output)) return (null, "worktree is not clean at the candidate");
+        var head = GitCli.Run(root, "rev-parse", "--verify", "HEAD");
+        return head.Succeeded && !head.DrainTimedOut ? (head.Output.Trim(), null) : (null, "git rev-parse failed");
     }
 
     private static bool HasRecordedPair(AgentOrchestratorKernel kernel, Goal goal, GateTestObligation obligation,
