@@ -48,20 +48,8 @@ internal static class ProviderHoldSeedEvidenceStore
             while (await reader.ReadAsync(cancellationToken))
             {
                 var id = reader.GetString(0);
-                try
-                {
-                    if (reader.GetValue(1) is not byte[] payload) continue;
-                    using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(payload)!;
-                    var evidence = JsonSerializer.Deserialize<ProviderUsageGoalEvidence>(stream, options);
-                    if (evidence is not null && evidence.GoalId == id && evidence.Tasks is not null &&
-                        evidence.Timeline is not null && evidence.Tasks.All(task => task is not null &&
-                            GoalTaskHistoryStore.HasUsableCachedHistories(task)) &&
-                        evidence.Timeline.All(evt => evt is not null && evt.GoalId?.Value == id))
-                        result[id] = evidence;
-                }
-                catch (Exception exception) when (exception is JsonException or InvalidDataException or
-                    NotSupportedException or InvalidOperationException)
-                { /* Unusable rows are misses, never authoritative evidence. */ }
+                if (TryDecode(id, reader.GetValue(1), options) is { } evidence)
+                    result[id] = evidence;
             }
         }
         catch (SqliteException) { result.Clear(); } // Missing/unreadable table: project every candidate.
@@ -83,8 +71,37 @@ internal static class ProviderHoldSeedEvidenceStore
         return result.Values.OrderBy(evidence => evidence.GoalId, StringComparer.Ordinal).ToArray();
     }
 
+    internal static ProviderUsageGoalEvidence? TryDecode(string id, object value, JsonSerializerOptions options)
+    {
+        if (value is not byte[] payload) return null;
+        try
+        {
+            using var stream = GoalSnapshotArchiveCodec.OpenDecodedStream(payload)!;
+            var evidence = JsonSerializer.Deserialize<ProviderUsageGoalEvidence>(stream, options);
+            if (evidence is not null && evidence.GoalId == id && evidence.Tasks is not null &&
+                evidence.Timeline is not null && evidence.Tasks.All(task => task is not null &&
+                    GoalTaskHistoryStore.HasUsableCachedHistories(task)) &&
+                evidence.Timeline.All(evt => evt is not null && evt.GoalId?.Value == id))
+                return evidence;
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidDataException or
+            NotSupportedException or InvalidOperationException)
+        { /* Unusable rows are misses, never authoritative evidence. */ }
+        return null;
+    }
+
+    internal static async Task<bool> HasReadableSchemaAsync(SqliteConnection connection, CancellationToken token)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT count(*) FROM pragma_table_info('provider_hold_seed_evidence')
+            WHERE name IN ('goal_id', 'marker', 'format_version', 'evidence_json')
+            """;
+        return (long)(await command.ExecuteScalarAsync(token))! == 4;
+    }
+
     [StoreSchemaSource("orchestrator-state", "src/Mcg.AgentOrchestrator.Execution/Persistence/ProviderHoldSeedEvidenceStore.cs")]
-    private static async Task CreateSchemaAsync(SqliteConnection connection, CancellationToken token)
+    internal static async Task CreateSchemaAsync(SqliteConnection connection, CancellationToken token)
     {
         await using var command = connection.CreateCommand();
         command.CommandTimeout = 1;
@@ -103,7 +120,8 @@ internal static class ProviderHoldSeedEvidenceStore
         IReadOnlyList<(ProviderUsageGoalEvidence Evidence, string Marker)> rows,
         JsonSerializerOptions options, CancellationToken token)
     {
-        if (rows.Count == 0) return;
+        if (rows.Count == 0 || new SqliteConnectionStringBuilder(connection.ConnectionString).Mode == SqliteOpenMode.ReadOnly)
+            return;
         var began = false;
         long? busyTimeout = null;
         try
@@ -128,18 +146,7 @@ internal static class ProviderHoldSeedEvidenceStore
                 if (remainingJsonBytes < 0)
                     break;
 
-                command.CommandText = """
-                    INSERT INTO provider_hold_seed_evidence (goal_id, marker, format_version, evidence_json)
-                    VALUES ($id, $marker, $version, $json)
-                    ON CONFLICT(goal_id) DO UPDATE SET marker = excluded.marker,
-                        format_version = excluded.format_version, evidence_json = excluded.evidence_json
-                    """;
-                command.Parameters.Clear();
-                command.Parameters.AddWithValue("$id", evidence.GoalId);
-                command.Parameters.AddWithValue("$marker", marker);
-                command.Parameters.AddWithValue("$version", FormatVersion);
-                command.Parameters.AddWithValue("$json", GoalSnapshotArchiveCodec.Encode(json, CompressionLevel.Fastest));
-                await command.ExecuteNonQueryAsync(token);
+                await UpsertAsync(command, evidence.GoalId, marker, json, token);
             }
             command.CommandText = "COMMIT";
             await command.ExecuteNonQueryAsync(token);
@@ -164,5 +171,22 @@ internal static class ProviderHoldSeedEvidenceStore
                 catch (SqliteException) { /* Best effort, like the cache write itself. */ }
             }
         }
+    }
+
+    internal static async Task UpsertAsync(SqliteCommand command, string id, string marker, byte[] json,
+        CancellationToken token)
+    {
+        command.CommandText = """
+            INSERT INTO provider_hold_seed_evidence (goal_id, marker, format_version, evidence_json)
+            VALUES ($id, $marker, $version, $json)
+            ON CONFLICT(goal_id) DO UPDATE SET marker = excluded.marker,
+                format_version = excluded.format_version, evidence_json = excluded.evidence_json
+            """;
+        command.Parameters.Clear();
+        command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$marker", marker);
+        command.Parameters.AddWithValue("$version", FormatVersion);
+        command.Parameters.AddWithValue("$json", GoalSnapshotArchiveCodec.Encode(json, CompressionLevel.Fastest));
+        await command.ExecuteNonQueryAsync(token);
     }
 }

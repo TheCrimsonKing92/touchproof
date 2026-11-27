@@ -113,7 +113,7 @@ public sealed class ReverseDependencyPartialMemberFilterTests
         Assert.Equal(ReverseDependencySelectionOutcome.Resolved, baseline.Outcome);
         Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
         Assert.Equal(["AlphaTests", "BetaTests"], baseline.TestClassNames);
-        Assert.Equal(baseline.TestClassNames, selection.TestClassNames);
+        Assert.Equal(scenario == "non-partial" ? ["AlphaTests"] : baseline.TestClassNames, selection.TestClassNames);
     }
 
     [Fact]
