@@ -271,19 +271,20 @@ internal static partial class CliCommandHandlers
                 if (showArgs is { } parsed)
                 {
                     var (includeHistory, goalPrefix, limit) = parsed;
-                    var parkedGoalIds = !includeHistory && !context.IsReadOnlyQuery
-                        ? AttentionParkedGoals.IdsForShow(context.Kernel)
-                        : null;
+                    // Project the writer fallback's legacy park sweep onto display rows only.
+                    var parkedResolutions = context.IsReadOnlyQuery ? [] : AttentionShowParkedState.ReadResolutions(context.Kernel);
+                    var parkedGoalIds = !includeHistory && parkedResolutions.Count > 0
+                        ? parkedResolutions.Keys.ToHashSet(StringComparer.Ordinal) : null;
                     var showNow = DateTimeOffset.UtcNow;
 
                     if (goalPrefix is null)
                     {
                         (IReadOnlyList<CollaborationItem> remainingShowQueue, bool printedShowCrossGoal) = includeHistory
                             ? ([], false) : PrintCrossGoalAttentionItems(context.Kernel, store, parkedGoalIds);
-                        AttentionShowDecisionsTextView.PrintThenDuties(context.Workspace, context.Kernel.Goals, parkedGoalIds);
+                        AttentionShowParkedState.PrintDecisions(context.Workspace, context.Kernel.Goals, store, parkedResolutions, showNow);
                         var environmentHeld = EnvironmentHoldAttentionView.Print(context.Kernel.Goals);
                         environmentHeld |= PlannerBriefAmendmentHoldAttentionView.Print(context.Kernel,
-                            context.Kernel.Goals.Where(goal => parkedGoalIds?.Contains(goal.Id.Value) != true));
+                            context.Kernel.Goals.Where(goal => !parkedResolutions.ContainsKey(goal.Id.Value)));
                         environmentHeld |= OwnerQuestionHoldAttentionView.Print(context.Kernel.Goals, showNow);
                         var showWaits = HumanWaitsForAttention(context.Kernel, null, includeHistory);
                         if (parkedGoalIds is { Count: > 0 })
@@ -291,7 +292,8 @@ internal static partial class CliCommandHandlers
                         if (showWaits.Count > 0 || context.Kernel.Goals.Any(goal => goal.GateTestObligations.Count > 0))
                         {
                             if (includeHistory)
-                                limit.PrintWaits(showWaits, showNow, context.Kernel.Goals);
+                                limit.PrintWaits(AttentionShowParkedState.ProjectWaits(showWaits, context.Kernel, parkedResolutions, showNow),
+                                    showNow, context.Kernel.Goals);
                             else
                                 HumanWaitsTextView.Print(showWaits, showNow, includeHistory, context.Kernel.Goals);
                         }
@@ -304,7 +306,8 @@ internal static partial class CliCommandHandlers
                                 return false;
 
                             var clarificationUniverse = showWaits.Count == 0 ? allItems.Where(IsSpecClarification).ToList() : null;
-                            limit.PrintItems(historyItems, item => clarificationUniverse is not null && IsSpecClarification(item)
+                            limit.PrintItems(AttentionShowParkedState.ProjectItems(historyItems, parkedResolutions, showNow),
+                                item => clarificationUniverse is not null && IsSpecClarification(item)
                                 ? ClarificationId(item, clarificationUniverse) : null);
                             return false;
                         }
@@ -324,7 +327,7 @@ internal static partial class CliCommandHandlers
                     var parkedForShow = parkedGoalIds?.Contains(goal.Id.Value) == true;
                     PostLandingDutiesTextView.Print([goal]);
                     var environmentHeldForGoal = EnvironmentHoldAttentionView.Print([goal]);
-                    if (!parkedForShow)
+                    if (!parkedResolutions.ContainsKey(goal.Id.Value))
                         environmentHeldForGoal |= PlannerBriefAmendmentHoldAttentionView.Print(context.Kernel, [goal]);
                     environmentHeldForGoal |= OwnerQuestionHoldAttentionView.Print([goal], showNow);
                     var clarificationIdentityUniverse = AllClarificationsForGoal(store, goal);
@@ -332,7 +335,8 @@ internal static partial class CliCommandHandlers
                     if (waitsForGoal.Count > 0 || goal.GateTestObligations.Count > 0)
                     {
                         if (includeHistory)
-                            limit.PrintWaits(waitsForGoal, showNow, [goal]);
+                            limit.PrintWaits(AttentionShowParkedState.ProjectWaits(waitsForGoal, context.Kernel, parkedResolutions, showNow),
+                                showNow, [goal]);
                         else
                             HumanWaitsTextView.Print(waitsForGoal, showNow, includeHistory, [goal]);
                     }
@@ -348,7 +352,7 @@ internal static partial class CliCommandHandlers
                             return false;
                         }
 
-                        limit.PrintItems(historyItems,
+                        limit.PrintItems(AttentionShowParkedState.ProjectItems(historyItems, parkedResolutions, showNow),
                             item => IsSpecClarification(item) ? ClarificationId(item, clarificationIdentityUniverse) : null);
                         return false;
                     }
@@ -395,7 +399,7 @@ internal static partial class CliCommandHandlers
                 }
 
                 var migratedHumanWaits = context.IsReadOnlyQuery ? 0 : context.Kernel.SweepParkedGoalHumanWaits();
-                var migratedCollaborationItems = context.IsReadOnlyQuery ? 0 : AttentionParkedGoals.ResolveOpenItems(context.Kernel, store);
+                var migratedCollaborationItems = context.IsReadOnlyQuery ? 0 : AttentionShowParkedState.ResolveOpenItems(context.Kernel, store);
                 var waits = HumanWaitsForAttention(context.Kernel, null, includeHistory: false);
                 var (queue, printedCrossGoal) = PrintCrossGoalAttentionItems(context.Kernel, store);
                 PostLandingDutiesTextView.Print(context.Kernel.Goals);

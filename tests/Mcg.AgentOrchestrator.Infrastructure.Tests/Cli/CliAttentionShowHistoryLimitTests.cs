@@ -179,7 +179,7 @@ public sealed class CliAttentionShowHistoryLimitTests : CliTaskQueryTestSupport,
         const string legacyQuestion = "Goal parked: stale_resurrected_sweep";
         var wait = fixture.Kernel.RequestHumanInput(fixture.Goal.Id, null, legacyQuestion);
         Assert.Equal(GoalStatus.WaitingForHuman, fixture.Goal.Status);
-        await fixture.Store.RaiseAsync(CollaborationItemType.Decision, fixture.Goal.Id.Value, "Legacy item", "");
+        var item = await fixture.Store.RaiseAsync(CollaborationItemType.Decision, fixture.Goal.Id.Value, "Legacy item", "");
         var before = await Snapshot(fixture);
 
         var error = Assert.Throws<ArgumentException>(() =>
@@ -198,8 +198,18 @@ public sealed class CliAttentionShowHistoryLimitTests : CliTaskQueryTestSupport,
 
         var historyResult = ExecuteCliAndCaptureResult([.. defaultArgs, "--all", "--limit", "5"], fixture.Kernel, fixture.Workspace);
         var historyLines = Lines(historyResult.Output);
-        Assert.Contains(QuestionPrefix + legacyQuestion, historyLines);
-        Assert.Contains(SubjectPrefix + "Legacy item", historyLines);
+        var questionIndex = Array.IndexOf(historyLines, QuestionPrefix + legacyQuestion);
+        Assert.True(questionIndex >= 3);
+        Assert.StartsWith("    status: answered at ", historyLines[questionIndex - 3]);
+        Assert.Equal($"    resolution: {legacyQuestion}", historyLines[questionIndex - 2]);
+        var itemIndex = Array.IndexOf(historyLines,
+            $"  [Decision] {item.Id[..8]} status=Resolved goal={GoalPrefix}");
+        Assert.True(itemIndex >= 0);
+        Assert.Equal($"    dismiss: unavailable (status=Resolved; item-id={item.Id})", historyLines[itemIndex + 1]);
+        Assert.Equal(SubjectPrefix + "Legacy item", historyLines[itemIndex + 2]);
+        Assert.Equal($"    resolution: {legacyQuestion}", historyLines[itemIndex + 3]);
+        Assert.StartsWith("    resolved: ", historyLines[itemIndex + 5]);
+        Assert.DoesNotContain(historyLines, line => line.EndsWith(OmissionSuffix, StringComparison.Ordinal));
         Assert.False(historyResult.Changed);
         Assert.Equal(before, await Snapshot(fixture));
 

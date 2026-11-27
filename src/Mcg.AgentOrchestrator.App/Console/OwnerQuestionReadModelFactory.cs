@@ -9,10 +9,8 @@ internal static class OwnerQuestionReadModelFactory
         Func<string?>? stateMarker = null) =>
         new OwnerQuestionReadModel(state, orchestratorDirectory, snapshots, changeMarker, stateMarker);
 
-    internal static OwnerQuestionReadModel ForWorkspace(OrchestratorWorkspace workspace,
-        IReadOnlySet<string>? excludedCollaborationGoalIds = null) =>
-        new(File.Exists(workspace.SqliteStatePath)
+    internal static OwnerQuestionReadModel ForWorkspace(OrchestratorWorkspace workspace) =>
+        Create(File.Exists(workspace.SqliteStatePath)
             ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
-            : new EmptyOwnerConsoleStateQueries(), workspace.OrchestratorDirectory,
-            excludedCollaborationGoalIds: excludedCollaborationGoalIds);
+            : new EmptyOwnerConsoleStateQueries(), workspace.OrchestratorDirectory);
 }
