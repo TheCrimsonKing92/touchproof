@@ -32,24 +32,30 @@ internal static class ProviderHoldSeedEvidenceStore
         var result = new Dictionary<string, ProviderUsageGoalEvidence>(StringComparer.Ordinal);
         try
         {
-            var hasArchive = await HasArchiveAsync(connection, cancellationToken);
             await using var command = connection.CreateCommand();
-            command.CommandText = $"""
-                SELECT g.id, e.evidence_json FROM goals g
-                {(hasArchive ? "LEFT JOIN goal_snapshot_archive a ON a.goal_id = g.id" : "")}
-                JOIN provider_hold_seed_evidence e ON e.goal_id = g.id
-                WHERE g.id IN (SELECT value FROM json_each($ids))
-                    AND e.format_version = $version AND e.marker = {MarkerSql(hasArchive)}
-                ORDER BY g.id
-                """;
-            command.Parameters.AddWithValue("$ids", JsonSerializer.Serialize(ids.Select(id => id.Value)));
-            command.Parameters.AddWithValue("$version", FormatVersion);
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-            while (await reader.ReadAsync(cancellationToken))
+            // An observing caller may already have pinned the database snapshot.
+            using var snapshot = command.Transaction is null ? connection.BeginTransaction(deferred: true) : null;
+            command.Transaction ??= snapshot;
+            if (ProviderHoldIndexStamp.TryRead(connection, cancellationToken) is { IsValid: true })
             {
-                var id = reader.GetString(0);
-                if (TryDecode(id, reader.GetValue(1), options) is { } evidence)
-                    result[id] = evidence;
+                var hasArchive = await HasArchiveAsync(connection, cancellationToken);
+                command.CommandText = $"""
+                    SELECT g.id, e.evidence_json FROM goals g
+                    {(hasArchive ? "LEFT JOIN goal_snapshot_archive a ON a.goal_id = g.id" : "")}
+                    JOIN provider_hold_seed_evidence e ON e.goal_id = g.id
+                    WHERE g.id IN (SELECT value FROM json_each($ids))
+                        AND e.format_version = $version AND e.marker = {MarkerSql(hasArchive)}
+                    ORDER BY g.id
+                    """;
+                command.Parameters.AddWithValue("$ids", JsonSerializer.Serialize(ids.Select(id => id.Value)));
+                command.Parameters.AddWithValue("$version", FormatVersion);
+                await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    var id = reader.GetString(0);
+                    if (TryDecode(id, reader.GetValue(1), options) is { } evidence)
+                        result[id] = evidence;
+                }
             }
         }
         catch (SqliteException) { result.Clear(); } // Missing/unreadable table: project every candidate.
@@ -92,12 +98,28 @@ internal static class ProviderHoldSeedEvidenceStore
 
     internal static async Task<bool> HasReadableSchemaAsync(SqliteConnection connection, CancellationToken token)
     {
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT count(*) FROM pragma_table_info('provider_hold_seed_evidence')
-            WHERE name IN ('goal_id', 'marker', 'format_version', 'evidence_json')
-            """;
-        return (long)(await command.ExecuteScalarAsync(token))! == 4;
+        var snapshot = connection.BeginTransaction(deferred: true);
+        var readable = false;
+        try
+        {
+            if (ProviderHoldIndexStamp.TryRead(connection, token) is not { IsValid: true })
+                return false;
+
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT count(*) FROM pragma_table_info('provider_hold_seed_evidence')
+                WHERE name IN ('goal_id', 'marker', 'format_version', 'evidence_json')
+                """;
+            readable = (long)(await command.ExecuteScalarAsync(token))! == 4;
+            return readable;
+        }
+        finally
+        {
+            // Discovery owns this connection. Keep a valid stamp's read view pinned
+            // for its subsequent indexed queries, until that connection is disposed.
+            if (!readable)
+                snapshot.Dispose();
+        }
     }
 
     [StoreSchemaSource("orchestrator-state", "src/Mcg.AgentOrchestrator.Execution/Persistence/ProviderHoldSeedEvidenceStore.cs")]
@@ -114,6 +136,7 @@ internal static class ProviderHoldSeedEvidenceStore
             )
             """;
         await command.ExecuteNonQueryAsync(token);
+        await ProviderHoldIndexStamp.CreateSchemaAsync(connection, token);
     }
 
     private static async Task TryWriteAsync(SqliteConnection connection,
@@ -188,5 +211,6 @@ internal static class ProviderHoldSeedEvidenceStore
         command.Parameters.AddWithValue("$version", FormatVersion);
         command.Parameters.AddWithValue("$json", GoalSnapshotArchiveCodec.Encode(json, CompressionLevel.Fastest));
         await command.ExecuteNonQueryAsync(token);
+        await ProviderHoldIndexStamp.AdvanceAsync(command.Connection!, token);
     }
 }
