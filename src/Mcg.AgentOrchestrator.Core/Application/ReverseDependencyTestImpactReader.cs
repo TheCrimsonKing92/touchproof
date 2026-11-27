@@ -322,12 +322,26 @@ internal static class ReverseDependencyTestImpactReader
                     seenPaths.Add(consumer.Path);
                 }
 
+                HashSet<string>? shippingConsumersWithMultipleParts = null;
                 if (propagateShippingSourceReach || shippingReachDiagnostics is not null)
-                    shippingFrontier = consumers.Where(file => !file.IsTargetTestProject)
+                {
+                    var shippingConsumers = consumers.Where(file => !file.IsTargetTestProject)
                         .SelectMany(file => file.Symbols!.DeclaredTypes)
                         .Where(ReferencesFrontier)
+                        .ToArray();
+                    shippingFrontier = shippingConsumers
                         .Select(declaration => declaration.Name)
                         .ToHashSet(StringComparer.Ordinal);
+                    if (propagateShippingSourceReach)
+                    {
+                        shippingConsumersWithMultipleParts = shippingConsumers
+                            .Where(declaration => declaration.IsPartial)
+                            .GroupBy(declaration => declaration.Name, StringComparer.Ordinal)
+                            .Where(parts => parts.Count() > 1)
+                            .Select(parts => parts.Key)
+                            .ToHashSet(StringComparer.Ordinal);
+                    }
+                }
 
                 frontier = MergeFrontier(consumers
                     .SelectMany(file => file.Symbols!.DeclaredTypes
@@ -341,7 +355,8 @@ internal static class ReverseDependencyTestImpactReader
                                 ? TestSelectionMode.AllReferencingClasses
                                 : TestSelectionMode.OwnedClassOnly,
                             ConsumerFilter(declaration, frontier, knownMembersByType,
-                                !file.IsTargetTestProject && propagateShippingSourceReach ? shippingFrontier : null)))));
+                                !file.IsTargetTestProject && propagateShippingSourceReach ? shippingFrontier : null,
+                                !file.IsTargetTestProject && shippingConsumersWithMultipleParts?.Contains(declaration.Name) == true)))));
                 if (frontier.Length == 0)
                 {
                     break;
@@ -913,11 +928,21 @@ internal static class ReverseDependencyTestImpactReader
         CSharpTestClassScanner.SourceTypeDeclaration declaration,
         IReadOnlyList<FrontierSymbol> frontier,
         IReadOnlyDictionary<string, HashSet<string>> knownMembersByType,
-        IReadOnlySet<string>? shippingFrontier)
+        IReadOnlySet<string>? shippingFrontier,
+        bool hasMultipleReachedParts)
     {
         var fallback = declaration.IsPartial ? MemberNames(declaration.Members) : null;
+        // Caller expansion is local to a declaration. Keep every member of each reached part
+        // when calls can cross between those parts.
         if (shippingFrontier is null || declaration.UnattributedIdentifiers is not { } unattributed ||
+            hasMultipleReachedParts ||
             declaration.Members.Any(member => member.ReferencedIdentifiers is null))
+            return fallback;
+
+        bool HasShippingPeer(IReadOnlySet<string> identifiers) => identifiers.Any(identifier =>
+            identifier != declaration.Name && shippingFrontier.Contains(identifier));
+
+        if (HasShippingPeer(unattributed))
             return fallback;
 
         var names = new HashSet<string>(StringComparer.Ordinal);
@@ -953,8 +978,7 @@ internal static class ReverseDependencyTestImpactReader
         // A forwarding member can reach the change through another consumer on this hop,
         // including through callbacks whose targets are outside this declaration.
         foreach (var member in declaration.Members)
-            if (member.ReferencedIdentifiers!.Any(identifier =>
-                    identifier != declaration.Name && shippingFrontier.Contains(identifier)))
+            if (HasShippingPeer(member.ReferencedIdentifiers!))
                 names.Add(member.Name);
 
         return CompleteMemberFilter(declaration.Members, names, unattributed) ?? fallback;

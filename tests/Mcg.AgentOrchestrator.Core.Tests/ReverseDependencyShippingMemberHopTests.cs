@@ -88,6 +88,72 @@ public sealed class ReverseDependencyShippingMemberHopTests
     }
 
     [Fact]
+    public void SameHopShippingPeer_ReferencedByField_PreservesWholeTypeReach()
+    {
+        using var repository = new Repository();
+        WriteStore(repository);
+        repository.Write("src/Fixture/Worker.cs", """
+            internal class Worker
+            {
+                internal int Run() => Store.Save();
+            }
+            """);
+        repository.Write(Hub, """
+            internal class Hub
+            {
+                private static readonly Worker worker = new();
+                internal static int Write() => worker.Run();
+                internal static int Direct() => Store.Save();
+                internal static int Read() => 0;
+            }
+            """);
+        WriteHubTests(repository);
+        repository.WriteTest("DirectTests", "Hub.Direct()");
+
+        var selection = repository.Read(Store, (5, 5));
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Assert.Equal(["DirectTests", "ReadTests", "WriteTests"], selection.TestClassNames);
+        Assert.Equal([("Hub", "DirectTests"), ("Hub", "ReadTests"), ("Hub", "WriteTests")], repository.ShippingReach);
+    }
+
+    [Fact]
+    public void ReachedPartialParts_KeepCrossPartCallerReach()
+    {
+        using var repository = new Repository();
+        WriteStore(repository);
+        repository.Write(Hub, """
+            internal partial class Hub
+            {
+                internal static int Write() => Helper();
+                internal static int Direct() => Store.Save();
+            }
+            """);
+        repository.Write("src/Fixture/Hub.Other.cs", """
+            internal partial class Hub
+            {
+                internal static int Helper() => Store.Save();
+            }
+            """);
+        repository.Write("src/Fixture/Hub.Audit.cs", """
+            internal partial class Hub
+            {
+                internal static int Audit() => 0;
+            }
+            """);
+        repository.WriteTest("DirectTests", "Hub.Direct()");
+        repository.WriteTest("HelperTests", "Hub.Helper()");
+        repository.WriteTest("WriteTests", "Hub.Write()");
+        repository.WriteTest("AuditTests", "Hub.Audit()");
+
+        var selection = repository.Read(Store, (5, 5));
+
+        Assert.Equal(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Assert.Equal(["DirectTests", "HelperTests", "WriteTests"], selection.TestClassNames);
+        Assert.Equal([("Hub", "DirectTests"), ("Hub", "HelperTests"), ("Hub", "WriteTests")], repository.ShippingReach);
+    }
+
+    [Fact]
     public void NonPartialSeed_KeepsDirectAndTransitiveCallers()
     {
         using var repository = new Repository();
