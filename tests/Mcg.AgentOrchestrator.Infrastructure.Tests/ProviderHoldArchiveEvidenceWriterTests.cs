@@ -21,8 +21,13 @@ public sealed class ProviderHoldArchiveEvidenceWriterTests
         var canonical = await ProviderHoldSeedEvidenceReader.ReadSnapshotsAsync(readerConnection, ids, Options, token);
         Assert.True(ProviderHoldSeedDiscovery.IsRefusal(Assert.Single(canonical.Single(row => row.GoalId == hold).Tasks).LastVerification));
         Assert.Single(canonical.Single(row => row.GoalId == hold).Timeline);
-        Assert.Empty(canonical.Single(row => row.GoalId == empty).Tasks);
-        Assert.Empty(canonical.Single(row => row.GoalId == empty).Timeline);
+        var noHoldEvidence = canonical.Single(row => row.GoalId == empty);
+        var noHoldTask = Assert.Single(noHoldEvidence.Tasks);
+        Assert.Null(noHoldTask.LastDispatch);
+        Assert.Empty(noHoldTask.DispatchHistory);
+        Assert.Null(noHoldTask.LastVerification);
+        Assert.Empty(noHoldTask.VerificationHistory);
+        Assert.Empty(noHoldEvidence.Timeline);
 
         Assert.Equal(2, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(Cutoff,
             cancellationToken: token, compressSnapshots: compress));
@@ -106,7 +111,15 @@ public sealed class ProviderHoldArchiveEvidenceWriterTests
             Timeline = [terminal with { Message = reset }]
         };
         var empty = ProviderHoldSeedFixture.MakeUnrelated(2);
-        empty = empty with { Tasks = [], Timeline = [Assert.Single(empty.Timeline) with { TaskId = null }] };
+        var emptyTask = Assert.Single(empty.Tasks) with
+        {
+            Status = WorkTaskStatus.Cancelled,
+            LastDispatch = null,
+            DispatchHistory = [],
+            LastVerification = null,
+            VerificationHistory = []
+        };
+        empty = empty with { Tasks = [emptyTask] };
         await fixture.Repository.SaveGoalSnapshotsAsync([hold, empty], token);
         return (hold.Id, empty.Id);
     }

@@ -108,7 +108,7 @@ public sealed class ProviderHoldArchivedStatusFleetReadTests
         var unrelated = ProviderHoldSeedFixture.MakeUnrelated(1000);
         unrelated = unrelated with
         {
-            Tasks = [],
+            Tasks = [Assert.Single(unrelated.Tasks) with { Status = WorkTaskStatus.Cancelled }],
             Timeline = [new(unrelated.Id, null, ProgressKind.TaskNote, "Unrelated outcome.", ProviderHoldSeedFixture.At.AddDays(1))]
         };
         await fixture.Repository.SaveGoalSnapshotsAsync([reset, unrelated], token);
