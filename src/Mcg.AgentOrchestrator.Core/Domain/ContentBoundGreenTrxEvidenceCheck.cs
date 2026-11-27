@@ -146,8 +146,7 @@ public static class ContentBoundGreenTrxEvidenceCheck
             ?? [];
         foreach (var definition in definitions.Where(definition => executedIds.Contains(definition.Key)))
         {
-            executedClasses.Add(definition.Value);
-            executedClasses.Add(definition.Value.Split('.').Last());
+            executedClasses.UnionWith(TrxResultClassNames.Aliases(definition.Value));
         }
 
         return true;
