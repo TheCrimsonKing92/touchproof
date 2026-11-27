@@ -945,7 +945,7 @@ internal static class ReverseDependencyTestImpactReader
         return false;
     }
 
-    private static IReadOnlySet<string>? ConsumerFilter(
+    internal static IReadOnlySet<string>? ConsumerFilter(
         CSharpTestClassScanner.SourceTypeDeclaration declaration,
         IReadOnlyList<FrontierSymbol> frontier,
         IReadOnlyDictionary<string, HashSet<string>> knownMembersByType,
@@ -1055,12 +1055,12 @@ internal static class ReverseDependencyTestImpactReader
             .OrderBy(symbol => symbol.Name, StringComparer.Ordinal)
             .ToArray();
 
-    private sealed record FrontierSymbol(
+    internal sealed record FrontierSymbol(
         string Name,
         TestSelectionMode TestSelectionMode,
         IReadOnlySet<string>? MemberFilter = null);
 
-    private enum TestSelectionMode
+    internal enum TestSelectionMode
     {
         AllReferencingClasses,
         OwnedClassOnly

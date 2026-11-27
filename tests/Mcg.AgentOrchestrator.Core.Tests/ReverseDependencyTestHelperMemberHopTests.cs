@@ -1,4 +1,3 @@
-using System.Reflection;
 using Mcg.AgentOrchestrator.Core;
 
 public sealed class ReverseDependencyTestHelperMemberHopTests
@@ -157,14 +156,9 @@ public sealed class ReverseDependencyTestHelperMemberHopTests
     public void MissingMemberIdentifiers_KeepWholeTypeReach()
     {
         // Source scans always populate member identifiers. Exercise the shared filter with incomplete evidence.
-        var reader = typeof(ReverseDependencyTestImpactReader);
-        var filter = reader.GetMethod("ConsumerFilter", BindingFlags.NonPublic | BindingFlags.Static)!;
-        var frontierType = reader.GetNestedType("FrontierSymbol", BindingFlags.NonPublic)!;
-        var modeType = reader.GetNestedType("TestSelectionMode", BindingFlags.NonPublic)!;
-        var mode = Enum.Parse(modeType, "AllReferencingClasses");
-        var frontier = Array.CreateInstance(frontierType, 1);
         var storeMembers = new HashSet<string>(StringComparer.Ordinal) { "Save" };
-        frontier.SetValue(Activator.CreateInstance(frontierType, "Store", mode, storeMembers), 0);
+        var store = new ReverseDependencyTestImpactReader.FrontierSymbol(
+            "Store", ReverseDependencyTestImpactReader.TestSelectionMode.AllReferencingClasses, storeMembers);
         var writeIdentifiers = new HashSet<string>(StringComparer.Ordinal) { "Store", "Save" };
         var emptyIdentifiers = new HashSet<string>(StringComparer.Ordinal);
         var write = new SourceMemberDeclaration("Write", 2, 2, writeIdentifiers);
@@ -174,10 +168,13 @@ public sealed class ReverseDependencyTestHelperMemberHopTests
         var knownMembers = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal) { ["Store"] = storeMembers };
         var helperPeers = new HashSet<string>(StringComparer.Ordinal) { "Helper" };
 
-        object? Filter(CSharpTestClassScanner.SourceTypeDeclaration declaration) =>
-            filter.Invoke(null, [declaration, frontier, knownMembers, helperPeers, false]);
+        IReadOnlySet<string>? Filter(CSharpTestClassScanner.SourceTypeDeclaration declaration) =>
+            ReverseDependencyTestImpactReader.ConsumerFilter(declaration, [store], knownMembers, helperPeers,
+                hasMultipleReachedParts: false);
 
-        Assert.Equal("Write", Assert.Single(Assert.IsAssignableFrom<IReadOnlySet<string>>(Filter(helper))));
+        var preciseFilter = Filter(helper);
+        Assert.NotNull(preciseFilter);
+        Assert.Equal("Write", Assert.Single(preciseFilter));
         Assert.Null(Filter(helper with { Members = [write, ignore with { ReferencedIdentifiers = null }] }));
     }
 
