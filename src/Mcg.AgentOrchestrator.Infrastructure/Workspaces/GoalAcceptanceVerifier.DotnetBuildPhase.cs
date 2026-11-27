@@ -15,6 +15,7 @@ internal sealed class DotnetTestBuildPhase(string[] buildArguments, DotnetBaseBu
     public string[] BuildArguments { get; } = buildArguments;
     public DotnetBaseBuildCachePlan? CachePlan { get; } = cachePlan;
     public DotnetBuildEnvironment? BuildEnvironment { get; set; }
+    internal TreeBuildOutputRestore? TreeOutputRestore { get; set; }
     // Set only around one existing resolver call, then restored even on failure.
     internal CacheIdentityDiagnosticContext? IdentityDiagnostics { get; set; }
     private (AcceptanceCheckResult Result, bool Retried)? _run;
@@ -190,6 +191,13 @@ internal sealed class AcceptanceDotnetBuildPhase
         using var observation = hooks.ReceiptSite?.Observe(phase, out meter);
         if (meter is not null) hooks = meter.Wrap(hooks);
         phase.BuildEnvironment ??= hooks.ResolveExecutionEnvironment($"{attemptName}-build");
+        var treeReuse = await TreeBuildOutputReuse.TryRestoreAsync(phase, hooks.ReceiptSite).ConfigureAwait(false);
+        if (treeReuse?.BuildResult is { } reusedRun)
+        {
+            phase.Run = reusedRun;
+            return new DotnetTestBuildPhaseResult(reusedRun, ContributesToCheck: true);
+        }
+
         if (phase.CachePlan is not null &&
             await TryRunCachedAsync(
                 phase,
@@ -205,6 +213,7 @@ internal sealed class AcceptanceDotnetBuildPhase
             $"{attemptName}-build",
             null,
             phase.BuildEnvironment).ConfigureAwait(false);
+        treeReuse?.PublishAfterBuild(run.Result);
         phase.Run = (run.Result with
         {
             ResultSummary = AppendBuildCommands(run.Result.ResultSummary,
