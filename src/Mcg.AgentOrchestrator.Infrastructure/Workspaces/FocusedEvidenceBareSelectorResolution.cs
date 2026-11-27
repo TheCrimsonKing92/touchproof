@@ -1,5 +1,4 @@
 using System.Text.RegularExpressions;
-using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using static Mcg.AgentOrchestrator.Infrastructure.AcceptancePolicyShardPlanner;
 using FocusedEvidenceFilterToken = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.FocusedEvidenceFilterToken;
@@ -101,8 +100,8 @@ internal static class FocusedEvidenceBareSelectorResolution
                     continue;
                 }
 
-                var declarations = CSharpSyntaxTree.ParseText(source, path: path)
-                    .GetCompilationUnitRoot().DescendantNodes().OfType<TypeDeclarationSyntax>();
+                var declarations = CSharpSourceFileRootReader.Read(path)
+                    .DescendantNodes().OfType<TypeDeclarationSyntax>();
                 foreach (var declaration in declarations)
                 {
                     var simpleName = declaration.Identifier.ValueText;
