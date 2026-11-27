@@ -777,8 +777,8 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "Cli_attention_show_migrates_legacy_goal_parked_waits")]
-    public async Task CliAttentionShowMigratesLegacyGoalParkedWaits()
+    [Xunit.Fact]
+    public async Task CliAttentionShowHidesLegacyParkedRecordsAndBareAttentionMigratesThem()
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -788,25 +788,34 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
         _ = kernel.RequestHumanInput(live.Id, null, "Need live answer.", HumanWaitKind.RiskReview);
         var parkedWait = kernel.RequestHumanInput(parked.Id, null, "Goal parked: stale_resurrected_sweep");
         var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
-        _ = await store.RaiseAsync(
+        var parkedItem = await store.RaiseAsync(
             CollaborationItemType.Clarification,
             parked.Id.Value,
             "Parked clarification",
             "Parked body",
             $"spec-clarification:{parked.Id.Value}:scope:99999999");
+        var before = JsonSerializer.Serialize(kernel.ExportSnapshot());
 
         var defaultOutput = ExecuteCliAndCapture(["attention", "show"], kernel, workspace);
         var allOutput = ExecuteCliAndCapture(["attention", "show", "--all"], kernel, workspace);
-        var items = await store.ListAsync(parked.Id.Value);
+
+        Xunit.Assert.DoesNotContain("stale_resurrected_sweep", defaultOutput);
+        Xunit.Assert.DoesNotContain("Parked clarification", defaultOutput);
+        Xunit.Assert.Contains("Need live answer.", defaultOutput);
+        Xunit.Assert.Contains("Hidden decisions: 0", defaultOutput.Split(Environment.NewLine));
+        Xunit.Assert.Contains("stale_resurrected_sweep", allOutput);
+        Xunit.Assert.Contains("Parked clarification", allOutput);
+        Xunit.Assert.Equal(before, JsonSerializer.Serialize(kernel.ExportSnapshot()));
+        var unchangedItem = Xunit.Assert.Single(await store.ListAsync(parked.Id.Value));
+        Xunit.Assert.Equal(parkedItem.Status, unchangedItem.Status);
+        Xunit.Assert.Null(unchangedItem.Resolution);
+
+        ExecuteCliAndCapture(["attention"], kernel, workspace);
 
         Xunit.Assert.Equal(GoalStatus.Parked, parked.Status);
         Xunit.Assert.True(parkedWait.IsCompleted);
         Xunit.Assert.Equal("Goal parked: stale_resurrected_sweep", parkedWait.Answer);
-        Xunit.Assert.DoesNotContain("stale_resurrected_sweep", defaultOutput);
-        Xunit.Assert.DoesNotContain("Parked clarification", defaultOutput);
-        Xunit.Assert.Contains("Need live answer.", defaultOutput);
-        Xunit.Assert.Contains("stale_resurrected_sweep", allOutput);
-        Xunit.Assert.Contains("Parked clarification", allOutput);
+        var items = await store.ListAsync(parked.Id.Value);
         Xunit.Assert.All(items, item =>
         {
             Xunit.Assert.Equal(CollaborationItemStatus.Resolved, item.Status);
