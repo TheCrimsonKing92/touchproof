@@ -61,15 +61,10 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
         var legacy = LegacySelection(sources.Root, changed, sources.Projects, sources.Runnable, out var legacyReference);
         Assert.Same(ImpactReplayChangedSupportReferenceScan.CoreLib.Reference, probe.CompilationReference);
         Assert.Same(probe.CompilationReference, legacyReference);
-        var abandon = shape switch
-        {
-            "collision" or "unreferenced" => "Changed test support has no resolvable test class: Support.cs",
-            "ordered" or "reversed" => "Changed test support has no resolvable test class: Unused.cs",
-            _ => null
-        };
-        Assert.Equal(abandon, actual.AbandonReason);
-        Assert.Equal(abandon is null ? new[] { "SampleTests.BetaTests" } : [], actual.Classes);
-        Assert.Equal(shape is "collision" or "unreferenced" or "reversed" ? [] : new[] { "elsewhere/OtherTests.cs" }, actual.OtherFiles);
+        var hasReferrer = shape is not ("collision" or "unreferenced");
+        Assert.Null(actual.AbandonReason);
+        Assert.Equal(hasReferrer ? new[] { "SampleTests.BetaTests" } : [], actual.Classes);
+        Assert.Equal(hasReferrer ? new[] { "elsewhere/OtherTests.cs" } : [], actual.OtherFiles);
         Assert.Equal(legacy.Classes, actual.Classes);
         Assert.Equal(legacy.AbandonReason, actual.AbandonReason);
         Assert.Equal(legacy.OtherFiles, actual.OtherFiles);
@@ -146,10 +141,17 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
     [InlineData("unreferenced")]
     [InlineData("collision")]
     [InlineData("comment-and-string")]
-    public void UnreferencedSupport_StillAbandonsWithExactReason(string shape)
+    [InlineData("companion-ordered")]
+    [InlineData("companion-reversed")]
+    [InlineData("cycle")]
+    public void UnreferencedSupport_SelectsNothingExtraWithoutFullRun(string shape)
     {
         using var sources = new SourceFixture();
-        sources.Add("Support.cs", "namespace Support; public class Helpers { }");
+        sources.Add("Support.cs", shape == "cycle"
+            ? "namespace Support; public class Helpers { Partner value; }"
+            : "namespace Support; public class Helpers { }");
+        if (shape == "cycle") sources.Add("Partner.cs", "namespace Support; public class Partner { Helpers value; }");
+        sources.Add("Unused.cs", "namespace Support; public class Unused { }");
         sources.Add("Other.cs", "namespace Other; public class Helpers { }");
         sources.Add("Fixture.cs", "namespace Fixtures; " + (shape switch
         {
@@ -159,11 +161,25 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
         }));
         sources.Add("BetaTests.cs", "namespace SampleTests; public class BetaTests { Fixtures.HelperFixture value; }");
 
-        var actual = sources.Select(["Support.cs"]);
+        string[] changed = shape switch
+        {
+            "companion-ordered" => ["Support.cs", "Unused.cs"],
+            "companion-reversed" => ["Unused.cs", "Support.cs"],
+            _ => ["Support.cs"]
+        };
+        var actual = sources.Select(changed);
 
         Assert.Empty(actual.Classes);
-        Assert.Equal("Changed test support has no resolvable test class: Support.cs", actual.AbandonReason);
+        Assert.Null(actual.AbandonReason);
         Assert.Empty(actual.OtherFiles);
+        Assert.Equal(changed.Order(StringComparer.Ordinal), actual.SupportSelections.Select(summary => summary.Path));
+        Assert.All(actual.SupportSelections, summary =>
+        {
+            Assert.True(summary.Complete);
+            Assert.False(summary.Unresolved);
+            Assert.False(summary.FullRunTriggered);
+            Assert.Empty(summary.Reasons);
+        });
     }
 
     [Theory]
@@ -181,14 +197,14 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
         var actual = sources.Select(["Support.cs"]);
 
         Assert.Equal(referenced ? new[] { "SampleTests.BetaTests" } : [], actual.Classes);
-        Assert.Equal(referenced ? null : "Changed test support has no resolvable test class: Support.cs", actual.AbandonReason);
+        Assert.Null(actual.AbandonReason);
         Assert.Empty(actual.OtherFiles);
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void DirectMatch_SupplementsWithSupportChainMatches(bool unresolvedCompanion)
+    public void DirectMatch_SupplementsWithSupportChainMatches(bool includeUnusedCompanion)
     {
         using var sources = new SourceFixture();
         sources.Add("Support.cs", "namespace Support; public class Helpers { }");
@@ -198,17 +214,17 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
         sources.Add("BetaTests.cs", "namespace SampleTests; public class BetaTests { Fixtures.HelperFixture value; }");
         sources.Add("elsewhere/OtherTests.cs", "namespace SampleTests; public class OtherTests { Fixtures.HelperFixture value; }", infrastructure: false);
 
-        var actual = sources.Select(unresolvedCompanion ? ["Support.cs", "Unused.cs"] : ["Support.cs"]);
+        var actual = sources.Select(includeUnusedCompanion ? ["Support.cs", "Unused.cs"] : ["Support.cs"]);
 
-        Assert.Equal(unresolvedCompanion ? "Changed test support has no resolvable test class: Unused.cs" : null, actual.AbandonReason);
-        Assert.Equal(unresolvedCompanion ? [] : new[] { "SampleTests.AlphaTests", "SampleTests.BetaTests" }, actual.Classes);
+        Assert.Null(actual.AbandonReason);
+        Assert.Equal(new[] { "SampleTests.AlphaTests", "SampleTests.BetaTests" }, actual.Classes);
         Assert.Equal(new[] { "elsewhere/OtherTests.cs" }, actual.OtherFiles);
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void FallbackMatch_PreservesPerFileResultsAndAbandonOrder(bool unusedFirst)
+    public void OtherProjectMatch_SurvivesUnusedCompanionInEitherOrder(bool unusedFirst)
     {
         using var sources = new SourceFixture();
         sources.Add("Support.cs", "namespace Support; public class Helpers { }");
@@ -219,8 +235,8 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
         var actual = sources.Select(unusedFirst ? ["Unused.cs", "Support.cs"] : ["Support.cs", "Unused.cs"]);
 
         Assert.Empty(actual.Classes);
-        Assert.Equal("Changed test support has no resolvable test class: Unused.cs", actual.AbandonReason);
-        Assert.Equal(unusedFirst ? [] : new[] { "elsewhere/OtherTests.cs" }, actual.OtherFiles);
+        Assert.Null(actual.AbandonReason);
+        Assert.Equal(new[] { "elsewhere/OtherTests.cs" }, actual.OtherFiles);
     }
 
     [Theory]
@@ -288,12 +304,11 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
         sources.Add("Unused.cs", "namespace Support; public class Unused { }");
         sources.Add("elsewhere/OtherTests.cs", "namespace SampleTests; public class OtherTests { Support.Helpers value; }", infrastructure: false);
         File.WriteAllText(Path.Combine(sources.Root, "Outside.cs"), "class Outside { }");
-        string[] changed = unusedFirst ? ["Unused.cs", "Support.cs", "Outside.cs"] : ["Support.cs", "Outside.cs", "Unused.cs"];
+        string[] changed = unusedFirst ? ["Unused.cs", "Outside.cs", "Support.cs"] : ["Support.cs", "Outside.cs", "Unused.cs"];
         var actual = sources.Select(changed);
         var legacy = LegacySelection(sources.Root, changed, sources.Projects, sources.Runnable, out _);
         Assert.Empty(actual.Classes);
-        Assert.Equal(unusedFirst ? "Changed test support has no resolvable test class: Unused.cs"
-            : "Changed test support could not be resolved: Outside.cs", actual.AbandonReason);
+        Assert.Equal("Changed test support could not be resolved: Outside.cs", actual.AbandonReason);
         Assert.Equal(unusedFirst ? [] : new[] { "elsewhere/OtherTests.cs" }, actual.OtherFiles);
         Assert.Equal(legacy.AbandonReason, actual.AbandonReason);
         Assert.Equal(legacy.OtherFiles, actual.OtherFiles);
@@ -322,16 +337,79 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
     {
         using var sources = new SourceFixture();
         sources.Add("Bad.cs", "public class {");
+        sources.Add("Support.cs", "public class Helpers { }");
         var probe = new ImpactReplayChangedSupportScanProbe();
-        var actual = ImpactReplayChangedSupportReferenceScan.Select(sources.Root, ["Bad.cs"], sources.Projects,
+        var actual = ImpactReplayChangedSupportReferenceScan.Select(sources.Root, ["Support.cs", "Bad.cs"], sources.Projects,
             () => throw new InvalidOperationException("Runnable discovery must follow parsing."), probe);
         Assert.Equal("Changed test support source could not be parsed: Bad.cs", actual.AbandonReason);
         Assert.Empty(actual.Classes);
         Assert.Empty(actual.OtherFiles);
         Assert.Empty(probe.TreePasses);
+        Assert.Equal(new[] { "Bad.cs", "Support.cs" }, actual.SupportSelections.Select(summary => summary.Path));
+        Assert.All(actual.SupportSelections, summary =>
+        {
+            Assert.False(summary.Complete);
+            Assert.True(summary.Unresolved);
+            Assert.True(summary.FullRunTriggered);
+            Assert.Equal(new[] { "Infrastructure.Tests.csproj", "Other.Tests.csproj" }, summary.AffectedProjects);
+            Assert.Equal(new[] { "Changed test support source could not be parsed: Bad.cs" }, summary.Reasons);
+        });
     }
 
-    // Frozen pre-change per-file loop, with runnable membership injected instead of scanning the repository.
+    [Fact]
+    public void SupportWithoutTypeDeclarations_StillAbandons()
+    {
+        using var sources = new SourceFixture();
+        sources.Add("Empty.cs", "using System;");
+
+        var actual = sources.Select(["Empty.cs"]);
+
+        Assert.Equal("Changed test support has no resolvable test class: Empty.cs", actual.AbandonReason);
+        var summary = Assert.Single(actual.SupportSelections);
+        Assert.True(summary.Unresolved);
+        Assert.True(summary.FullRunTriggered);
+        Assert.Equal(new[] { "no resolvable support declarations" }, summary.Reasons);
+    }
+
+    [Fact]
+    public void TruncatedClosureWithoutRunnableReferrer_AffectsEveryTestProject()
+    {
+        using var sources = new SourceFixture();
+        sources.Add("Support.cs", "public class Helpers { }");
+        sources.Add("Bridge.cs", "public class Bridge { Helpers value; }");
+
+        var actual = sources.Select(["Support.cs"], maximumVisited: 1);
+
+        Assert.Empty(actual.Classes);
+        var summary = Assert.Single(actual.SupportSelections);
+        Assert.True(summary.Truncated);
+        Assert.True(summary.FullRunTriggered);
+        Assert.Equal(new[] { "Infrastructure.Tests.csproj", "Other.Tests.csproj" }, summary.AffectedProjects);
+        Assert.Equal(new[] { "support closure truncated at 1 declarations" }, summary.Reasons);
+    }
+
+    [Theory]
+    [InlineData("Fact")]
+    [InlineData("Xunit.Fact")]
+    [InlineData("Xunit.FactAttribute")]
+    [InlineData("Theory")]
+    [InlineData("Xunit.TheoryAttribute")]
+    public void UninventoriedTestMethods_StillAbandon(string attribute)
+    {
+        using var sources = new SourceFixture();
+        sources.Add("BrokenTests.cs", $"public class BrokenTests {{ [{attribute}] public void Works() {{ }} }}");
+
+        var actual = sources.Select(["BrokenTests.cs"]);
+
+        Assert.Equal("Changed test support has no resolvable test class: BrokenTests.cs", actual.AbandonReason);
+        Assert.Empty(actual.Classes);
+        var summary = Assert.Single(actual.SupportSelections);
+        Assert.True(summary.Unresolved);
+        Assert.True(summary.FullRunTriggered);
+        Assert.Equal(new[] { "no resolvable test class" }, summary.Reasons);
+    }
+
+    // Independent per-file scan with injected runnable membership. Typed files without matches now contribute nothing.
     private static (IReadOnlyList<string> Classes, string? AbandonReason, IReadOnlyList<string> OtherFiles) LegacySelection(
         string checkout, IReadOnlyList<string> changedFiles,
         IReadOnlyList<ImpactReplayChangedSourceRouting.Project> projects, ISet<string> runnable,
@@ -356,7 +434,7 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
                 .Where(n => n is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax)
                 .Select(n => changedModel.GetDeclaredSymbol(n)).OfType<INamedTypeSymbol>()
                 .ToHashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-            var found = new HashSet<string>(StringComparer.Ordinal);
+            if (declared.Count == 0) return ([], $"Changed test support has no resolvable test class: {relativePath}", other.ToArray());
             foreach (var tree in trees.Values)
             {
                 var model = compilation.GetSemanticModel(tree);
@@ -374,12 +452,10 @@ public sealed class ImpactReplayChangedSupportReferenceScanTests
                         return symbol is INamedTypeSymbol type && declared.Contains(type.OriginalDefinition);
                     });
                     if (!references) continue;
-                    found.Add(name);
                     if (infrastructurePaths.Contains(tree.FilePath)) selected.Add(name);
                     else other.Add(Path.GetRelativePath(checkout, tree.FilePath).Replace('\\', '/'));
                 }
             }
-            if (found.Count == 0) return ([], $"Changed test support has no resolvable test class: {relativePath}", other.ToArray());
         }
         return (selected.ToArray(), null, other.ToArray());
     }
