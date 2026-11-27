@@ -139,14 +139,12 @@ public sealed class LandingExecutorTestsPromotionFactBoundary : Xunit.IClassFixt
             await repository.SaveAsync(kernel);
             var mainBefore = GitCli.Run(root, "rev-parse", "main").Output.Trim();
             var reachedMainMutation = false;
-            using var gitRunnerScope = pending ? null : LandingExecutor.UseGitRunner((directory, args) =>
+            using var gitRunnerScope = pending ? null : LandingExecutor.UseGitRunner(previousRunner, (_, input, args) =>
                 {
-                    if (args[0] == "update-ref" && args.Contains("refs/heads/main"))
-                    {
-                        reachedMainMutation = true;
-                        return new GitCli.GitResult(1, "", "forced main compare-and-swap failure");
-                    }
-                    return previousRunner(directory, args);
+                    Assert.Equal(new[] { "update-ref", "--stdin" }, args);
+                    Assert.Contains("update refs/heads/main ", input, StringComparison.Ordinal);
+                    reachedMainMutation = true;
+                    return new GitCli.GitResult(1, "", "forced main compare-and-swap failure");
                 });
             var result = LandingExecutor.Execute(kernel, goal, workspace,
                 mutationBlocker: pending ? () => "pending operator gate" : null, promotionClock: new UnusedClock());

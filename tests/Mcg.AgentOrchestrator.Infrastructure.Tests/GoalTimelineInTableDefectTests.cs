@@ -12,6 +12,9 @@ public sealed class GoalTimelineInTableDefectTests
     [InlineData("text", false)]
     [InlineData("entry", false)]
     [InlineData("non-object", false)]
+    [InlineData("invalid-date", false)]
+    [InlineData("invalid-payload", false)]
+    [InlineData("invalid-message", false)]
     [InlineData("missing-table", false)]
     [InlineData("fewer", true)]
     [InlineData("more", true)]
@@ -33,6 +36,9 @@ public sealed class GoalTimelineInTableDefectTests
             "text" => "UPDATE goals SET snapshot_json = json_set(snapshot_json, '$.TimelineInTable', '3')",
             "entry" => "UPDATE goal_timeline SET entry_json = '{' WHERE sequence = 1",
             "non-object" => "UPDATE goal_timeline SET entry_json = 'null' WHERE sequence = 1",
+            "invalid-date" => "UPDATE goal_timeline SET entry_json = json_set(entry_json, '$.Kind', 'GoalPolicyDecision', '$.OccurredAt', 'invalid date') WHERE sequence = 1",
+            "invalid-payload" => "UPDATE goal_timeline SET entry_json = json_set(entry_json, '$.OperatorGates', 1) WHERE sequence = 1",
+            "invalid-message" => "UPDATE goal_timeline SET entry_json = json_set(entry_json, '$.Message', 1) WHERE sequence = 1",
             _ => "DROP TABLE goal_timeline"
         });
         foreach (var path in GoalTimelineTestSupport.Paths(archived))

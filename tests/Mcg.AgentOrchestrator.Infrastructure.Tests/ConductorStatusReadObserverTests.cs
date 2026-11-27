@@ -44,9 +44,13 @@ public sealed class ConductorStatusReadObserverTests
             ? "SELECT evidence_json FROM provider_hold_seed_evidence ORDER BY goal_id"
             : "SELECT snapshot_json FROM goals WHERE id <> 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ORDER BY id";
         using var reader = await command.ExecuteReaderAsync(TestContext.Current.CancellationToken);
-        var expectedCharacters = new List<long>();
-        while (await reader.ReadAsync(TestContext.Current.CancellationToken)) expectedCharacters.Add(reader.GetString(0).Length);
-        Assert.Equal(expectedCharacters, evidence.OrderBy(row => row.GoalId, StringComparer.Ordinal)
+        var expectedPayloadLengths = new List<long>();
+        while (await reader.ReadAsync(TestContext.Current.CancellationToken))
+        {
+            // Cached evidence is compressed; measure the stored bytes without converting to text.
+            expectedPayloadLengths.Add(warm ? Assert.IsType<byte[]>(reader.GetValue(0)).LongLength : reader.GetString(0).Length);
+        }
+        Assert.Equal(expectedPayloadLengths, evidence.OrderBy(row => row.GoalId, StringComparer.Ordinal)
             .Select(row => row.MaterializedCharacters));
         Assert.DoesNotContain(observations, row => row.Operation == (warm
             ? "provider-evidence-decoded" : "provider-evidence-stored"));

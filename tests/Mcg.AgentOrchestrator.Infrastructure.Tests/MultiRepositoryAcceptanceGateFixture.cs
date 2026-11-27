@@ -84,6 +84,25 @@ internal sealed class MultiRepositoryAcceptanceGateFixture : IDisposable
         new InMemoryModelProviderRegistry([]), Repositories.Agents, Repositories.Profiles, null)
         { ProjectRegistry = Repositories.Registry, AcceptanceVerifier = Verifier };
 
+    internal IDisposable ObserveLandingOrder(List<string> order)
+    {
+        const string mainRef = "refs/heads/main";
+        return LandingExecutor.UseGitRunner((root, args) =>
+        {
+            var result = GitCli.Run(root, args);
+            if (result.Succeeded && root == Repositories.Crosswalk.CheckoutPath && args is ["update-ref", mainRef, _, _])
+                order.Add("crosswalk");
+            return result;
+        }, (root, input, args) =>
+        {
+            var result = GitCli.RunWithStandardInput(root, GitCli.DefaultTimeoutMilliseconds, input, args);
+            if (result.Succeeded && root == Repositories.Home.CheckoutPath && args is ["update-ref", "--stdin"]
+                && input.Split('\n').Any(line => line.StartsWith($"update {mainRef} ", StringComparison.Ordinal)))
+                order.Add("default");
+            return result;
+        });
+    }
+
     internal RepositoryCandidateTuple Tuple()
     {
         var candidate = GoalRepositoryCandidateIdentity.Compute(Goal, Repositories.Workspace, Repositories.Registry);

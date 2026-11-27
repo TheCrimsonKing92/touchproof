@@ -13,5 +13,6 @@ internal static class ConductorContinuityExitArtifactFactory
                 (delegateSelfRelaunchToSupervisor || summary.HomeBuildTarget is not null) && string.Equals(
                     summary.StopReason, "self-relaunch-handoff", StringComparison.Ordinal),
             LandedGoals: summary.LandedGoals,
-            HomeBuildTarget: summary.HomeBuildTarget);
+            HomeBuildTarget: summary.HomeBuildTarget,
+            ResolverObservationHandoff: summary.ResolverObservationHandoff);
 }

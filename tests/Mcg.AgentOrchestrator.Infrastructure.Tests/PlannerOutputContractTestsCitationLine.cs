@@ -33,6 +33,7 @@ public sealed class PlannerOutputContractTestsCitationLine : WorkerDispatchTestS
         Directory.CreateDirectory(Path.Combine(root, "second"));
         File.WriteAllText(Path.Combine(root, "first", citation), "// first");
         File.WriteAllText(Path.Combine(root, "second", citation), "// second");
+        StagePlannerCitationFixtures(root, $"first/{citation}", $"second/{citation}");
         var plan = PlanWithTargetLine(line);
 
         Xunit.Assert.False(PlannerOutputContract.TryValidatePlan(plan, root, out var validated, out var diagnostic));

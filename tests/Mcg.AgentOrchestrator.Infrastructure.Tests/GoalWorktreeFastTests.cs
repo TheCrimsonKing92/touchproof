@@ -348,7 +348,8 @@ public sealed class GoalWorktreeFastTests
             string? worktreePath,
             AcceptanceVerificationResult? verification,
             bool verificationSkipped,
-            string? executionDirectory = null)
+            string? executionDirectory = null,
+            bool verificationAlreadyPassed = false)
         {
             var changedFiles = GetChangedFiles(worktreePath ?? root);
             var changeSummary = RepositoryChangeClassifier.Classify(changedFiles);

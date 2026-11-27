@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 public static class OperatorIntentVerbs
@@ -52,7 +54,12 @@ public sealed record EpicOutcomeRecordOperatorIntentPayload(string EpicId, EpicO
 public sealed record ExecutorSetSlotsOperatorIntentPayload(string ExecutorId, int Slots);
 public sealed record ExecutorSetEnabledOperatorIntentPayload(string ExecutorId, bool? Enabled);
 public sealed record FocusedEvidenceSetOperatorIntentPayload(string? Mode, int? SampleEvery);
-public sealed record ProviderResetOperatorIntentPayload(string BindingKey, DateTimeOffset ResetAt, string Rationale);
+public sealed record ProviderResetOperatorIntentPayload(string BindingKey, DateTimeOffset ResetAt, string Rationale)
+{
+    [JsonInclude]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    internal SubscriptionLimitEvidence.ProviderBindingKey? BindingIdentity { get; init; }
+}
 public sealed record ClaudeUsageBackfillOperatorIntentPayload(IReadOnlyList<ClaudeUsageBackfillFill> Fills);
 public sealed record ClaudeUsageBackfillFill(
     string GoalId, DateTimeOffset DispatchedAt, long InputTokens, long CachedInputTokens, long OutputTokens);

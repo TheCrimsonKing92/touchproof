@@ -96,7 +96,7 @@ public sealed class SubscriptionCooldownSubstitutionTests
         scenario.Agents = [scenario.Primary];
         var goal = scenario.NewGoal();
         var task = Assert.Single(goal.Tasks);
-        const string refusal = "ERROR: You've hit your usage limit.";
+        const string refusal = "ERROR: rate limit exceeded.";
         scenario.Limit(goal, refusal);
         Assert.Equal(1, SubscriptionLimitEvidence.CountRecoverableSubscriptionLimitFailures(task));
         Assert.False(ProviderLimitSignals.RequiresSubscriptionLimitReview(task));
@@ -472,7 +472,7 @@ public sealed class SubscriptionCooldownSubstitutionTests
         using var scenario = new Scenario();
         var goal = scenario.NewGoal();
         var task = Assert.Single(goal.Tasks);
-        scenario.Limit(goal, "ERROR: You've hit your usage limit.");
+        scenario.Limit(goal, "ERROR: rate limit exceeded.");
         Assert.True(ProviderLimitSignals.TryGetTaskSubscriptionCooldown(task, scenario.Clock.UtcNow, out _));
         var verification = Assert.Single(task.VerificationHistory);
         var fallback = task.SubscriptionRetryAfter;
@@ -574,6 +574,42 @@ public sealed class SubscriptionCooldownSubstitutionTests
     }
 
     [Xunit.Fact]
+    public void Apply_CooldownExpiresDuringFinalPreflight_PreservesAssignment()
+    {
+        using var scenario = new Scenario();
+        var goal = scenario.NewGoal();
+        scenario.Limit(goal);
+        var task = goal.Tasks.Single();
+        var checkedAlternate = false;
+        var expiredDuringFinalPreflight = false;
+        var resolver = new ProviderHoldAgentSubstitution(scenario.Kernel, scenario.Agents, (g, t, scope) =>
+        {
+            var check = scenario.Preflight(g, t, scope);
+            if (t.AssignedAgentId == scenario.Alternate.Id)
+            {
+                Assert.True(check.Allowed);
+                checkedAlternate = true;
+            }
+            else if (t.AssignedAgentId == scenario.Primary.Id && checkedAlternate)
+            {
+                var selected = Assert.IsType<ProviderSubscriptionCooldown>(check.BlockedSubscriptionCooldown);
+                Assert.Equal(task.SubscriptionRetryAfter, selected.RetryAfter);
+                Assert.True(scenario.Clock.UtcNow < selected.RetryAfter);
+                scenario.Clock.UtcNow = selected.RetryAfter;
+                expiredDuringFinalPreflight = true;
+            }
+            return check;
+        }, () => scenario.Clock.UtcNow);
+
+        resolver.ApplyBatch(goal, [task.Id]);
+
+        Assert.True(expiredDuringFinalPreflight);
+        Assert.Equal(scenario.Primary.Id, scenario.Kernel.GetTask(goal.Id, task.Id).AssignedAgentId);
+        Assert.DoesNotContain(scenario.Kernel.GetGoal(goal.Id).Timeline,
+            evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.ProviderHoldSubstituted);
+    }
+
+    [Xunit.Fact]
     public void Apply_AlternateHitsLimit_SharedBoundRejectsThirdAgent()
     {
         using var scenario = new Scenario();
@@ -601,7 +637,7 @@ public sealed class SubscriptionCooldownSubstitutionTests
 
     internal sealed class Scenario : WorkerDispatchTestSupport, IDisposable
     {
-        internal const string LimitText = "ERROR: You've hit your usage limit. Try again in 2 hours.";
+        internal const string LimitText = "ERROR: rate limit exceeded. Try again in 2 hours.";
         internal const string FableLimit = "You've hit your Fable limit · resets Nov 18, 11am (America/Chicago). Switch to another model, or manage usage credits to continue.";
         internal readonly string Root = CreateSeededDispatchRepository();
         internal readonly CooldownClock Clock = new();

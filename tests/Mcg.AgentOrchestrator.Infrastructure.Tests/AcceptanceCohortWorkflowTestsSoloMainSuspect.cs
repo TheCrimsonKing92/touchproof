@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -13,39 +14,66 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
     internal const string TestC = "Fixture.OtherMainRedTests.FailsC";
     internal const string OtherSource = "tests/MainSuspectFixture/OtherMainRedTests.cs";
 
-    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
-    public async Task RealSoloInheritedFailure_PreservesExcludedHoldAndReceipt()
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RealSoloInheritedFailure_CorroboratesMainAndRequiresCurrentRevisionsToLinkRepairs(bool hasCurrentRevisions)
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
-        await fixture.Produce(baselineFails: true);
+        if (hasCurrentRevisions)
+            CreateWorktreeCandidate(fixture.Repo, fixture.Goal.Id, "README.md", "repair-dependent candidate");
+        await fixture.Produce(baselineFails: true,
+            candidateWorktree: GoalWorktrees.TryResolve(fixture.Repo, fixture.Goal.Id));
         var summary = fixture.Summary;
         Assert.True(summary.RequiresSoloFailureReceipt);
-        Assert.NotNull(summary.SoloFailureReceipt);
+        var envelope = Assert.IsType<SoloAcceptanceFailureReceipt>(summary.SoloFailureReceipt);
         var attributions = summary.RequiredUnmetCriteria
             .SelectMany(check => check.FailingTestAttributions ?? []).ToArray();
         Assert.NotEmpty(attributions);
         Assert.All(attributions, attribution =>
         {
             Assert.Equal(AcceptanceTestFailureOrigin.Inherited, attribution.Origin);
-            Assert.Equal($"same focused identity failed at merge-base {fixture.Context.MainSha}", attribution.Evidence);
+            Assert.Equal($"same focused identity failed at merge-base {envelope.MainSha}", attribution.Evidence);
         });
         var candidate = ConductorParallelAcceptanceCandidate.Create(fixture.Goal, 0, ["README.md"],
-            fixture.Context.CandidateSha, fixture.Context.MainSha);
+            envelope.CandidateSha, envelope.MainSha);
         using var scenario = new Scenario(fixture.Repo, fixture.Kernel, [fixture.Goal],
-            [candidate], ["README.md"], fixture.Context.MainSha);
+            [candidate], ["README.md"], envelope.MainSha);
 
-        var result = scenario.Complete(0, summary);
+        await new PortfolioStore(scenario.Workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
+        var result = scenario.Complete(0, summary, expectLegacyHold: false);
 
         var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
         var decision = Assert.IsType<PolicyDecisionRecord>(held.Decision);
-        Assert.Equal(AcceptanceApparatusDispositionPolicy.StageName, decision.Stage);
-        Assert.StartsWith($"acceptance-unattributable:{fixture.Context.CandidateSha}:{fixture.Context.MainSha}:", held.StableIdentity);
-        Assert.Equal(GoalLifecycleState.Verified, held.State);
+        var repairStore = Path.Combine(scenario.Workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        if (hasCurrentRevisions)
+        {
+            Assert.Equal(SoloHoldReasons.RepairPending, decision.DiscriminatingEvidence);
+            Assert.Equal(GoalStatus.AcceptanceFailed, fixture.Goal.Status);
+            Assert.Equal(2, SoloRepairReplayTests.Count(repairStore, "solo_repair_dependency"));
+        }
+        else
+        {
+            Assert.Equal(SoloHoldReasons.RepairEvidenceRequired, decision.DiscriminatingEvidence);
+            Assert.Contains("Current candidate and integration revisions are required.", held.Reason, StringComparison.Ordinal);
+            Assert.Equal(ConductorHoldOwner.Operator, held.Owner);
+            Assert.Equal(GoalStatus.Verified, fixture.Goal.Status);
+            Assert.Equal(0, SoloRepairReplayTests.Count(repairStore, "solo_repair_dependency"));
+            var unresolved = new SoloBaselineRepairStore(repairStore).ReadFindings(fixture.Goal.Id.Value);
+            Assert.Equal(new[] { SoloAttributedFailureRouteFixture.First, SoloAttributedFailureRouteFixture.Long },
+                unresolved.Select(finding => finding.Identity).Order(StringComparer.Ordinal).ToArray());
+            Assert.All(unresolved, finding =>
+            {
+                Assert.False(finding.Inherited);
+                Assert.Equal(SoloHoldReasons.RevisionMismatch, finding.Reason);
+                Assert.Equal(envelope.Evidence, finding.Proof);
+            });
+        }
         var receipt = Assert.Single(scenario.ReadReceipts());
         Assert.Equal(fixture.Goal.Id, receipt.GoalId);
-        Assert.Equal(fixture.Context.CandidateSha, receipt.CandidateRevision);
-        Assert.Equal(fixture.Context.MainSha, receipt.ObservedMainRevision);
-        Assert.Equal(fixture.Context.MainSha, receipt.MergeBaseRevision);
+        Assert.Equal(envelope.CandidateSha, receipt.CandidateRevision);
+        Assert.Equal(envelope.MainSha, receipt.ObservedMainRevision);
+        Assert.Equal(envelope.MainSha, receipt.MergeBaseRevision);
         Assert.Equal(new[] { SoloAttributedFailureRouteFixture.First, SoloAttributedFailureRouteFixture.Long }, receipt.InheritedTests);
         Assert.Equal(0, fixture.Goal.AutomaticAcceptanceRetryCount);
         Assert.DoesNotContain(fixture.Goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried);
@@ -55,6 +83,86 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
         // The receipt reader must release its database before fixture cleanup on Windows.
         File.Delete(scenario.StorePath);
         Assert.False(File.Exists(scenario.StorePath));
+    }
+
+    [Fact]
+    public async Task TwoSoloGoals_MissingRequiredReceipts_DoNotCorroborateMainSuspect()
+    {
+        using var scenario = CreateScenario();
+        scenario.Complete(0, scenario.Summary(0, [TestA]) with { RequiresSoloFailureReceipt = true }, expectLegacyHold: false);
+        scenario.RestartDriver();
+        scenario.Complete(1, scenario.Summary(1, [TestA]) with { RequiresSoloFailureReceipt = true }, expectLegacyHold: false);
+
+        Assert.Empty(scenario.ReadReceipts());
+        Assert.Empty(await scenario.Events.ReadAllAsync());
+        Assert.Equal(AcceptanceEngineHealth.Healthy, (await scenario.Circuit.ReadAsync()).Health);
+    }
+
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [InlineData(null)]
+    [InlineData("contract")]
+    [InlineData("baseline-trx")]
+    public async Task DistinctCandidateAfterRestart_CorroboratesOnlyVerifiedSoloExecution(string? defect)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        var first = fixture.Goal;
+        var second = CreateCompletedGoal(fixture.Kernel, "Second solo inherited goal", fixture.Repo);
+        var firstRevision = CreateWorktreeCandidate(fixture.Repo, first.Id, "README.md", "first candidate");
+        await fixture.Produce(baselineFails: true, singleRow: true, attemptId: "first-solo-attempt",
+            candidateWorktree: GoalWorktrees.TryResolve(fixture.Repo, first.Id));
+        var firstFailure = fixture.Summary;
+        var firstEnvelope = Assert.IsType<SoloAcceptanceFailureReceipt>(firstFailure.SoloFailureReceipt);
+        Assert.Equal(firstRevision, firstEnvelope.CandidateSha);
+        if (defect == "contract")
+            firstFailure = firstFailure with { SoloFailureReceipt = firstEnvelope with { ContractVersion = 0 } };
+        if (defect == "baseline-trx")
+        {
+            var evidence = Assert.IsType<SoloAcceptanceFailureEvidence>(
+                JsonSerializer.Deserialize<SoloAcceptanceFailureEvidence>(File.ReadAllBytes(firstEnvelope.Evidence.Path)));
+            var trx = Assert.Single(Assert.Single(evidence.BaselineChecks).Artifacts);
+            File.AppendAllText(trx.Path, " ");
+        }
+
+        await fixture.Produce(baselineFails: true, singleRow: true, attemptId: "second-solo-attempt", goal: second);
+        var secondFailure = fixture.Summary;
+        var secondEnvelope = Assert.IsType<SoloAcceptanceFailureReceipt>(secondFailure.SoloFailureReceipt);
+        Assert.NotEqual(firstRevision, secondEnvelope.CandidateSha);
+        Assert.Equal(firstEnvelope.MainSha, secondEnvelope.MainSha);
+        Assert.Equal(firstEnvelope.MainSha, secondEnvelope.BaselineSha);
+        var candidates = new[]
+        {
+            ConductorParallelAcceptanceCandidate.Create(first, 0, ["README.md"], firstRevision, firstEnvelope.MainSha),
+            ConductorParallelAcceptanceCandidate.Create(second, 1, ["README.md"], secondEnvelope.CandidateSha, secondEnvelope.MainSha)
+        };
+        var request = $"{SoloAttributedFailureRouteFixture.Project}: FullyQualifiedName~{SoloAttributedFailureRouteFixture.First}";
+        var verifier = new SoloRepairWorkflowTests.ControlledVerifier(fixture.Root)
+        {
+            UnresolvedAttributionRequests = defect is null ? [] : [request]
+        };
+        using var scenario = new Scenario(fixture.Repo, fixture.Kernel, [first, second], candidates, ["README.md"],
+            firstEnvelope.MainSha, verifier);
+        await new PortfolioStore(scenario.Workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
+        scenario.Complete(0, firstFailure, expectLegacyHold: false);
+        Assert.Empty(await scenario.Events.ReadAllAsync());
+        scenario.RestartDriver();
+        scenario.Complete(1, secondFailure, expectLegacyHold: false);
+
+        var receipts = scenario.ReadReceipts();
+        var events = await scenario.Events.ReadAllAsync();
+        if (defect is null)
+        {
+            Assert.Empty(verifier.FocusedRuns);
+            Assert.Equal(new[] { first.Id, second.Id }, receipts.Select(receipt => receipt.GoalId));
+            Assert.Equal(new[] { SoloAttributedFailureRouteFixture.First }, Assert.Single(events).Payload.SharedFailingTests);
+            Assert.Equal(AcceptanceEngineHealth.Unhealthy, (await scenario.Circuit.ReadAsync()).Health);
+        }
+        else
+        {
+            Assert.Equal((request, firstRevision), Assert.Single(verifier.FocusedRuns));
+            Assert.Equal(second.Id, Assert.Single(receipts).GoalId);
+            Assert.Empty(events);
+            Assert.Equal(AcceptanceEngineHealth.Healthy, (await scenario.Circuit.ReadAsync()).Health);
+        }
     }
 
     [Fact]
@@ -202,8 +310,11 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
 
     internal sealed class Scenario : IDisposable
     {
+        private readonly SoloRepairWorkflowTests.ControlledVerifier _verifier;
+
         internal Scenario(string repo, AgentOrchestratorKernel kernel, Goal[] goals,
-            ConductorParallelAcceptanceCandidate[] candidates, string[] paths, string mainSha)
+            ConductorParallelAcceptanceCandidate[] candidates, string[] paths, string mainSha,
+            SoloRepairWorkflowTests.ControlledVerifier? verifier = null)
         {
             Repo = repo;
             Kernel = kernel;
@@ -216,6 +327,7 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
             StorePath = Path.Combine(Workspace.OrchestratorDirectory, "cohort-acceptance.db");
             Events = new(new SqliteRunEventStore(Workspace.RunEventStorePath), Workspace.RunEventStorePath);
             Circuit = new(Events);
+            _verifier = verifier ?? new(repo);
             RestartDriver();
         }
 
@@ -230,14 +342,14 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
         internal PostLandingCanaryEventStore Events { get; }
         internal AcceptanceEngineCircuitBreaker Circuit { get; }
         private ConductorDriver _driver = null!;
-        private SequenceAcceptanceVerifier _verifier = null!;
 
         internal void RestartDriver()
         {
-            _verifier = new SequenceAcceptanceVerifier([]);
             _driver = new ConductorDriver(Kernel, Workspace, _verifier,
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
-                cleanupHooks: CreateIsolatedCleanupContext(Repo).Hooks);
+                runAcceptanceAttemptsInCurrentProcess: true,
+                cleanupHooks: CreateIsolatedCleanupContext(Repo).Hooks,
+                repairIntake: new CliSoloBaselineRepairIntake(Workspace));
         }
 
         internal AcceptanceVerificationSummary Summary(int index, string[] tests,
@@ -252,12 +364,12 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
                     "candidate rerun passed", new("Passed", "candidate-rerun-receipt")));
             var check = new AcceptanceCheckResult("solo inherited tests", false, 1, "inherited failure",
                 FailingTestIdentities: attributions.Select(item => item.TestIdentity).ToArray(),
-                FailingTestAttributions: attributions);
+                FailingTestAttributions: attributions) { LaneToolResolution = new() };
             return new(false, [check], FailedChecks: [check.Name],
                 BranchHeadSha: Candidates[index].BranchHeadSha, MainHeadSha: main);
         }
 
-        internal ConductorAdvanceResult Complete(int index, AcceptanceVerificationSummary summary)
+        internal ConductorAdvanceResult Complete(int index, AcceptanceVerificationSummary summary, bool expectLegacyHold = true)
         {
             // Retain the failed gate evidence as the background completion path does.
             Kernel.RecordAcceptanceFailure(Goals[index].Id, summary.FailedChecks ?? [],
@@ -266,9 +378,12 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
                 ConductorAutonomyPolicy.Permissive, summary, out var leaseHeld);
             Assert.False(leaseHeld);
             var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
-            Assert.Contains("pre-existing/main-red", held.Reason, StringComparison.Ordinal);
-            Assert.Equal(0, _verifier.RunCount);
-            Assert.Equal(GoalStatus.Verified, Goals[index].Status);
+            if (expectLegacyHold)
+            {
+                Assert.Contains("pre-existing/main-red", held.Reason, StringComparison.Ordinal);
+                Assert.Equal(GoalStatus.Verified, Goals[index].Status);
+            }
+            Assert.Empty(_verifier.NormalRuns);
             Assert.Equal(0, Goals[index].Tasks.Single().CriterionRetryCount);
             return result;
         }

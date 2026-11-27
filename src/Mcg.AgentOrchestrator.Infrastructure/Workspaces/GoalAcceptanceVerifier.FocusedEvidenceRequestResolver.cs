@@ -48,6 +48,7 @@ internal static partial class FocusedEvidenceRequestResolver
             var project = InfrastructureTestsProject;
             var expression = rawItem;
             var hasExplicitProject = false;
+            var hasExactProject = false;
             var separator = rawItem.IndexOf(':', StringComparison.Ordinal);
             if (separator >= 0)
             {
@@ -62,6 +63,7 @@ internal static partial class FocusedEvidenceRequestResolver
                         $"unsupported evidence request project alias '{alias}'");
                     return false;
                 }
+                hasExactProject = string.Equals(NormalizePath(alias), project, StringComparison.OrdinalIgnoreCase);
             }
 
             IReadOnlyList<FocusedEvidenceFilter?> filters;
@@ -89,7 +91,7 @@ internal static partial class FocusedEvidenceRequestResolver
             totalTargets += targetCount;
             foreach (var filter in filters)
             {
-                if (filter is not null && ProjectMatches(project, InfrastructureTestsProject))
+                if (filter is not null && !hasExactProject && ProjectMatches(project, InfrastructureTestsProject))
                 {
                     IReadOnlyList<(string Project, FocusedEvidenceFilter Filter)> projectArms;
                     try
@@ -122,6 +124,7 @@ internal static partial class FocusedEvidenceRequestResolver
 
         validated = FocusedEvidenceTraitExcludedSelection.Apply(worktreePath, engineSettings, validated, out var dropped);
         validated = FocusedEvidenceTestlessClassSelection.Apply(worktreePath, validated, dropped, out dropped);
+        validated = FocusedEvidenceNestedProjectClassSelection.Apply(worktreePath, validated, dropped, out dropped);
         // Historical rule: more than four focused targets collapsed to one whole-project check per
         // project (and 18 Infrastructure lanes). It optimized process/check count and replaced the
         // earlier hard rejection of mappings over four targets; no filter-length or runner failure
@@ -210,38 +213,9 @@ internal static partial class FocusedEvidenceRequestResolver
         }
 
         var budget = MeasureFocusedEvidenceBudget(worktreePath, validated, totalTargets);
-        var built = new List<AcceptanceManifestCheck>();
-        foreach (var item in planned)
-        {
-            var usesDeclaredVstestCheck = VstestFocusedEvidenceCheckShape.TryResolve(
-                item.Project, engineSettings, out var declaringCheck);
-            var check = new AcceptanceManifestCheck
-            {
-                Name = item.Filter is null
-                    ? $"reviewer mapped project evidence: {GoalAcceptanceVerifier.ProjectLabel(item.Project)}"
-                    : $"reviewer focused evidence: {GoalAcceptanceVerifier.ProjectLabel(item.Project)} {item.Filter.CanonicalText}",
-                Type = "dotnet-test",
-                Runner = usesDeclaredVstestCheck
-                    ? "vstest"
-                    : GoalAcceptanceVerifier.ResolveDotnetTestRunner(worktreePath, item.Project),
-                Project = item.Project,
-                Arguments = usesDeclaredVstestCheck
-                    ? VstestFocusedEvidenceCheckShape.Arguments(declaringCheck, item.Filter?.CanonicalText)
-                    : item.Filter is null
-                    ? ["--verbosity", "minimal"]
-                    : ["--verbosity", "minimal", "--filter", item.Filter.CanonicalText],
-                FocusedEvidenceTokens = item.Filter?.Tokens ?? [],
-                FocusedEvidenceSelections = item.SelectionFilters
-                    .Select(filter => filter.Tokens)
-                    .ToArray(),
-                IsFocusedEvidenceSelection = item.Filter is not null,
-                FocusedEvidenceMatchedClasses = budget.For(item.Project, item.SelectionFilters),
-                TimeoutMinutes = usesDeclaredVstestCheck
-                    ? declaringCheck.TimeoutMinutes
-                    : budget.TargetCount <= GoalAcceptanceVerifier.FocusedEvidenceShortTimeoutTargetLimit ? 10 : null
-            };
-            built.Add(check);
-        }
+        var manifestChecks = new FocusedEvidenceManifestChecks(engineSettings, worktreePath);
+        var built = planned.Select(item => manifestChecks.Create(
+            item, budget.For(item.Project, item.SelectionFilters), budget.TargetCount)).ToArray();
 
         var targetToChecks = planned
             .SelectMany((item, index) => item.Targets.Select(target => (Target: target, CheckName: built[index].Name)))
@@ -296,7 +270,7 @@ internal static partial class FocusedEvidenceRequestResolver
             .Select(invocation => NormalizePath(invocation.Project))
             .Where(project => IsExtractedInfrastructureProject(project!))
             .Where(project => classNames.All(className =>
-                ProjectContainsFocusedEvidenceClass(worktreePath, project!, className)))
+                FocusedEvidenceNestedProjectClassSelection.ProjectContainsClass(worktreePath, project!, className)))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
@@ -340,7 +314,7 @@ internal static partial class FocusedEvidenceRequestResolver
         foreach (var token in positiveTokens)
         {
             var matchingProjects = extractedProjects
-                .Where(project => ProjectContainsFocusedEvidenceClass(
+                .Where(project => FocusedEvidenceNestedProjectClassSelection.ProjectContainsClass(
                     worktreePath,
                     project!,
                     token.ContainingClass))
@@ -382,12 +356,6 @@ internal static partial class FocusedEvidenceRequestResolver
             .ToArray();
         return true;
     }
-
-    private static bool ProjectContainsFocusedEvidenceClass(
-        string worktreePath,
-        string project,
-        string className) =>
-        FindFocusedEvidenceClassFiles(worktreePath, project, className).Count > 0;
 
     internal static IReadOnlyList<string> FindFocusedEvidenceClassFiles(
         string worktreePath,

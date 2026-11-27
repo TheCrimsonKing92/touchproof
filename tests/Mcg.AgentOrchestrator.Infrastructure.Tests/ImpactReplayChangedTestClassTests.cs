@@ -55,11 +55,9 @@ public sealed class ImpactReplayChangedTestClassTests
         var (report, _) = fixture.Run();
 
         var attempt = Assert.Single(report.Attempts);
-        Assert.Equal("Abandoned", attempt.SelectionOutcome);
-        Assert.Equal("ChangedTestSupportUnresolved", attempt.DegradationKind);
-        Assert.Empty(attempt.SkippedLanes);
-        Assert.Equal(attempt.RanLanes, attempt.WouldRunLanes);
-        Assert.Contains(attempt.EvidenceWarnings, warning => warning.Contains("Helpers.cs", StringComparison.Ordinal));
-        Assert.False(attempt.MissCheckComplete);
+        Assert.Equal("Resolved", attempt.SelectionOutcome);
+        Assert.Null(attempt.DegradationKind);
+        Assert.Equal(new[] { "AlphaTests" }, attempt.SelectedTestClasses);
+        Assert.DoesNotContain(attempt.EvidenceWarnings, warning => warning.Contains("Helpers.cs", StringComparison.Ordinal));
     }
 }

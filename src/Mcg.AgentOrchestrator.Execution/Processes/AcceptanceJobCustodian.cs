@@ -95,7 +95,7 @@ internal sealed class AcceptanceJobCustodian : IDisposable
     }
 
     // Drain both streams until exit, without retaining a native job handle.
-    internal void Release() => _ = DrainUntilExitAsync();
+    internal Task Release() => DrainUntilExitAsync();
     private async Task DrainUntilExitAsync()
     {
         try

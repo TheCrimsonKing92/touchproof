@@ -37,7 +37,9 @@ internal sealed class PreTesterGuardSelections
         IReadOnlyList<string>? priorSelections = null,
         Func<string, string, IReadOnlyList<string>?>? structuralPathReader = null,
         Func<string, IReadOnlyList<string>, RepositoryRecheckTestSelection>? reverseDependencySelector = null,
-        Func<IReadOnlyList<string>, ReverseDependencyEvidenceCostRule.Decision>? reverseDependencyCostDecision = null)
+        Func<IReadOnlyList<string>, ReverseDependencyEvidenceCostRule.Decision>? reverseDependencyCostDecision = null,
+        PreTesterReverseDependencyObservation.Tick? resolverTick = null,
+        PreTesterReverseDependencyObservation.Boundary? resolverBoundary = null)
     {
         var (changedFileGuards, provenance) = ConductorTickStepLedger.MeasureWithinWalk("walk-pretester-changed-file-guards",
             () => cache.SelectWithProvenance(worktreePath, changedPaths, mainRevision));
@@ -67,7 +69,7 @@ internal sealed class PreTesterGuardSelections
                 $"PRE_TESTER_GUARD_SELECTED class={reason.Class} kind={reason.Kind} path={reason.Path}");
         var reverse = ConductorTickStepLedger.MeasureWithinWalk("walk-pretester-reverse-dependency",
             () => PreTesterReverseDependencySelections.Select(worktreePath, changedPaths, progress,
-                reverseDependencySelector, reverseDependencyCostDecision));
+                reverseDependencySelector, reverseDependencyCostDecision, resolverTick, resolverBoundary));
         foreach (var reason in reverse.Provenance)
             (progress ?? Console.WriteLine)(
                 $"PRE_TESTER_GUARD_SELECTED class={reason.Class} kind={reason.Kind} path={reason.Path}");
@@ -128,11 +130,14 @@ internal sealed class PreTesterGuardSelections
     internal static (PreTesterGuardSelections Guards, DeveloperDeferredTestSelection Selection, bool Abandoned) CreateForRequest(
         PreTesterChangedFileGuardClasses cache, string worktreePath, IReadOnlyList<string> changedPaths,
         string mainRevision, DeveloperDeferredTestSelection declaration, AcceptanceGateEngineSettings settings,
-        PreTesterEvidenceEntry? prior, Func<FindingEvidenceSelection, string> format, Action<PreTesterEvidenceEntry, string> record)
+        PreTesterEvidenceEntry? prior, Func<FindingEvidenceSelection, string> format, Action<PreTesterEvidenceEntry, string> record,
+        PreTesterReverseDependencyObservation.Tick? resolverTick = null,
+        PreTesterReverseDependencyObservation.Boundary? resolverBoundary = null)
     {
         PreTesterGuardSelections CreateForPrior(PreTesterEvidenceEntry? entry) => Create(cache, worktreePath,
             changedPaths, mainRevision, settings: settings,
-            priorSelections: entry?.Outcome == "started" ? entry.Selections : null);
+            priorSelections: entry?.Outcome == "started" ? entry.Selections : null,
+            resolverTick: resolverTick, resolverBoundary: resolverBoundary);
         var guards = CreateForPrior(prior);
         var augmented = guards.Augment(declaration, settings, prior, format);
         var abandoned = false;

@@ -267,11 +267,18 @@ internal sealed partial class ConductorDriver
             _cohortWorkspace.ExecutionDirectory, mainRevision, _integrationBranch, _cohortCleanupHooks);
     }
 
-    internal ConductorGroupedGateOutcome? RunGroupedGateAttemptBody(ConductorGroupedGateAttempt attempt)
+    internal ConductorGroupedGateOutcome? RunGroupedGateAttemptBody(ConductorGroupedGateAttempt attempt) =>
+        RunGroupedGateAttemptBody(attempt, null);
+
+    internal ConductorGroupedGateOutcome? RunGroupedGateAttemptBody(ConductorGroupedGateAttempt attempt,
+        Func<IDictionary<string, string?>>? createGateToolEnvironmentForTests)
     {
         var workspace = _cohortWorkspace ?? throw new InvalidOperationException("Cohort workspace is unavailable.");
         var verifier = _cohortAcceptanceVerifier ?? throw new InvalidOperationException("Cohort verifier is unavailable.");
         var members = attempt.Members.Select(member => member.ToProjection(attempt.MainRevision)).ToArray();
+        IDisposable? EnterToolPreflight(string workingDirectory) =>
+            GateToolResolutionPreflight.EnterHermeticAttempt(workingDirectory, createGateToolEnvironmentForTests);
+
         if (attempt.Kind == "cohort")
         {
             var selection = new ConductorAcceptanceCohortSelection(members, []);
@@ -289,7 +296,7 @@ internal sealed partial class ConductorDriver
                 throw new InvalidOperationException("Grouped cohort gate identity changed before child execution.");
             var receipt = ExecuteAcceptanceCohortGate(integration, identity, bindings,
                 ConductorAcceptanceCohortSelector.PairFingerprint(members[0], members[1]),
-                CancellationToken.None, null, outerAttemptId: attempt.AttemptId);
+                CancellationToken.None, null, outerAttemptId: attempt.AttemptId, enterToolPreflight: EnterToolPreflight);
             return CohortChildOutcome.From(receipt, slotsBusyDeferred: receipt is null, attempt.IdentityValue);
         }
         else if (attempt.Kind == "train")
@@ -298,7 +305,8 @@ internal sealed partial class ConductorDriver
             var goals = members.Select(member => kernel.Goals.Single(goal => goal.Id == member.GoalId)).ToArray();
             var result = RunMergeTrain(new ConductorMergeTrainSelection(members), goals,
                 ConductorAutonomyPolicy.ParseJson(attempt.PolicyJson, attempt.MetadataPath),
-                gateOnly: true, expectedGateIdentity: attempt.IdentityValue, outerAttemptId: attempt.AttemptId);
+                gateOnly: true, expectedGateIdentity: attempt.IdentityValue, outerAttemptId: attempt.AttemptId,
+                enterToolPreflight: EnterToolPreflight);
             return MergeTrainChildOutcome.From(result);
         }
         else

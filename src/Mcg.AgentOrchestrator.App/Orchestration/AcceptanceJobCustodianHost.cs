@@ -14,20 +14,7 @@ internal static class AcceptanceJobCustodianHost
     internal static AcceptanceJobCustodianLaunchSpecification Bind(string? processPath, string application,
         string runtimeDirectory, OrchestratorWorkspace workspace)
     {
-        // Derive the muxer from the loaded shared runtime, never PATH or an environment claim.
-        // A dotnet-hosted caller must agree with that runtime's installation as well.
-        if (!Path.IsPathFullyQualified(runtimeDirectory) || !Path.IsPathFullyQualified(application))
-            throw new InvalidOperationException("Acceptance custody cannot establish the current managed runtime closure.");
-        var root = Directory.GetParent(Path.TrimEndingDirectorySeparator(runtimeDirectory))?.Parent?.Parent?.FullName;
-        var host = root is null ? null : Path.Combine(root, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
-        if (host is null || !Path.IsPathFullyQualified(host) || !File.Exists(host) ||
-            string.IsNullOrWhiteSpace(processPath) || !Path.IsPathFullyQualified(processPath) ||
-            (Path.GetFileNameWithoutExtension(processPath).Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
-                !WorkspaceInvocationBinding.SamePath(host, processPath)) ||
-            !WorkspaceInvocationBinding.SamePath(application, typeof(AcceptanceJobCustodianHost).Assembly.Location) ||
-            !File.Exists(Path.ChangeExtension(application, ".runtimeconfig.json")) ||
-            !File.Exists(Path.ChangeExtension(application, ".deps.json")))
-            throw new InvalidOperationException("Acceptance custody cannot establish the current managed runtime closure.");
+        var host = ResolveHost(processPath, application, runtimeDirectory);
         IReadOnlyDictionary<string, string>? environment = null;
         if (workspace.IsProjectScoped)
         {
@@ -56,9 +43,42 @@ internal static class AcceptanceJobCustodianHost
         return new(host, args, workspace.ExecutionDirectory, environment);
     }
 
+    internal static AcceptanceJobCustodianLaunchSpecification BindShadowStart(string scratch, string state)
+    {
+        var application = typeof(AcceptanceJobCustodianHost).Assembly.Location;
+        var host = ResolveHost(Environment.ProcessPath, application, RuntimeEnvironment.GetRuntimeDirectory());
+        return new(host,
+            [application, "--repository-root", scratch, "--expected-state-directory", state,
+             "--project", OrchestratorWorkspace.DefaultProjectName, "--tenant", OrchestratorWorkspace.DefaultTenantName,
+             Subcommand], scratch, new Dictionary<string, string>
+            {
+                [OrchestratorWorkspace.RepoRootEnvironmentVariable] = scratch,
+                [OrchestratorDataRoot.EnvironmentVariable] = Path.Combine(scratch, "data"),
+                [OrchestratorProjectRegistry.RegistryHomeEnvironmentVariable] = Path.Combine(scratch, "projects")
+            });
+    }
+
+    private static string ResolveHost(string? processPath, string application, string runtimeDirectory)
+    {
+        // Derive the muxer from the loaded shared runtime. A dotnet-hosted caller must agree with that installation.
+        if (!Path.IsPathFullyQualified(runtimeDirectory) || !Path.IsPathFullyQualified(application))
+            throw new InvalidOperationException("Acceptance custody cannot establish the current managed runtime closure.");
+        var root = Directory.GetParent(Path.TrimEndingDirectorySeparator(runtimeDirectory))?.Parent?.Parent?.FullName;
+        var host = root is null ? null : Path.Combine(root, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
+        if (host is null || !Path.IsPathFullyQualified(host) || !File.Exists(host) ||
+            string.IsNullOrWhiteSpace(processPath) || !Path.IsPathFullyQualified(processPath) ||
+            (Path.GetFileNameWithoutExtension(processPath).Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+                !WorkspaceInvocationBinding.SamePath(host, processPath)) ||
+            !WorkspaceInvocationBinding.SamePath(application, typeof(AcceptanceJobCustodianHost).Assembly.Location) ||
+            !File.Exists(Path.ChangeExtension(application, ".runtimeconfig.json")) ||
+            !File.Exists(Path.ChangeExtension(application, ".deps.json")))
+            throw new InvalidOperationException("Acceptance custody cannot establish the current managed runtime closure.");
+        return host;
+    }
+
     internal static int Run(IReadOnlyList<string> args)
     {
-        if (args.Count != 1 || args[0] != Subcommand)
+        if (args is not [Subcommand])
         {
             Console.Error.WriteLine("Invalid acceptance custody command.");
             return 1;

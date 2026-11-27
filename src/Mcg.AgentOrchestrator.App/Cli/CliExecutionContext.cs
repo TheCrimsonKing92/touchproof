@@ -179,6 +179,10 @@ public ICompletionBuildEvidenceOperation? CompletionBuildEvidence { get; init; }
 
 public Action<BatchTickSummary>? ConductorTickObserver { get; init; }
 
+internal ConductorDriver? ConductLoopDriverForTests { get; init; }
+
+internal Func<int, int?>? ResolverObservationParentProcessIdForTests { get; init; }
+
     private ICliGoalWorktreeService? worktrees;
 
     public ICliGoalWorktreeService Worktrees
@@ -193,6 +197,8 @@ public Action<BatchTickSummary>? ConductorTickObserver { get; init; }
     public GoalWorktreeCleanupHooks CleanupHooks => CleanupContext.Hooks;
 
 public IGoalLifecycleEventWriter EventWriter { get; init; } = NullGoalLifecycleEventWriter.Instance;
+
+internal PostLandingCanaryCoordinator? PostLandingCanary { get; init; }
 
 public CollaborationItemRaise? RefinementCollaborationItemRaise { get; } = refinementCollaborationItemRaise;
 
@@ -315,7 +321,8 @@ internal sealed record AcceptanceMergeCommitResult(
     bool FastForwarded,
     string? Message,
     AcceptanceMergeGuardMismatch? GuardAbort = null,
-    GoalPromotionFact? Publication = null)
+    GoalPromotionFact? Publication = null,
+    bool CheckoutPending = false)
 {
     public bool GuardAborted => GuardAbort is not null;
 }
@@ -376,7 +383,8 @@ internal interface ICliGoalWorktreeService
         string? worktreePath,
         AcceptanceVerificationResult? verification,
         bool verificationSkipped,
-        string? executionDirectory = null);
+        string? executionDirectory = null,
+        bool verificationAlreadyPassed = false);
 }
 
 internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
@@ -454,10 +462,11 @@ internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
         string? worktreePath,
         AcceptanceVerificationResult? verification,
         bool verificationSkipped,
-        string? executionDirectory = null) =>
+        string? executionDirectory = null,
+        bool verificationAlreadyPassed = false) =>
         GoalAcceptanceEvidenceBundleBuilder.Build(
             kernel, goal, worktreePath, verification, verificationSkipped,
-            cleanupHooks.BuildStorageRoot, trunkBranch, executionDirectory, targetHome);
+            cleanupHooks.BuildStorageRoot, trunkBranch, executionDirectory, targetHome, verificationAlreadyPassed);
 }
 
 internal sealed record AcceptanceHostStopRequest(

@@ -18,10 +18,30 @@ public static class ProviderLimitSignals
 
     public static bool RequiresSubscriptionLimitReview(TaskSpec task)
     {
-        var failureCount = CountRecoverableSubscriptionLimitFailures(task);
-        return HasRecoverableSubscriptionLimitHistory(task) &&
-            failureCount >= RecoverableSubscriptionLimitReviewThreshold &&
-            task.SubscriptionLimitReviewedFailureCount < failureCount;
+        if (!HasRecoverableSubscriptionLimitHistory(task))
+            return false;
+
+        // Acknowledgments store the total recoverable-limit count. Compare each reviewable
+        // refusal with that same ordinal so an intervening hold does not reopen a review.
+        var failureCount = 0;
+        var reviewableCount = 0;
+        foreach (var verification in task.VerificationHistory)
+        {
+            if (!IsRecoverableSubscriptionLimitFailure(verification))
+                continue;
+
+            failureCount++;
+            if (ProviderHoldRetry.IsHoldInterruption(verification) &&
+                !ProviderHoldEvidence.Read(verification).OffersSubscriptionCooldownRetry)
+                continue;
+
+            reviewableCount++;
+            if (reviewableCount >= RecoverableSubscriptionLimitReviewThreshold &&
+                failureCount > task.SubscriptionLimitReviewedFailureCount)
+                return true;
+        }
+
+        return false;
     }
 
     public static bool IsSubscriptionRetryDeferred(TaskSpec task, DateTimeOffset now, out DateTimeOffset retryAfter)
@@ -49,7 +69,12 @@ public static class ProviderLimitSignals
         string providerName,
         string? modelName,
         DateTimeOffset now,
-        out ProviderSubscriptionCooldown cooldown)
+        out ProviderSubscriptionCooldown cooldown) =>
+        TryGetProviderSubscriptionCooldown(goal, candidateTaskId, providerName, modelName, now, out cooldown, null);
+
+    internal static bool TryGetProviderSubscriptionCooldown(
+        Goal goal, TaskId candidateTaskId, string providerName, string? modelName, DateTimeOffset now,
+        out ProviderSubscriptionCooldown cooldown, ProviderHoldBinding? candidateBinding)
     {
         cooldown = default!;
         foreach (var task in goal.Tasks)
@@ -61,6 +86,8 @@ public static class ProviderLimitSignals
                      task.SubscriptionDeferralReleasedAt is { } releasedAt && verification.CompletedAt <= releasedAt) &&
                     TryGetSubscriptionCooldown(task, verification, now, out var observed) &&
                     observed.ProviderName.Equals(providerName, StringComparison.OrdinalIgnoreCase) &&
+                    (candidateBinding is null || !ProviderHoldEvidence.Read(verification).Confirmed ||
+                        observed.BindingIdentity == candidateBinding.Base) &&
                     observed.AppliesToModel(modelName) &&
                     (cooldown is null || observed.RetryAfter > cooldown.RetryAfter))
                     cooldown = observed;
@@ -101,7 +128,9 @@ public static class ProviderLimitSignals
         cooldown = default!;
         if (verification.Succeeded || !IsRecoverableSubscriptionLimitFailure(verification))
             return false;
-        if (!TryGetSubscriptionLimitRetryAfter(verification, out var retryAfter))
+        var evidence = ProviderHoldEvidence.Read(verification);
+        var retryAfter = evidence.ResetAt.GetValueOrDefault();
+        if (evidence.ResetAt is null && !TryGetSubscriptionLimitRetryAfter(verification, out retryAfter))
         {
             // Only the task's latest refusal may use its stored recording-time fallback.
             if (storedFallback is not { } fallback || fallback <= verification.CompletedAt)
@@ -122,7 +151,8 @@ public static class ProviderLimitSignals
         var matched = !string.IsNullOrWhiteSpace(dispatch.ModelName) && scope.AppliesToModel(dispatch.ModelName);
         cooldown = new(providerName, task.Id, retryAfter)
         {
-            BindingKey = BuildProviderBindingKey(providerName, dispatch.ClaudeCredentialSourceDirectory).Key,
+            BindingKey = ProviderHoldBinding.From(dispatch).Key,
+            BindingIdentity = ProviderHoldBinding.From(dispatch).Base,
             EvidenceReceipt = !string.IsNullOrWhiteSpace(verification.StandardErrorPath)
                 ? verification.StandardErrorPath : $"verification:{verification.CompletedAt:O}",
             DispatchStartedAt = dispatch.DispatchedAt,
@@ -137,75 +167,67 @@ public static class ProviderLimitSignals
         IEnumerable<Goal> goals,
         string providerName,
         string? credentialBinding,
+        out ProviderBudgetExhaustionHold hold) =>
+        TryGetExactHold(goals, new(providerName, credentialBinding, null), out hold);
+
+    public static bool TryGetProviderBudgetExhaustionHold(
+        IEnumerable<Goal> goals,
+        string providerName,
+        string? credentialBinding,
+        string? modelName,
+        out ProviderBudgetExhaustionHold hold) =>
+        TryGetExactHold(goals, new(providerName, credentialBinding, null), out hold) ||
+        !string.IsNullOrWhiteSpace(modelName) && TryGetExactHold(goals, new(providerName, credentialBinding, modelName), out hold);
+
+    internal static bool TryGetExactHold(
+        IEnumerable<Goal> goals,
+        ProviderHoldBinding requestedBinding,
+        out ProviderBudgetExhaustionHold hold) =>
+        TryGetHoldForIdentity(goals, requestedBinding.ScopedKey, out hold);
+
+    internal static bool TryGetHoldForIdentity(
+        IEnumerable<Goal> goals,
+        SubscriptionLimitEvidence.ProviderBindingKey requestedBinding,
         out ProviderBudgetExhaustionHold hold)
     {
         ArgumentNullException.ThrowIfNull(goals);
-        var goalList = goals.ToArray();
-        var requestedBinding = BuildProviderBindingKey(providerName, credentialBinding);
-        var observations = new List<(
-            Goal Goal,
-            TaskSpec Task,
-            TaskVerificationRecord Verification,
-            string ProviderName,
-            ProviderBindingKey Binding)>();
+        var history = ProviderHoldBindingHistory.Read(goals, requestedBinding);
+        return TryGetExactHold(history, requestedBinding, out hold);
+    }
+
+    internal static bool TryGetExactHold(ProviderHoldBindingHistory history,
+        SubscriptionLimitEvidence.ProviderBindingKey requestedBinding, out ProviderBudgetExhaustionHold hold)
+    {
+        history.EvaluationCount++;
         ProviderBudgetExhaustionHold? latest = null;
-
-        foreach (var goal in goalList)
-        {
-            foreach (var task in goal.Tasks)
-            {
-                foreach (var verification in task.VerificationHistory)
-                {
-                    var dispatch = FindDispatchForVerification(task, verification);
-                    if (dispatch is null)
-                    {
-                        continue;
-                    }
-
-                    var observedBinding = BuildProviderBindingKey(
-                        dispatch.ProviderName ?? dispatch.WorkerName,
-                        dispatch.ClaudeCredentialSourceDirectory);
-                    if (ProviderBudgetHoldSchedules.IsStaleProbeResult(goalList, observedBinding.Key,
-                            task, dispatch, verification.CompletedAt)) continue;
-                    observations.Add((
-                        goal,
-                        task,
-                        verification,
-                        dispatch.ProviderName ?? dispatch.WorkerName,
-                        observedBinding));
-                }
-            }
-        }
-
-        var latestAvailabilityAt = observations
-            .Where(observation =>
-                observation.Binding.Equals(requestedBinding) &&
-                HasAvailabilityEvidence(observation.Verification) &&
-                IsCurrentAvailability(observation.Task, observation.Verification))
-            .Select(observation => (DateTimeOffset?)observation.Verification.CompletedAt)
-            .Max();
-        var checkedAvailabilityAt = goalList.SelectMany(goal => goal.Timeline.Select(evt => (Goal: goal, Event: evt)))
-            .Where(item => ProviderBudgetHoldSchedules.TryParseStandaloneResult(item.Event, out var check) &&
-                check.Outcome == "available" && check.BindingKey.Equals(requestedBinding.Key, StringComparison.OrdinalIgnoreCase) &&
-                ProviderBudgetHoldSchedules.IsApplicable(check, ProviderBudgetHoldSchedules.LatestReset(goalList, requestedBinding.Key)) &&
-                observations.Any(observation => observation.Goal == item.Goal && observation.Task.Id == item.Event.TaskId &&
-                    observation.Binding.Equals(requestedBinding) && observation.Verification.ProviderFailureKind == ProviderFailureKind.BudgetExhausted &&
-                    observation.Verification.CompletedAt == check.PlacedAt))
-            .Select(item => { ProviderBudgetHoldSchedules.TryParseStandaloneResult(item.Event, out var check); return (DateTimeOffset?)check.StartedAt; })
-            .Max();
-
-        bool IsCurrentAvailability(TaskSpec task, TaskVerificationRecord verification) =>
-            FindDispatchForVerification(task, verification) is { } dispatch &&
-            ProviderBudgetHoldSchedules.IsCurrentDispatch(goalList, requestedBinding.Key, task, dispatch);
+        var observations = history.ReadObservations().Where(item =>
+            (HasAvailabilityEvidence(item.Verification) || item.Evidence.Confirmed &&
+                string.Equals(item.Evidence.ScopedModel(item.Dispatch), requestedBinding.Model, StringComparison.OrdinalIgnoreCase)) &&
+            !ProviderBudgetHoldSchedules.IsStaleProbeResult(history, item.Task, item.Dispatch, item.Verification.CompletedAt)).ToArray();
+        var available = new ProviderHoldBindingHistory.VerifiedAvailability(observations.Where(item =>
+                HasAvailabilityEvidence(item.Verification) &&
+                ProviderBudgetHoldSchedules.IsCurrentDispatch(history, item.Task, item.Dispatch)));
+        var reset = history.LatestReset();
+        var placements = observations.Where(item => item.Evidence.Confirmed)
+            .Select(item => (item.Goal, item.Task.Id, item.Verification.CompletedAt)).ToHashSet();
+        var availabilityResults = new List<(ProviderHoldBindingHistory.Note, ProviderBudgetHoldSchedules.StandaloneResult)>();
+        foreach (var note in history.Notes)
+            if (ProviderBudgetHoldSchedules.TryParseStandaloneResult(note.Event, out var result) &&
+                result.Outcome == "available" && ProviderBudgetHoldSchedules.IsApplicable(result, reset) &&
+                note.Event.TaskId is { } taskId && placements.Contains((note.Goal, taskId, result.PlacedAt)))
+                availabilityResults.Add((note, result));
+        var checkedAvailabilityAt = ProviderBudgetHoldSchedules.ApplicableWhenRecorded(history, availabilityResults)
+            .Select(item => (DateTimeOffset?)item.Result.StartedAt).Max();
 
         foreach (var observation in observations)
         {
-            var (goal, task, verification, observedProviderName, observedBinding) = observation;
-            if (verification.ProviderFailureKind != ProviderFailureKind.BudgetExhausted ||
-                !observedBinding.Equals(requestedBinding) ||
-                HasExplicitBudgetRecoveryForBinding(task, observedBinding, verification.CompletedAt) ||
+            var (goal, task, verification, dispatch, evidence) = observation;
+            // A later verified result can supersede the refusal from its own dispatch.
+            // A different dispatch must have started at or after hold placement.
+            if (!evidence.Confirmed ||
+                history.HasExplicitRecovery(task, verification.CompletedAt) ||
                 checkedAvailabilityAt >= verification.CompletedAt ||
-                latestAvailabilityAt > verification.CompletedAt)
+                available.Supersedes(observation))
             {
                 continue;
             }
@@ -214,14 +236,22 @@ public static class ProviderLimitSignals
                 ? verification.StandardErrorPath!
                 : $"verification:{verification.CompletedAt:O}";
             var candidate = new ProviderBudgetExhaustionHold(
-                observedProviderName,
-                observedBinding.Key,
-                observedBinding.Scope,
+                dispatch.ProviderName ?? dispatch.WorkerName,
+                requestedBinding.RenderedKey,
+                requestedBinding.Scope,
                 goal.Id,
                 task.Id,
                 verification.CompletedAt,
-                receipt);
-            if (latest is null || candidate.PlacedAt > latest.PlacedAt)
+                receipt)
+            {
+                Reason = evidence.Kind,
+                ModelName = evidence.ScopedModel(dispatch),
+                ProviderResetAt = evidence.ResetAt,
+                HasUsageLimitDiagnostic = evidence.HasUsageLimitDiagnostic
+            };
+            if (latest is null ||
+                candidate.Reason == ProviderFailureKind.BudgetExhausted && latest.Reason != candidate.Reason ||
+                candidate.Reason == latest.Reason && candidate.PlacedAt > latest.PlacedAt)
             {
                 latest = candidate;
             }
@@ -235,25 +265,6 @@ public static class ProviderLimitSignals
     internal static bool HasAvailabilityEvidence(TaskVerificationRecord verification) =>
         verification.Succeeded && verification.CompletionVerdictVerifiedSuccess &&
         verification.ProviderFailureKind == ProviderFailureKind.Unknown;
-
-    private static bool HasExplicitBudgetRecoveryForBinding(
-        TaskSpec task,
-        ProviderBindingKey observedBinding,
-        DateTimeOffset exhaustedAt)
-    {
-        if (task.LatestProviderBudgetRecoveryAt is not { } recoveredAt || recoveredAt <= exhaustedAt)
-        {
-            return false;
-        }
-
-        var recoveredDispatch = task.DispatchHistory
-            .LastOrDefault(dispatch => dispatch.DispatchedAt <= recoveredAt);
-        return recoveredDispatch is not null &&
-            BuildProviderBindingKey(
-                recoveredDispatch.ProviderName ?? recoveredDispatch.WorkerName,
-                recoveredDispatch.ClaudeCredentialSourceDirectory)
-            .Equals(observedBinding);
-    }
 
     public static bool TryGetSubscriptionLimitRetryAfter(TaskSpec task, out DateTimeOffset retryAfter)
     {
@@ -312,13 +323,20 @@ public static class ProviderLimitSignals
             return false;
         }
 
+        return TryParseSubscriptionRetryAfter(output, verification.CompletedAt, out retryAfter);
+    }
+
+    internal static bool TryParseSubscriptionRetryAfter(string output, DateTimeOffset completedAt, out DateTimeOffset retryAfter)
+    {
+        retryAfter = default;
         if (TryGetRelativeRetryAfter(output, out var retryAfterDelay))
         {
-            retryAfter = verification.CompletedAt.Add(retryAfterDelay);
+            try { retryAfter = completedAt.Add(retryAfterDelay); }
+            catch (ArgumentOutOfRangeException) { return false; }
             return true;
         }
 
-        if (TryGetAbsoluteResetRetryAfter(output, verification.CompletedAt, out retryAfter))
+        if (TryGetAbsoluteResetRetryAfter(output, completedAt, out retryAfter))
         {
             return true;
         }
@@ -343,7 +361,7 @@ public static class ProviderLimitSignals
             return false;
         }
 
-        var basis = verification.CompletedAt;
+        var basis = completedAt;
         retryAfter = new DateTimeOffset(
             basis.Year,
             basis.Month,
@@ -358,7 +376,8 @@ public static class ProviderLimitSignals
         // denotes the next occurrence of that clock time.
         if (retryAfter <= basis && basis - retryAfter > BareClockRetryStalenessTolerance)
         {
-            retryAfter = retryAfter.AddDays(1);
+            try { retryAfter = retryAfter.AddDays(1); }
+            catch (ArgumentOutOfRangeException) { return false; }
         }
 
         return true;
@@ -394,22 +413,29 @@ public static class ProviderLimitSignals
 
     internal static bool TryGetRelativeRetryAfter(string output, out TimeSpan retryAfter)
     {
-        var tryAgainMatch = TryAgainInPattern.Match(output);
-        if (tryAgainMatch.Success &&
-            int.TryParse(tryAgainMatch.Groups["value"].Value, out var retryValue))
+        try
         {
-            retryAfter = ToTimeSpan(retryValue, tryAgainMatch.Groups["unit"].Value);
-            return retryAfter > TimeSpan.Zero;
-        }
+            var tryAgainMatch = TryAgainInPattern.Match(output);
+            if (tryAgainMatch.Success &&
+                int.TryParse(tryAgainMatch.Groups["value"].Value, out var retryValue))
+            {
+                retryAfter = ToTimeSpan(retryValue, tryAgainMatch.Groups["unit"].Value);
+                return retryAfter > TimeSpan.Zero;
+            }
 
-        var resetsMatch = ResetsInPattern.Match(output);
-        if (resetsMatch.Success)
+            var resetsMatch = ResetsInPattern.Match(output);
+            if (resetsMatch.Success)
+            {
+                var hours = ParseIntGroup(resetsMatch, "hours");
+                var minutes = ParseIntGroup(resetsMatch, "minutes");
+                var seconds = ParseIntGroup(resetsMatch, "seconds");
+                retryAfter = new TimeSpan(hours, minutes, seconds);
+                return retryAfter > TimeSpan.Zero;
+            }
+        }
+        catch (Exception error) when (error is OverflowException or ArgumentOutOfRangeException)
         {
-            var hours = ParseIntGroup(resetsMatch, "hours");
-            var minutes = ParseIntGroup(resetsMatch, "minutes");
-            var seconds = ParseIntGroup(resetsMatch, "seconds");
-            retryAfter = new TimeSpan(hours, minutes, seconds);
-            return retryAfter > TimeSpan.Zero;
+            // The refusal remains evidence even when its reset cannot be represented.
         }
 
         retryAfter = default;

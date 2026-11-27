@@ -3,6 +3,11 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+if (args.Length > 0 && args[0] == PreTesterResolverReplayCommand.Name)
+{
+    return PreTesterResolverReplayCommand.Run(args, Console.Error);
+}
+
 if (args.Length > 0 && args[0].Equals(DecisionSnapshotCommand.Name, StringComparison.OrdinalIgnoreCase))
 {
     return await DecisionSnapshotCommand.RunAsync(args, Console.Out, Console.Error);
@@ -38,6 +43,12 @@ if (args.Length >= 2 && args[0] == ConductorParallelAcceptanceAttemptCoordinator
 if (args.Length >= 2 && args[0] == ConductorGroupedGateAttemptCoordinator.OwnedProcessSubcommandName)
 {
     return ConductorGroupedGateAttemptHost.Run(args[1]);
+}
+
+if (args.Length == 3 && args[0] == SoloRepairCheckAttemptCoordinator.OwnedProcessSubcommandName &&
+    Guid.TryParseExact(args[2], "D", out var soloRepairLaunchId))
+{
+    return SoloRepairCheckAttemptCoordinator.RunOwnedProcess(args[1], soloRepairLaunchId);
 }
 
 if (args.Length >= 1 && args[0] == ConductorSuccessorSelfCheck.SubcommandName)
@@ -141,7 +152,7 @@ try
         return 0;
     }
     if (CliShadowStartCommand.IsCommand(startupArgs))
-        return CliShadowStartCommand.Run(startupArgs, Console.Out, Console.Error);
+        return CliShadowStartCommand.RunFromConsole(startupArgs);
     if (CliArgumentParser.IsAskGoal(startupArgs))
         _ = CliArgumentParser.ParseAskGoalArgs(startupArgs);
 }
@@ -248,6 +259,8 @@ try
 {
     workspace = ResolveSelectedWorkspace(activeProject);
     invocationBinding.Verify(workspace);
+    if (invocationBinding.DisposableFixture && startupArgs.Count > 0 && startupArgs[0] == "conduct")
+        ShadowStartSidecarTracking.InstallForCandidate(workspace.OrchestratorDirectory);
     PlannerCommandSelectorValidation.InstallDefaultSource(DeclaredGateCheckSource.For(workspace.ProjectHomeDirectoryOrNull));
     PlannerTestIdentityListing.InstallDefaultSource(CargoNextestTestIdentityListing.For(workspace.ProjectHomeDirectoryOrNull));
     CliAskGoalCommand.ValidateStartupArguments(startupArgs, workspace);
