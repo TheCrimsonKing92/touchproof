@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -9,16 +8,7 @@ internal static class ProviderHoldSeedArchiveEvidenceWriter
     internal static async Task WriteAsync(SqliteConnection connection, string id, string snapshotJson,
         JsonSerializerOptions options, CancellationToken token)
     {
-        ProviderUsageGoalEvidence evidence;
-        try
-        {
-            evidence = await ProviderHoldSeedEvidenceReader.ProjectAsync(id, snapshotJson, options, token, connection);
-        }
-        catch (Exception exception) when (exception is JsonException or InvalidDataException or NotSupportedException)
-        {
-            // Keep archiving readable goal snapshots whose legacy sidecars cannot be projected.
-            return;
-        }
+        var evidence = await ProviderHoldSeedEvidenceReader.ProjectAsync(id, snapshotJson, options, token, connection);
 
         // The caller has inserted the archive and still owns the write transaction.
         await using var command = connection.CreateCommand();

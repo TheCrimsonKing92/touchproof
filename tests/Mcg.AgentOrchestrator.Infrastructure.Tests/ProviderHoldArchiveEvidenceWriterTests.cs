@@ -94,6 +94,36 @@ public sealed class ProviderHoldArchiveEvidenceWriterTests
         }
     }
 
+    [Fact]
+    public async Task Archive_ProjectionFailureRollsBackArchiveAndEvidenceRows()
+    {
+        using var fixture = new ProviderHoldSeedFixture();
+        var token = TestContext.Current.CancellationToken;
+        var (_, empty) = await SaveGoalsAsync(fixture, token);
+        Assert.Equal(0, await fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(ProviderHoldSeedFixture.At,
+            cancellationToken: token));
+        await using var connection = StateDbConnectionFactory.Open(fixture.Database, StateDbConnectionProfile.ReadWrite);
+        await ProviderHoldSeedEvidenceStore.CreateSchemaAsync(connection, token);
+        await using var command = connection.CreateCommand();
+        // Keep the replacement inline so sidecar hydration succeeds before the projector checks the ID.
+        var mismatched = ProviderHoldSeedFixture.MakeUnrelated(3);
+        var task = Assert.Single(mismatched.Tasks) with { Status = WorkTaskStatus.Cancelled };
+        var payload = JsonSerializer.Serialize(mismatched with { Tasks = [task] }, Options);
+        command.CommandText = "UPDATE goals SET snapshot_json = $payload WHERE id = $id";
+        command.Parameters.AddWithValue("$id", empty);
+        command.Parameters.AddWithValue("$payload", payload);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync(token));
+
+        var failure = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            fixture.Repository.ArchiveTerminalGoalSnapshotsAsync(Cutoff, cancellationToken: token));
+        Assert.Equal("Provider seed evidence goal identity mismatch.", failure.Message);
+        command.Parameters.Clear();
+        command.CommandText = "SELECT count(*) FROM goal_snapshot_archive";
+        Assert.Equal(0L, await command.ExecuteScalarAsync(token));
+        command.CommandText = "SELECT count(*) FROM provider_hold_seed_evidence";
+        Assert.Equal(0L, await command.ExecuteScalarAsync(token));
+    }
+
     private static async Task<(string Hold, string Empty)> SaveGoalsAsync(ProviderHoldSeedFixture fixture, CancellationToken token)
     {
         var hold = ProviderHoldSeedFixture.MakeUnrelated(1);
