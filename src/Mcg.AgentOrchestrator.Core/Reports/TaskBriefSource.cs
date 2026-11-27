@@ -42,27 +42,8 @@ public sealed record TaskBriefSource(
     public TaskBrief ToTaskBrief(string content) =>
         new(GoalId, TaskId, Role, Title, content, TrimmedPrerequisiteEvidenceRequestIds);
 
-    public TaskBrief ProjectLegacyMarkedTextV1(bool emitTypedSourceBoundaries)
-    {
-        var lines = new List<string>();
-        foreach (var segment in Segments)
-        {
-            if (emitTypedSourceBoundaries && segment.TypedProjectionIdentity is { } identity)
-            {
-                lines.Add(WorkerContextProjectionBoundary.Start(identity));
-            }
-
-            lines.AddRange(emitTypedSourceBoundaries
-                ? segment.Lines.Select(WorkerContextProjectionBoundary.EscapeReservedLiteral)
-                : segment.Lines);
-            if (emitTypedSourceBoundaries && segment.TypedProjectionIdentity is { } closingIdentity)
-            {
-                lines.Add(WorkerContextProjectionBoundary.End(closingIdentity));
-            }
-        }
-
-        return ToTaskBrief(string.Join(Environment.NewLine, lines));
-    }
+    public TaskBrief ProjectLegacyMarkedTextV1() =>
+        ToTaskBrief(string.Join(Environment.NewLine, Segments.SelectMany(segment => segment.Lines)));
 }
 
 internal sealed record TaskBriefBudgetSelection(

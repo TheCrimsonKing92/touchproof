@@ -148,9 +148,9 @@ public sealed class RoleRequirementStackGuidanceTests
         Assert.Equal(complexity, TaskComplexityEstimator.Estimate(task.Description, goal.Objective, role));
 
         var omitted = kernel.BuildTaskBriefSource(goal.Id, task.Id)
-            .ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false).Content;
+            .ProjectLegacyMarkedTextV1().Content;
         var dotnet = kernel.BuildTaskBriefSource(goal.Id, task.Id, roleRequirementStack: ProjectStack.Dotnet)
-            .ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false).Content;
+            .ProjectLegacyMarkedTextV1().Content;
         Assert.Equal(omitted, dotnet);
 
         var lines = dotnet.ReplaceLineEndings("\n").Split('\n');
