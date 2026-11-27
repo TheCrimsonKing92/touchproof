@@ -364,6 +364,9 @@ public sealed partial class AgentOrchestratorKernel
     public TaskSpec RecordFindingEvidenceRequest(GoalId goalId, TaskId taskId, PreTesterEvidenceEntry entry, string message) =>
         RecordFindingEvidence(goalId, taskId, message, entry, ProgressKind.FindingEvidenceRequestRecorded, "request");
 
+    public TaskSpec RecordFindingEvidenceRequest(GoalId goalId, TaskId taskId, FindingEvidenceRequestReceipt receipt, string message) =>
+        RecordFindingEvidence(goalId, taskId, message, null, ProgressKind.FindingEvidenceRequestRecorded, "request", receipt);
+
     public TaskSpec RecordFindingEvidenceRun(GoalId goalId, TaskId taskId, string message) =>
         RecordFindingEvidence(goalId, taskId, message, null, ProgressKind.FindingEvidenceRunRecorded, "run");
 
@@ -371,7 +374,7 @@ public sealed partial class AgentOrchestratorKernel
         RecordFindingEvidence(goalId, taskId, message, entry, ProgressKind.FindingEvidenceRunRecorded, "run");
 
     private TaskSpec RecordFindingEvidence(GoalId goalId, TaskId taskId, string message,
-        PreTesterEvidenceEntry? entry, ProgressKind kind, string description)
+        PreTesterEvidenceEntry? entry, ProgressKind kind, string description, FindingEvidenceRequestReceipt? receipt = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -381,7 +384,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new ArgumentException($"Finding evidence {description} message cannot be empty.", nameof(message));
         }
 
-        Append(goal, taskId, kind, trimmed, preTesterEvidence: entry);
+        Append(goal, taskId, kind, trimmed, preTesterEvidence: entry, findingEvidenceRequest: receipt);
         return task;
     }
 

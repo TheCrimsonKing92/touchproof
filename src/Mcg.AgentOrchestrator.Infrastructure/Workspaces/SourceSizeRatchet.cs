@@ -586,7 +586,7 @@ internal static class SourceSizeRatchet
             // Goal 35c35d6d: three delegation lines connect diagnosis owned by a separate coordinator.
             // Goal 7ca0990d: two wiring lines carry the exact train plan and scoped admission reservation; same partials.
             // Goal ed4b8637 wires the explicit inventory execution hold into failed-goal recovery (+3 lines).
-            new SourceClassCeiling("ConductorDriver", 13366, 67),
+            new SourceClassCeiling("ConductorDriver", 13361, 67),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
