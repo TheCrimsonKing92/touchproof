@@ -13,14 +13,14 @@ internal static class AttentionAgentReadView
         IReadOnlyList<AttentionGateEvidence>? gateEvidence = null,
         IReadOnlyList<OwnerQuestionHoldBlocker>? ownerQuestions = null,
         IReadOnlyList<AttentionPostLandingDuty>? postLandingDuties = null,
-        IReadOnlyList<PlannerBriefAmendmentRevisionPendingHold>? amendmentHolds = null,
+        IReadOnlyList<PlannerBriefAmendmentHoldAttentionView.Wait>? amendmentHolds = null,
         object[]? unlinkedGoals = null,
         IReadOnlyList<CostGoalOutcomeAttentionView.Row>? costGoalOutcomes = null)
     {
         var renderTime = PostLandingFollowUpAttention.CaptureRenderTime(time);
         var payload = UnlinkedGoalAttentionView.WithRows(PostLandingFollowUpAttention.WithRows(WithPostLandingDuties(PlannerBriefAmendmentHoldAttentionView.WithRows(new Dictionary<string, object?>
             {
-                ["waits"] = WaitRows(waits),
+                ["waits"] = WaitRows(waits, amendmentHolds),
                 ["gateEvidence"] = (gateEvidence ?? (goals ?? []).SelectMany(goal => goal.GateTestObligations
                     .Where(item => item.BriefVersion == goal.AuthoritativeBrief.Version)
                     .Select(item => new AttentionGateEvidence(goal.Id.Value, item))).ToArray())
@@ -30,7 +30,7 @@ internal static class AttentionAgentReadView
                 ["items"] = ItemRows(items),
                 ["providerHolds"] = (providerHolds ?? []).Select(ProviderUsageHoldJson.Row).ToArray(),
                 ["ownerQuestionHolds"] = OwnerQuestionRows(ownerQuestions, goals)
-            }, amendmentHolds), DutyRows(postLandingDuties, goals)), waits, goals, renderTime.GetUtcNow()), unlinkedGoals);
+            }, amendmentHolds?.Select(wait => wait.Hold).ToArray()), DutyRows(postLandingDuties, goals)), waits, goals, renderTime.GetUtcNow()), unlinkedGoals);
         return AgentReadEnvelope.Serialize(AgentReadEnvelope.AttentionSchema, AgentReadEnvelope.AttentionSchemaVersion,
             CostGoalOutcomeAttentionView.WithRows(
                 AttentionOperatorPreLandingEvidenceView.WithRows(payload, goals), costGoalOutcomes, includeCounts: false),
@@ -43,7 +43,7 @@ internal static class AttentionAgentReadView
         IReadOnlyList<OwnerQuestionHoldBlocker>? ownerQuestions = null,
         IReadOnlyList<AttentionPostLandingDuty>? postLandingDuties = null,
         IReadOnlyCollection<Goal>? goals = null,
-        IReadOnlyList<PlannerBriefAmendmentRevisionPendingHold>? amendmentHolds = null,
+        IReadOnlyList<PlannerBriefAmendmentHoldAttentionView.Wait>? amendmentHolds = null,
         object[]? unlinkedGoals = null,
         IReadOnlyList<CostGoalOutcomeAttentionView.Row>? costGoalOutcomes = null)
     {
@@ -56,11 +56,11 @@ internal static class AttentionAgentReadView
             omittedSections = new[] { "gateEvidence" },
             payload = CostGoalOutcomeAttentionView.WithRows(UnlinkedGoalAttentionView.WithRows(PostLandingFollowUpAttention.WithRows(WithPostLandingDuties(PlannerBriefAmendmentHoldAttentionView.WithRows(new Dictionary<string, object?>
             {
-                ["waits"] = WaitRows(waits),
+                ["waits"] = WaitRows(waits, amendmentHolds),
                 ["items"] = ItemRows(items),
                 ["providerHolds"] = (providerHolds ?? []).Select(ProviderUsageHoldJson.Row).ToArray(),
                 ["ownerQuestionHolds"] = OwnerQuestionRows(ownerQuestions, null)
-            }, amendmentHolds), DutyRows(postLandingDuties, null)), waits, goals, renderedAt), unlinkedGoals),
+            }, amendmentHolds?.Select(wait => wait.Hold).ToArray()), DutyRows(postLandingDuties, null)), waits, goals, renderedAt), unlinkedGoals),
                 costGoalOutcomes, includeCounts: true)
         }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
     }
@@ -89,8 +89,10 @@ internal static class AttentionAgentReadView
             nextAction = $"criterion-evidence-record --goal {row.GoalId} {row.Obligation.Id} operator <original-candidate> <receipt-id> \"{row.Obligation.RequiredScope}\" passed <detail> --observation-json <attributed-activation-and-observation>"
         }).ToArray();
 
-    private static object[] WaitRows(IReadOnlyList<HumanInputRequest> waits) =>
-        waits.Select(wait => new
+    private static object[] WaitRows(IReadOnlyList<HumanInputRequest> waits,
+        IReadOnlyList<PlannerBriefAmendmentHoldAttentionView.Wait>? amendmentHolds)
+    {
+        object[] rows = waits.Select(wait => new
         {
             id = wait.Id.Value,
             goalId = wait.GoalId.Value,
@@ -109,6 +111,42 @@ internal static class AttentionAgentReadView
             isExternallyBlocked = wait.IsExternallyBlocked,
             resumeCommand = wait.ResumeCommand
         }).ToArray();
+
+        if (amendmentHolds is not { Count: > 0 }) return rows;
+
+        var openIds = waits.Select(wait => wait.Id).ToHashSet();
+        return rows.Concat(amendmentHolds
+            .Where(wait => !openIds.Contains(wait.Hold.RequestId))
+            .Select(wait =>
+            {
+                var hold = wait.Hold;
+                var request = wait.Request;
+                var commands = hold.NextCommands();
+                return new
+                {
+                    id = hold.RequestId.Value,
+                    goalId = hold.GoalId.Value,
+                    taskId = hold.TaskId.Value,
+                    kind = request.Kind.ToString(),
+                    state = PlannerBriefAmendmentRevisionPendingHold.State,
+                    criterionIndex = hold.CriterionIndex,
+                    requestedBriefVersion = hold.RequestedBriefVersion,
+                    currentBriefVersion = hold.CurrentBriefVersion,
+                    question = request.Question,
+                    plannerIdentity = request.PlannerIdentity,
+                    plannerEvidence = request.PlannerEvidence,
+                    owner = "operator",
+                    availability = request.PlannerEvidence?.Availability,
+                    nextAction = commands,
+                    requestedAt = wait.RequestedAt,
+                    isAutoDefaultable = request.IsAutoDefaultable,
+                    isDismissible = request.IsDismissible,
+                    isAnswerRequired = request.IsAnswerRequired,
+                    isExternallyBlocked = request.IsExternallyBlocked,
+                    resumeCommand = commands
+                };
+            })).ToArray();
+    }
 
     private static object[] ItemRows(IReadOnlyList<CollaborationItem> items) =>
         items.Select(item => new
