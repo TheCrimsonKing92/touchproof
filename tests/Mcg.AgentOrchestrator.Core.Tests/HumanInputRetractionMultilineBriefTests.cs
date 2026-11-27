@@ -108,13 +108,14 @@ public sealed class HumanInputRetractionMultilineBriefTests
 
         var before = BuildConvergence();
         var beforeFinding = Assert.Single(before.Lines, line => line.EndsWith(description, StringComparison.Ordinal));
+        var beforePaths = before.ConvergenceChangedFiles!;
+        var firstTrailingLine = beforePaths.FirstListLineIndex + beforePaths.ListLineCount;
 
         clock.Advance();
         kernel.SupersedeHumanInput(goal.Id, request.Id, "Current finding detail", HumanInputAnswerOrigin.Operator);
         if (retractAfterPaths)
         {
-            var beforePaths = before.ConvergenceChangedFiles!;
-            var trailingLines = before.Lines.Skip(beforePaths.FirstListLineIndex + beforePaths.ListLineCount).Take(2).ToArray();
+            var trailingLines = before.Lines.Skip(firstTrailingLine).Take(2).ToArray();
             Assert.Equal(2, trailingLines.Length);
             var trailingRequest = kernel.RequestHumanInput(goal.Id, reviewer.Id, "Which closing guidance should govern?");
             kernel.SubmitHumanInput(trailingRequest.Id, string.Join('\n', trailingLines));
@@ -128,6 +129,12 @@ public sealed class HumanInputRetractionMultilineBriefTests
             after.Lines.Skip(pathList.FirstListLineIndex).Take(pathList.ListLineCount));
         Assert.DoesNotContain(after.Lines, line => line.Contains(staleAnswer, StringComparison.Ordinal));
         Assert.Contains(beforeFinding.Replace(staleAnswer, string.Empty, StringComparison.Ordinal), after.Lines);
+        Assert.Equal(before.Lines.Count, after.Lines.Count);
+        if (retractAfterPaths)
+        {
+            Assert.Empty(after.Lines[firstTrailingLine]);
+            Assert.Empty(after.Lines[firstTrailingLine + 1]);
+        }
     }
 
     private static void AssertAdjacentLines(IReadOnlyList<string> lines, string first, string second)
