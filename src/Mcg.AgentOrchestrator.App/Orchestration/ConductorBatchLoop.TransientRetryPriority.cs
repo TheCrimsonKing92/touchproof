@@ -1,19 +1,14 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
-using static Mcg.AgentOrchestrator.App.Orchestration.ConductorBatchLoop;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorBatchLoop
 {
-    internal GateObligationSelectorPreAdmissionClassifier.InventorySource? SoloObligationInventorySource { get; init; }
-    internal string? SoloObligationOrchestratorDirectory { get; init; }
-
     internal enum SoloAcceptanceAdmissionKind
     {
         Admissible, Completed, VerificationGate, EngineCircuit, SlotSettings,
-        Capacity, Fairness, CandidateUnavailable, ResourceConflict, WorkspaceProbeBackoff,
-        UnresolvedObligationSelector
+        Capacity, Fairness, CandidateUnavailable, ResourceConflict, WorkspaceProbeBackoff
     }
 
     internal sealed record SoloAcceptanceAdmission(
@@ -25,12 +20,12 @@ internal sealed partial class ConductorBatchLoop
         ParallelAcceptanceOldestWaiterObservation? StalledOldestBypass = null);
 
     // Observe without escalating or holding: grouped selection and solo admission share every skip.
-    internal SoloAcceptanceAdmission EvaluateSoloAcceptanceAdmissibility(
+    private SoloAcceptanceAdmission EvaluateSoloAcceptanceAdmissibility(
         AgentOrchestratorKernel kernel, ConductorDriver driver, Goal goal,
         ConductorAutonomyPolicy policy, LiveAcceptanceCensus census, int configuredWidth,
         IReadOnlySet<int> activeSlots, IReadOnlyList<ConductorParallelAcceptanceCandidate> activeCandidates,
         IReadOnlySet<string> liveGoalIds, ParallelAcceptanceOldestWaiterObservation oldestObservation,
-        bool oldestServedThisTick, int tick, bool inspectObligationSelectors = true)
+        bool oldestServedThisTick, int tick)
     {
         if (goal.Status == GoalStatus.Completed)
         {
@@ -79,7 +74,10 @@ internal sealed partial class ConductorBatchLoop
         }
 
         var capacity = DecideLiveAcceptanceAdmission(census, slotCount);
-        if (!capacity.IsAdmitted) return new(SoloAcceptanceAdmissionKind.Capacity, CapacityDecision: capacity);
+        if (!capacity.IsAdmitted)
+        {
+            return new(SoloAcceptanceAdmissionKind.Capacity, CapacityDecision: capacity);
+        }
 
         var oldestWaiter = oldestObservation.Waiter;
         var fairnessApplies = !liveGoalIds.Contains(goal.Id.Value) &&
@@ -109,13 +107,12 @@ internal sealed partial class ConductorBatchLoop
                 $"parallel acceptance fairness waiting for oldest verified goal {oldestWaiter!.Id.Value[..8]}; retry on next conduct tick",
                 $"ADMISSION tick={tick} result=deferred reason=parallel-acceptance-fairness goal={goal.Id.Value[..8]} oldest={oldestWaiter.Id.Value[..8]}");
         }
-        if (DetectSoloAcceptanceResourceConflict(candidate, activeCandidates) is { } conflict) return conflict;
-        var admission = new SoloAcceptanceAdmission(SoloAcceptanceAdmissionKind.Admissible, candidate,
+        if (DetectSoloAcceptanceResourceConflict(candidate, activeCandidates) is { } conflict)
+        {
+            return conflict;
+        }
+        return new(SoloAcceptanceAdmissionKind.Admissible, candidate,
             StalledOldestBypass: fairnessApplies ? oldestObservation : null);
-        return inspectObligationSelectors
-            ? GateObligationSelectorPreAdmissionClassifier.CheckSolo(kernel, driver, goal, policy, _workspace,
-                SoloObligationOrchestratorDirectory, SoloObligationInventorySource, admission, emit: null)
-            : admission;
     }
 
     internal static SoloAcceptanceAdmission? DetectSoloAcceptanceResourceConflict(
@@ -139,7 +136,7 @@ internal sealed partial class ConductorBatchLoop
                 driver.EscalateParallelLandingAcceptance(goal, policy, admission.Reason!),
             SoloAcceptanceAdmissionKind.Capacity =>
                 AdmissionDeniedHeld(goal, policy, admission.CapacityDecision!),
-            SoloAcceptanceAdmissionKind.WorkspaceProbeBackoff or SoloAcceptanceAdmissionKind.UnresolvedObligationSelector =>
+            SoloAcceptanceAdmissionKind.WorkspaceProbeBackoff =>
                 ParallelAcceptanceHeld(admission.Candidate!, policy, admission.Reason!),
             SoloAcceptanceAdmissionKind.Fairness or SoloAcceptanceAdmissionKind.ResourceConflict =>
                 ParallelAcceptanceHeld(admission.Candidate!, policy, admission.Reason!, ConductorHoldOwner.AcceptanceQueue),
@@ -185,31 +182,35 @@ internal sealed partial class ConductorBatchLoop
         return null;
     }
 
-}
-
-internal static class SoloAcceptanceTransientRetryPriority
-{
-    internal static Goal? Select(IReadOnlyList<Goal> eligible, IReadOnlyDictionary<string, ParallelLandingOutcome> results,
-        Func<Goal, SoloAcceptanceAdmission> observeAdmission, Func<ConductorParallelAcceptanceCandidate, int> countPendingRetries,
-        int tick, List<string> changedGoalLines)
+    private Goal? SelectTransientRetryPriorityGoal(
+        AgentOrchestratorKernel kernel, ConductorDriver driver, IReadOnlyList<Goal> eligible,
+        ConductorAutonomyPolicy policy, LiveAcceptanceCensus census, int configuredWidth,
+        IReadOnlySet<int> activeSlots, IReadOnlyList<ConductorParallelAcceptanceCandidate> activeCandidates,
+        IReadOnlySet<string> liveGoalIds, ParallelAcceptanceOldestWaiterObservation oldestObservation,
+        Dictionary<string, ParallelLandingOutcome> results, int tick, List<string> changedGoalLines)
     {
         foreach (var goal in eligible)
         {
             if (goal.Status != GoalStatus.Verifying || results.ContainsKey(goal.Id.Value)) continue;
             // Candidate/head/probe faults retain the existing solo hold or escalation path.
+            SoloAcceptanceAdmission admission;
             int count;
             try
             {
-                var admission = observeAdmission(goal);
+                admission = EvaluateSoloAcceptanceAdmissibility(kernel, driver, goal, policy,
+                    census, configuredWidth, activeSlots, activeCandidates, liveGoalIds,
+                    oldestObservation, oldestServedThisTick: false, tick);
                 if (admission.Kind != SoloAcceptanceAdmissionKind.Admissible) continue;
-                count = countPendingRetries(admission.Candidate!);
+                count = driver.ParallelAcceptanceAttemptCoordinator.CountPendingTransientRetries(admission.Candidate!);
             }
             catch (Exception)
             {
                 continue;
             }
             if (count < 1 || count >= ParallelAcceptanceTransientFailureCap) continue;
-            changedGoalLines.Add($"ADMISSION tick={tick} result=deferred reason=transient-retry-priority goal={goal.Id.Value[..8]}");
+            RecordParallelAcceptanceProgress(
+                $"ADMISSION tick={tick} result=deferred reason=transient-retry-priority goal={goal.Id.Value[..8]}",
+                changedGoalLines);
             return goal;
         }
         return null;
