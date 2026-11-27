@@ -87,10 +87,10 @@ public sealed class FocusedEvidenceDeclarationFactStoreTests
 
             var oldTimestamp = File.GetLastWriteTimeUtc(edited);
             var oldLength = new FileInfo(edited).Length;
-            tree.Write("Editable.cs", "namespace Sample; record AfterEditing { [Theory] void NewTestName() {} }");
+            tree.Write("Editable.cs", "namespace Sample; record After { [Fact] void New() {} }");
             File.SetLastWriteTimeUtc(edited, oldTimestamp);
             Assert.Equal(oldTimestamp, File.GetLastWriteTimeUtc(edited));
-            Assert.NotEqual(oldLength, new FileInfo(edited).Length);
+            Assert.Equal(oldLength, new FileInfo(edited).Length);
 
             AssertEditedSource(tree, edited);
         }
@@ -173,10 +173,10 @@ public sealed class FocusedEvidenceDeclarationFactStoreTests
     private static void AssertEditedSource(SourceTree tree, string source)
     {
         Assert.Empty(tree.Find("Before"));
-        Assert.Equal([source], tree.Find("AfterEditing"));
+        Assert.Equal([source], tree.Find("After"));
         Assert.Empty(FocusedEvidenceMethodResolver.FindTestMethodNames([source], "Before", tree.Root));
-        Assert.Equal(["NewTestName"], FocusedEvidenceMethodResolver.FindTestMethodNames([source], "AfterEditing", tree.Root));
-        Assert.Equal(new FocusedEvidenceParsedRootCache.DeclaredTypeName("AfterEditing", "Sample.AfterEditing"),
+        Assert.Equal(["New"], FocusedEvidenceMethodResolver.FindTestMethodNames([source], "After", tree.Root));
+        Assert.Equal(new FocusedEvidenceParsedRootCache.DeclaredTypeName("After", "Sample.After"),
             Assert.Single(FocusedEvidenceBareSelectorResolution.ReadDeclaredClasses(source, tree.Root)));
     }
 

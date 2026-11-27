@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -31,42 +32,37 @@ internal sealed class FocusedEvidenceDeclarationFactStore(FocusedEvidenceParsedR
     internal FocusedEvidenceDeclarationFacts Read(string path, string? worktreePath = null)
     {
         var fullPath = Path.GetFullPath(path);
-        var fingerprint = GetFingerprint(fullPath);
+        var source = SelectionFileReadProbe.ReadAllText(path);
+        var hash = AcceptanceTestClassSourceExtractStore.HashText(source);
         lock (_sync)
         {
-            if (fingerprint is not null && _paths.TryGetValue(fullPath, out var cached) &&
-                cached.Fingerprint == fingerprint)
+            if (_paths.TryGetValue(fullPath, out var cached) && cached.ContentHash == hash)
                 return cached.Facts;
         }
 
         var directory = ResolveDirectory(worktreePath ?? FindWorktree(fullPath));
-        if (directory is null)
-        {
-            var transient = FocusedEvidenceDeclarationFacts.Extract(CSharpSourceFileRootReader.ReadFile(_rootStore, path).Root);
-            return Remember(fullPath, fingerprint, transient);
-        }
-
-        var hash = AcceptanceTestClassSourceExtractStore.HashText(SelectionFileReadProbe.ReadAllText(path));
-        var entryPath = EntryPath(directory, hash);
-        if (TryRead(entryPath, hash) is { } stored)
-            return Remember(fullPath, fingerprint, stored);
+        var entryPath = directory is null ? null : EntryPath(directory, hash);
+        if (entryPath is not null && TryRead(entryPath, hash) is { } stored)
+            return Remember(fullPath, hash, stored);
 
         var root = CSharpSourceFileRootReader.ReadFile(_rootStore, path).Root;
+        // The root cache can reuse a metadata match after a rewrite. Use the hashed snapshot if the text differs.
+        if (root.SyntaxTree.GetText().ToString() != source)
+        {
+            root = CSharpSyntaxTree.ParseText(source).GetCompilationUnitRoot();
+            FocusedEvidenceParsedRootCache.RecordParse(path);
+        }
         var facts = FocusedEvidenceDeclarationFacts.Extract(root);
-        // The source may have changed since the disk lookup. Publish only under the parsed text's hash.
-        var parsedHash = AcceptanceTestClassSourceExtractStore.HashText(root.ToFullString());
-        Write(EntryPath(directory, parsedHash), parsedHash, facts);
-        return parsedHash == hash ? Remember(fullPath, fingerprint, facts) : facts;
+        if (entryPath is not null) Write(entryPath, hash, facts);
+        return Remember(fullPath, hash, facts);
     }
 
     internal static string EntryPath(string directory, string hash) => Path.Combine(directory,
         ExtractorVersion.ToString(CultureInfo.InvariantCulture), hash + ".json");
 
-    private FocusedEvidenceDeclarationFacts Remember(string fullPath, Fingerprint? fingerprint,
+    private FocusedEvidenceDeclarationFacts Remember(string fullPath, string hash,
         FocusedEvidenceDeclarationFacts facts)
     {
-        if (fingerprint is not { } current || current != GetFingerprint(fullPath)) return facts;
-
         lock (_sync)
         {
             if (!_paths.ContainsKey(fullPath))
@@ -75,23 +71,9 @@ internal sealed class FocusedEvidenceDeclarationFactStore(FocusedEvidenceParsedR
                     _paths.Remove(_insertionOrder.Dequeue());
                 _insertionOrder.Enqueue(fullPath);
             }
-            _paths[fullPath] = new(current, facts);
+            _paths[fullPath] = new(hash, facts);
         }
         return facts;
-    }
-
-    private static Fingerprint? GetFingerprint(string fullPath)
-    {
-        try
-        {
-            var file = new FileInfo(fullPath);
-            if (file.Exists) return new(file.Length, file.LastWriteTimeUtc);
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Security.SecurityException)
-        {
-            // Let the source reader determine the result when metadata is unavailable.
-        }
-        return null;
     }
 
     private static string? FindWorktree(string fullPath)
@@ -152,8 +134,7 @@ internal sealed class FocusedEvidenceDeclarationFactStore(FocusedEvidenceParsedR
     }
 
     private sealed record Envelope(int ExtractorVersion, string ContentHash, FocusedEvidenceDeclarationFacts? Facts);
-    private readonly record struct Fingerprint(long Size, DateTime LastWriteTimeUtc);
-    private sealed record MemoryEntry(Fingerprint Fingerprint, FocusedEvidenceDeclarationFacts Facts);
+    private sealed record MemoryEntry(string ContentHash, FocusedEvidenceDeclarationFacts Facts);
 
     private sealed class RestoreStore(FocusedEvidenceDeclarationFactStore? previous) : IDisposable
     {
