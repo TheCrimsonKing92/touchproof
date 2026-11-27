@@ -1,7 +1,9 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.CodeAnalysis.CSharp;
+using static Mcg.AgentOrchestrator.App.Orchestration.ConductorBatchLoop;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -17,6 +19,9 @@ internal static class GateObligationSelectorPreAdmissionClassifier
     {
         internal bool Hold => HoldLines.Count > 0;
     }
+
+    internal sealed record InventorySource(Func<string> ReadRevision,
+        Func<IReadOnlyList<AcceptanceTestClassDescriptor>> Scan);
 
     internal static bool IsClassOnly(string selector) => SyntaxFacts.IsValidIdentifier(selector) &&
         !selector.StartsWith('@');
@@ -70,7 +75,72 @@ internal static class GateObligationSelectorPreAdmissionClassifier
     }
 
     internal static Result Apply(AgentOrchestratorKernel kernel, Goal goal, string? orchestratorDirectory,
-        string candidateRevision, Func<IReadOnlyList<AcceptanceTestClassDescriptor>?> readInventory, Action<string> emit)
+        string candidateRevision, Func<IReadOnlyList<AcceptanceTestClassDescriptor>?> readInventory, Action<string> emit) =>
+        Check(kernel, goal, orchestratorDirectory, candidateRevision, readInventory, emit);
+
+    internal static SoloAcceptanceAdmission CheckSolo(
+        AgentOrchestratorKernel kernel, ConductorDriver driver, Goal goal, ConductorAutonomyPolicy policy,
+        OrchestratorWorkspace? workspace, string? orchestratorDirectory, InventorySource? inventorySource,
+        SoloAcceptanceAdmission admission, Action<string>? emit)
+    {
+        if (admission.Kind != SoloAcceptanceAdmissionKind.Admissible) return admission;
+
+        var revision = "none";
+        IReadOnlyList<string> holds;
+        try
+        {
+            if (!MayNeedInventory(goal, kernel.HumanInputRequests)) return admission;
+
+            if (driver.ProjectCachedGateReadyCandidate(goal, policy) is GateReadyCandidateProjectionResult.Ready ready)
+                revision = ready.Projection.CandidateRevision;
+            else if (goal.Status == GoalStatus.Verifying)
+                return admission; // Retry admission can proceed without a ready projection.
+
+            orchestratorDirectory ??= workspace?.OrchestratorDirectory;
+            IReadOnlyList<AcceptanceTestClassDescriptor>? ReadInventory()
+            {
+                try
+                {
+                    return inventorySource is { } source
+                        ? ReadCandidateInventory(revision, source.ReadRevision, source.Scan)
+                        : ReadWorkspaceInventory(workspace, goal.Id, revision);
+                }
+                catch (Exception)
+                {
+                    return null;
+                }
+            }
+            holds = (emit is null
+                ? Check(kernel, goal, orchestratorDirectory, revision, ReadInventory, emit: null)
+                : Apply(kernel, goal, orchestratorDirectory, revision, ReadInventory, emit)).HoldLines;
+        }
+        catch (Exception ex)
+        {
+            holds = UnavailableHoldLines(goal, revision, ex).ToArray();
+        }
+        if (emit is not null)
+            foreach (var line in holds) emit(line);
+
+        return holds.Count == 0 ? admission : admission with
+        {
+            Kind = SoloAcceptanceAdmissionKind.UnresolvedObligationSelector,
+            Reason = string.Join(" | ", holds)
+        };
+    }
+
+    private static bool MayNeedInventory(Goal goal, IEnumerable<HumanInputRequest> answeredRequests) =>
+        GateTestObligationEffectiveSelectors.Current(goal).Any(obligation =>
+            GateTestObligationRepositoryKey.IsHome(obligation.RepositoryKey) &&
+            GateTestObligationWaivers.FindWaiver(goal, obligation) is null &&
+            ClassSelectors(goal, obligation, answeredRequests).Any());
+
+    private static IEnumerable<string> ClassSelectors(Goal goal, GateTestObligation obligation,
+        IEnumerable<HumanInputRequest> answeredRequests) =>
+        GateTestObligationEffectiveSelectors.Effective(goal, obligation, answeredRequests).Selectors
+            .Where(IsClassOnly).Distinct(StringComparer.Ordinal);
+
+    private static Result Check(AgentOrchestratorKernel kernel, Goal goal, string? orchestratorDirectory,
+        string candidateRevision, Func<IReadOnlyList<AcceptanceTestClassDescriptor>?> readInventory, Action<string>? emit)
     {
         var pending = orchestratorDirectory is null
             ? GateTestObligationEffectiveSelectors.Current(goal)
@@ -86,8 +156,7 @@ internal static class GateObligationSelectorPreAdmissionClassifier
         var holds = new List<string>();
         foreach (var obligation in pending.Where(item => GateTestObligationRepositoryKey.IsHome(item.RepositoryKey)))
         {
-            var effective = GateTestObligationEffectiveSelectors.Effective(goal, obligation, kernel.HumanInputRequests);
-            foreach (var selector in effective.Selectors.Where(IsClassOnly).Distinct(StringComparer.Ordinal))
+            foreach (var selector in ClassSelectors(goal, obligation, kernel.HumanInputRequests))
             {
                 void Hold(string detail) => holds.Add(LandingExecutor.FormatObligationHoldLine(
                     obligation, "selector-not-found", [selector], detail));
@@ -109,8 +178,9 @@ internal static class GateObligationSelectorPreAdmissionClassifier
                         var candidateClasses = candidates.Length == 0 ? "none" : candidates;
                         Hold($"candidate {candidateRevision}; effective selector {considered}; " +
                             $"candidate classes considered: {candidateClasses}");
-                        GateObligationSelectorDeveloperRouting.Route(
-                            kernel, goal.Id, obligation.Id, selector, candidateRevision, classification, candidateClasses, emit);
+                        if (emit is not null)
+                            GateObligationSelectorDeveloperRouting.Route(
+                                kernel, goal.Id, obligation.Id, selector, candidateRevision, classification, candidateClasses, emit);
                         continue;
                     }
 
@@ -123,6 +193,7 @@ internal static class GateObligationSelectorPreAdmissionClassifier
                         continue;
                     }
                     ObligationRebindIntentHandler.ValidatePair(selector, replacement);
+                    if (emit is null) continue;
                     if (!HasRecordedPair(kernel, goal, obligation, selector, replacement))
                     {
                         var request = kernel.RecordAnsweredOperatorHumanInput(goal.Id,
@@ -146,6 +217,25 @@ internal static class GateObligationSelectorPreAdmissionClassifier
         return new(holds);
     }
 
+    private static IReadOnlyList<AcceptanceTestClassDescriptor>? ReadWorkspaceInventory(
+        OrchestratorWorkspace? workspace, GoalId goalId, string candidateRevision)
+    {
+        if (workspace is null) return null;
+        var root = workspace.ResolveExecutionDirectory(goalId);
+        return ReadCandidateInventory(candidateRevision, () =>
+        {
+            var status = GitCli.Run(root, "status", "--porcelain", "--untracked-files=normal");
+            if (!status.Succeeded || status.DrainTimedOut || !string.IsNullOrWhiteSpace(status.Output)) return "";
+            var head = GitCli.Run(root, "rev-parse", "--verify", "HEAD");
+            return head.Succeeded && !head.DrainTimedOut ? head.Output.Trim() : "";
+        }, () => ReadDeclaredInventory(root, workspace.ProjectHomeDirectoryOrNull));
+    }
+
+    private static IEnumerable<string> UnavailableHoldLines(Goal goal, string candidateRevision, Exception ex) =>
+        GateTestObligationEffectiveSelectors.Current(goal).Select(obligation =>
+            LandingExecutor.FormatObligationHoldLine(obligation, "pending", obligation.Selectors,
+                $"pre-admission classification unavailable at candidate {candidateRevision}: {ex.GetType().Name}: {ex.Message}"));
+
     internal static IReadOnlySet<string> HeldGoalIds(AgentOrchestratorKernel kernel,
         IReadOnlyList<Goal> eligibleGoals, IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> candidates,
         OrchestratorWorkspace? workspace, Action<string> emit)
@@ -159,18 +249,8 @@ internal static class GateObligationSelectorPreAdmissionClassifier
             var revision = ready.Projection.CandidateRevision;
             try
             {
-                var result = Apply(kernel, goal, workspace?.OrchestratorDirectory, revision, () =>
-                {
-                    if (workspace is null) return null;
-                    var root = workspace.ResolveExecutionDirectory(goal.Id);
-                    return ReadCandidateInventory(revision, () =>
-                    {
-                        var status = GitCli.Run(root, "status", "--porcelain", "--untracked-files=normal");
-                        if (!status.Succeeded || status.DrainTimedOut || !string.IsNullOrWhiteSpace(status.Output)) return "";
-                        var head = GitCli.Run(root, "rev-parse", "--verify", "HEAD");
-                        return head.Succeeded && !head.DrainTimedOut ? head.Output.Trim() : "";
-                    }, () => ReadDeclaredInventory(root, workspace.ProjectHomeDirectoryOrNull));
-                }, emit);
+                var result = Apply(kernel, goal, workspace?.OrchestratorDirectory, revision,
+                    () => ReadWorkspaceInventory(workspace, goal.Id, revision), emit);
                 if (!result.Hold) continue;
                 held.Add(goal.Id.Value);
                 foreach (var line in result.HoldLines) emit(line);
@@ -178,9 +258,7 @@ internal static class GateObligationSelectorPreAdmissionClassifier
             catch (Exception ex)
             {
                 held.Add(goal.Id.Value);
-                foreach (var obligation in GateTestObligationEffectiveSelectors.Current(goal))
-                    emit(LandingExecutor.FormatObligationHoldLine(obligation, "pending", obligation.Selectors,
-                        $"pre-admission classification unavailable at candidate {revision}: {ex.GetType().Name}: {ex.Message}"));
+                foreach (var line in UnavailableHoldLines(goal, revision, ex)) emit(line);
             }
         }
         return held;
