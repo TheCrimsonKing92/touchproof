@@ -45,6 +45,7 @@ public sealed class ProviderHoldSeedStoredEvidenceTests
         Assert.Equal(0L, fixture.Scalar("SELECT count(*) FROM goal_open_work WHERE terminal_open_work = 1"));
         Assert.Equal(2, await repository
             .ArchiveTerminalGoalSnapshotsAsync(At.AddDays(2), compressSnapshots: compressed));
+        fixture.Execute("DELETE FROM provider_hold_seed_evidence");
         Assert.Equal(2L, fixture.Scalar("SELECT count(*) FROM goals WHERE json_extract(snapshot_json, '$.IsMetadataOnly') = 1"));
         Assert.Equal(2L, fixture.Scalar(compressed
             ? "SELECT count(*) FROM goal_snapshot_archive WHERE typeof(snapshot_json) = 'blob'"
@@ -201,11 +202,17 @@ public sealed class ProviderHoldSeedStoredEvidenceTests
         fixture.UseRows(snapshot);
         Assert.Single(fixture.Seed().ProviderHoldHistory.Retained);
         var version = fixture.Scalar("SELECT version FROM goals");
+        var marker = fixture.Scalar("SELECT quote(marker) FROM provider_hold_seed_evidence");
+        var format = fixture.Scalar("SELECT format_version FROM provider_hold_seed_evidence");
+        var payload = fixture.Scalar("SELECT quote(evidence_json) FROM provider_hold_seed_evidence");
         var repository = new SqliteOrchestratorStateRepository(fixture.Path);
         await repository.EnsureTerminalOpenWorkIndexAsync(TestContext.Current.CancellationToken);
         Assert.Equal(0L, fixture.Scalar("SELECT count(*) FROM goal_open_work WHERE terminal_open_work = 1"));
         Assert.Equal(1, await repository
             .ArchiveTerminalGoalSnapshotsAsync(At.AddDays(2), compressSnapshots: true));
+        fixture.Execute($"""
+            UPDATE provider_hold_seed_evidence SET marker = {marker}, format_version = {format}, evidence_json = {payload}
+            """);
         Assert.Equal(version, fixture.Scalar("SELECT version FROM goals"));
         Assert.Single(fixture.Seed().ProviderHoldHistory.Retained);
         Assert.Equal(new[] { snapshot.Id }, fixture.Decoded);
