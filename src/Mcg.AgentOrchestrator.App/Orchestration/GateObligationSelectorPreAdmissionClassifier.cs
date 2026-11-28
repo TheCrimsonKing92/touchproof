@@ -1,7 +1,10 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.CodeAnalysis.CSharp;
+using SoloAcceptanceAdmission = Mcg.AgentOrchestrator.App.Orchestration.ConductorBatchLoop.SoloAcceptanceAdmission;
+using SoloAcceptanceAdmissionKind = Mcg.AgentOrchestrator.App.Orchestration.ConductorBatchLoop.SoloAcceptanceAdmissionKind;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -45,17 +48,137 @@ internal static class GateObligationSelectorPreAdmissionClassifier
     internal sealed record CandidateInventory(IReadOnlyList<AcceptanceTestClassDescriptor>? Classes,
         string? UnavailableCause = null);
 
+    // Unavailable scans are shared only within the current solo admission pass.
+    internal sealed class SoloInventoryPass(DeclaredTestInventoryRevisionStore store, Action<string> emit)
+    {
+        private readonly Dictionary<(string Revision, string? ProjectHome), CandidateInventory> _unavailable = new();
+
+        internal Action<string> Emit { get; } = emit;
+
+        internal CandidateInventory Read(string revision, string? projectHome,
+            Func<(string? Revision, string? UnavailableCause)> readRevision,
+            Func<IReadOnlyList<AcceptanceTestClassDescriptor>?> scan)
+        {
+            // Even on a cache hit, the current goal's worktree must bind to the candidate.
+            if (WorktreeBindingFailure(revision, readRevision()) is { } cause) return new(null, cause);
+            var key = (revision, projectHome);
+            if (_unavailable.TryGetValue(key, out var unavailable)) return unavailable;
+
+            var classes = store.Read(revision, projectHome, () =>
+            {
+                CandidateInventory result;
+                try
+                {
+                    result = ScanCandidateInventory(revision, readRevision, scan);
+                }
+                catch (Exception ex)
+                {
+                    result = new(null, DescribeException(ex));
+                }
+                if (result.Classes is { Count: > 0 }) return result.Classes;
+                _unavailable[key] = result;
+                return null;
+            });
+            return _unavailable.TryGetValue(key, out unavailable) ? unavailable : new(classes);
+        }
+    }
+
+    internal static SoloAcceptanceAdmission CheckSolo(AgentOrchestratorKernel kernel, ConductorDriver driver, Goal goal,
+        ConductorAutonomyPolicy policy, OrchestratorWorkspace? workspace, SoloInventoryPass? inventoryPass,
+        SoloAcceptanceAdmission admission)
+    {
+        if (inventoryPass is null || admission.Kind != SoloAcceptanceAdmissionKind.Admissible) return admission;
+
+        var admissionRevision = admission.Candidate?.BranchHeadSha;
+        var revision = admissionRevision;
+        try
+        {
+            var hasClassSelector = GateTestObligationEffectiveSelectors.Current(goal).Any(obligation =>
+                GateTestObligationRepositoryKey.IsHome(obligation.RepositoryKey) &&
+                GateTestObligationWaivers.FindWaiver(goal, obligation) is null &&
+                GateTestObligationEffectiveSelectors.Effective(goal, obligation, kernel.HumanInputRequests)
+                    .Selectors.Any(IsClassOnly));
+            if (!hasClassSelector) return admission;
+
+            var projection = driver.ProjectCachedGateReadyCandidate(goal, policy);
+            if (projection is GateReadyCandidateProjectionResult.Ready ready)
+            {
+                revision = ready.Projection.CandidateRevision;
+                if (admissionRevision is not null && !string.Equals(admissionRevision, revision, StringComparison.Ordinal))
+                {
+                    EmitSoloInventoryWarning(goal, revision, $"solo admission branch HEAD changed from {admissionRevision}",
+                        inventoryPass.Emit);
+                    return admission;
+                }
+                if (workspace is not null)
+                {
+                    var root = new Lazy<string>(() => workspace.ResolveExecutionDirectory(goal.Id));
+                    var projectHome = workspace.ProjectHomeDirectoryOrNull;
+                    return CheckSoloWithStore(kernel, goal, workspace.OrchestratorDirectory, revision, projectHome,
+                        inventoryPass, () => ReadWorktreeRevision(root.Value),
+                        () => ReadDeclaredInventory(root.Value, projectHome), admission);
+                }
+            }
+
+            var cause = projection is GateReadyCandidateProjectionResult.Excluded excluded
+                ? $"ready candidate projection unavailable ({excluded.Reason})"
+                : "goal workspace is unavailable";
+            EmitSoloInventoryWarning(goal, revision, cause, inventoryPass.Emit);
+        }
+        catch (Exception ex)
+        {
+            EmitSoloInventoryWarning(goal, revision, DescribeException(ex), inventoryPass.Emit);
+        }
+        return admission;
+    }
+
+    internal static SoloAcceptanceAdmission CheckSoloWithStore(AgentOrchestratorKernel kernel, Goal goal,
+        string? orchestratorDirectory, string revision, string? projectHome, SoloInventoryPass? inventoryPass,
+        Func<(string? Revision, string? UnavailableCause)> readRevision,
+        Func<IReadOnlyList<AcceptanceTestClassDescriptor>?> scan, SoloAcceptanceAdmission admission)
+    {
+        if (inventoryPass is null || admission.Kind != SoloAcceptanceAdmissionKind.Admissible) return admission;
+
+        var result = ApplyWithCandidateInventory(kernel, goal, orchestratorDirectory, revision, () =>
+        {
+            try
+            {
+                return inventoryPass.Read(revision, projectHome, readRevision, scan);
+            }
+            catch (Exception ex)
+            {
+                return new(null, DescribeException(ex));
+            }
+        }, inventoryPass.Emit, soloAdmission: true);
+        return result.Hold
+            ? admission with { Kind = SoloAcceptanceAdmissionKind.UnresolvedObligationSelector, Reason = result.HoldLines[0] }
+            : admission;
+    }
+
+    private static string DescribeException(Exception ex) => $"{ex.GetType().Name}: {ex.Message}";
+
+    private static void EmitSoloInventoryWarning(Goal goal, string? revision, string cause, Action<string> emit) =>
+        emit($"GATE_OBLIGATION_SELECTOR_PRE_ADMISSION_WARNING goal={goal.Id.Value[..8]} " +
+            $"candidate={revision ?? "none"} result=admitted cause={cause.ReplaceLineEndings(" ")}");
+
     // The scanner reads a worktree. Both observations must bind it to this admission candidate.
     internal static CandidateInventory ReadCandidateInventory(
         string candidateRevision, Func<(string? Revision, string? UnavailableCause)> readRevision,
         Func<IReadOnlyList<AcceptanceTestClassDescriptor>> scan)
     {
         if (!ConductorGitRevisionReader.IsValid(candidateRevision)) return new(null, "invalid candidate revision");
-        var before = readRevision();
-        if (before.UnavailableCause is { } beforeCause) return new(null, beforeCause);
-        if (!string.Equals(before.Revision, candidateRevision, StringComparison.Ordinal))
-            return new(null, $"candidate revision mismatch (worktree HEAD {before.Revision})");
+        if (WorktreeBindingFailure(candidateRevision, readRevision()) is { } cause) return new(null, cause);
+        return ScanCandidateInventory(candidateRevision, readRevision, scan);
+    }
 
+    private static string? WorktreeBindingFailure(string candidateRevision, (string? Revision, string? UnavailableCause) observed) =>
+        observed.UnavailableCause ?? (string.Equals(observed.Revision, candidateRevision, StringComparison.Ordinal)
+            ? null : $"candidate revision mismatch (worktree HEAD {observed.Revision})");
+
+    private static CandidateInventory ScanCandidateInventory(string candidateRevision,
+        Func<(string? Revision, string? UnavailableCause)> readRevision,
+        Func<IReadOnlyList<AcceptanceTestClassDescriptor>?> scan)
+    {
         var inventory = scan();
         var after = readRevision();
         if (after.UnavailableCause is { } afterCause) return new(null, afterCause);
@@ -85,7 +208,7 @@ internal static class GateObligationSelectorPreAdmissionClassifier
         ApplyWithCandidateInventory(kernel, goal, orchestratorDirectory, candidateRevision, () => new(readInventory()), emit);
 
     internal static Result ApplyWithCandidateInventory(AgentOrchestratorKernel kernel, Goal goal, string? orchestratorDirectory,
-        string candidateRevision, Func<CandidateInventory> readInventory, Action<string> emit)
+        string candidateRevision, Func<CandidateInventory> readInventory, Action<string> emit, bool soloAdmission = false)
     {
         var pending = orchestratorDirectory is null
             ? GateTestObligationEffectiveSelectors.Current(goal)
@@ -105,8 +228,13 @@ internal static class GateObligationSelectorPreAdmissionClassifier
             var effective = GateTestObligationEffectiveSelectors.Effective(goal, obligation, kernel.HumanInputRequests);
             foreach (var selector in effective.Selectors.Where(IsClassOnly).Distinct(StringComparer.Ordinal))
             {
-                void Hold(string detail) => holds.Add(LandingExecutor.FormatObligationHoldLine(
-                    obligation, "selector-not-found", [selector], detail));
+                void Hold(string detail)
+                {
+                    if (soloAdmission)
+                        detail = $"next: obligation-rebind {goal.Id.Value[..8]} {selector} <DeclaredClass> --text-file <path>; {detail}";
+                    var reason = LandingExecutor.FormatObligationHoldLine(obligation, "selector-not-found", [selector], detail);
+                    holds.Add(soloAdmission ? ConductorDiagnosticText.BoundSingleLine(reason) : reason);
+                }
                 try
                 {
                     var rebinds = AnsweredSelectorRebinding.For(goal, obligation, kernel.HumanInputRequests);
@@ -117,6 +245,11 @@ internal static class GateObligationSelectorPreAdmissionClassifier
                     {
                         var cause = candidateInventory.UnavailableCause ?? (candidateInventory.Classes is null
                             ? "inventory reader returned no inventory" : "declared inventory is empty");
+                        if (soloAdmission)
+                        {
+                            EmitSoloInventoryWarning(goal, candidateRevision, cause, emit);
+                            return new([]);
+                        }
                         Hold($"inventory unavailable at candidate {candidateRevision}: {cause}; candidate classes considered: none");
                         continue;
                     }
@@ -128,8 +261,9 @@ internal static class GateObligationSelectorPreAdmissionClassifier
                         var candidateClasses = candidates.Length == 0 ? "none" : candidates;
                         Hold($"candidate {candidateRevision}; effective selector {considered}; " +
                             $"candidate classes considered: {candidateClasses}");
-                        GateObligationSelectorDeveloperRouting.Route(
-                            kernel, goal.Id, obligation.Id, selector, candidateRevision, classification, candidateClasses, emit);
+                        if (!soloAdmission)
+                            GateObligationSelectorDeveloperRouting.Route(
+                                kernel, goal.Id, obligation.Id, selector, candidateRevision, classification, candidateClasses, emit);
                         continue;
                     }
 
