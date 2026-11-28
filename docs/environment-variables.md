@@ -1,6 +1,6 @@
 # MCG_ environment variable census
 
-This records 85 distinct, case-sensitive `MCG_[A-Z0-9_]+` names. The guard reads every `*.cs` beneath `src/` recursively, including constants and raw/interpolated literal portions, with no directory exclusions or fixed expected count. Discovery conservatively includes comment matches too. A name counts as listed only in the first cell of a census row; prose does not count.
+This records 86 distinct, case-sensitive `MCG_[A-Z0-9_]+` names. The guard reads every `*.cs` beneath `src/` recursively, including constants and raw/interpolated literal portions, with no directory exclusions or fixed expected count. Discovery conservatively includes comment matches too. A name counts as listed only in the first cell of a census row; prose does not count.
 
 The census deliberately includes output markers, a prefix constant, and cmd-shim local environment names. Their rows describe those uses rather than implying an orchestrator setting. Categories describe observed behavior: setting → config, identity → argument, execution transfer/markers → handoff, exclusively test control → test-only. All four categories are represented. Target homes propose follow-up slices; this census relocates nothing. Setter roles describe external providers or source assignments; “orchestrator for its own child” means process-scoped provisioning, and tests may pin values independently. References point to a reading or defining line, not an exhaustive use index. Unset outcomes include explicit argument/scoped overrides where relevant.
 
@@ -89,6 +89,7 @@ The census deliberately includes output markers, a prefix constant, and cmd-shim
 | `MCG_TRIAL_SOURCE_PROVENANCE` | `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/TrialHarnessComparison.cs:208` | handoff | No ambient provenance; trial provisioning supplies workload provenance | orchestrator for its own trial child; tests | handoff |
 | `MCG_TRIAL_WORKLOAD_ID` | `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/TrialHarnessComparison.cs:205` | handoff | No ambient workload id; trial provisioning supplies computed workload identity | orchestrator for its own trial child; tests | handoff |
 | `MCG_WORKER_ACCOUNT` | `src/Mcg.AgentOrchestrator.Execution/Processes/WorkerSandboxOptions.cs:45` | identity (sandbox account selection) | mcg-worker | operator; tests | argument |
+| `MCG_WORKER_BUILD_SCOPE_TOOL_CACHE` | `src/Mcg.AgentOrchestrator.App/Orchestration/WorkerBuildScopeToolCacheIdentity.cs:9`; `scripts/WorkerBuildScopeToolCache.ps1:4` | identity (worker build-scope tool-cache root) | Mcg.AgentOrchestrator/tool-cache/worker-build-scope under LOCALAPPDATA or the LocalApplicationData special folder | operator; tests | argument |
 | `MCG_WORKER_CREDENTIAL_TARGET` | `src/Mcg.AgentOrchestrator.Execution/Processes/WorkerSandboxOptions.cs:46` | identity (credential-target selection) | mcg-orchestrator-worker | operator; tests | argument |
 | `MCG_WORKER_SANDBOX` | `src/Mcg.AgentOrchestrator.Execution/Processes/WorkerSandboxOptions.cs:44` | setting | Disabled; Windows only, enabled by 1 or true | operator; tests | config |
 

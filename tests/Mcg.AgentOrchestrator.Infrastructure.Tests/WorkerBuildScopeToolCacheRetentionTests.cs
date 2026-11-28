@@ -128,22 +128,33 @@ public sealed class WorkerBuildScopeToolCacheRetentionTests
         File.WriteAllText(looseFile, "loose file");
         var outside = WriteEntry(fixture.ExecutionDirectory, "outside", old, 113);
         var junction = Path.Combine(cache, Digest(12));
-        CreateDirectoryLink(junction, outside, fixture.ExecutionDirectory);
-        CreateDirectoryLink(Path.Combine(stale, "link"), outside, fixture.ExecutionDirectory);
-        Directory.SetLastWriteTimeUtc(stale, old.UtcDateTime);
+        var nestedLink = Path.Combine(stale, "link");
+        try
+        {
+            CreateDirectoryLink(junction, outside, fixture.ExecutionDirectory);
+            CreateDirectoryLink(nestedLink, outside, fixture.ExecutionDirectory);
+            Directory.SetLastWriteTimeUtc(stale, old.UtcDateTime);
 
-        var decisions = Sweep(cache);
+            var decisions = Sweep(cache);
 
-        Assert.Equal(2, decisions.Count);
-        AssertReclaimed(Assert.Single(decisions, decision => decision.Path == stale), 42);
-        AssertReclaimed(Assert.Single(decisions, decision => decision.Path == second), 19);
-        Assert.Equal(61, decisions.Sum(decision => decision.BytesReclaimed));
-        Assert.All(foreign, path => Assert.Equal(new byte[5], File.ReadAllBytes(Path.Combine(path, "payload.bin"))));
-        Assert.Equal("loose file", File.ReadAllText(looseFile));
-        Assert.True((File.GetAttributes(junction) & FileAttributes.ReparsePoint) != 0);
-        Assert.Equal(new byte[113], File.ReadAllBytes(Path.Combine(junction, "payload.bin")));
-        Assert.Equal(new byte[113], File.ReadAllBytes(Path.Combine(outside, "payload.bin")));
-        Assert.Equal(new[] { Path.Combine(cache, ".sweep-retired-previous") }, Directory.GetDirectories(cache, ".sweep-retired-*"));
+            Assert.Equal(2, decisions.Count);
+            AssertReclaimed(Assert.Single(decisions, decision => decision.Path == stale), 42);
+            AssertReclaimed(Assert.Single(decisions, decision => decision.Path == second), 19);
+            Assert.Equal(61, decisions.Sum(decision => decision.BytesReclaimed));
+            Assert.All(foreign, path => Assert.Equal(new byte[5], File.ReadAllBytes(Path.Combine(path, "payload.bin"))));
+            Assert.Equal("loose file", File.ReadAllText(looseFile));
+            Assert.True((File.GetAttributes(junction) & FileAttributes.ReparsePoint) != 0);
+            Assert.Equal(new byte[113], File.ReadAllBytes(Path.Combine(junction, "payload.bin")));
+            Assert.Equal(new byte[113], File.ReadAllBytes(Path.Combine(outside, "payload.bin")));
+            Assert.Equal(new[] { Path.Combine(cache, ".sweep-retired-previous") }, Directory.GetDirectories(cache, ".sweep-retired-*"));
+        }
+        finally
+        {
+            // Unlink the fixture junctions before the fixture recursively deletes its root.
+            foreach (var link in new[] { junction, nestedLink })
+                if (Directory.Exists(link) && (File.GetAttributes(link) & FileAttributes.ReparsePoint) != 0)
+                    Directory.Delete(link, recursive: false);
+        }
     }
 
     [Fact]
