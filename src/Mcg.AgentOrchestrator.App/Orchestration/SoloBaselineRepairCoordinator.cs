@@ -56,6 +56,16 @@ internal sealed class SoloBaselineRepairCoordinator(
         SoloAcceptanceFailureReceiptReader.RestoreIntroduced(CurrentIntroduced(_store, goal,
             _store.ReadFindings(goal.Id.Value, introduced: true), current?.BranchRevision, current?.MainRevision));
 
+    private AttributedFailure? ReadStandingIntroduced(Goal goal, string candidate)
+    {
+        if (goal.LatestAcceptanceFailure?.AttemptId is not { } attempt) return null;
+
+        var findings = _store.ReadFindings(goal.Id.Value, introduced: true)
+            .Where(finding => finding.Attempt == attempt && finding.Candidate == candidate)
+            .Select(finding => CheckRetainedProof(_store, goal, finding));
+        return SoloAcceptanceFailureReceiptReader.RestoreIntroduced(findings);
+    }
+
     private static SoloRepairFinding[] CurrentIntroduced(SoloBaselineRepairStore store, Goal goal, IReadOnlyList<SoloRepairFinding> findings,
         string? candidate, string? main) => findings.Where(finding => finding.Candidate == candidate && finding.Main == main)
         .Select(finding => CheckRetainedProof(store, goal, finding)).ToArray();
@@ -244,6 +254,14 @@ internal sealed class SoloBaselineRepairCoordinator(
             return SoloRepairHold(goal, prefix, policy, SoloHoldReasons.RepairPending, waiting ?? "Rechecking a changed revision pair.");
         if (!allowFreshGate || ReadIntroduced(goal, current) is not null) return null;
         if (goal.Status != GoalStatus.AcceptanceFailed) return null;
+        if (ReadStandingIntroduced(goal, candidate) is { } standing)
+        {
+            // Advancing main can validate an inherited repair without replacing the failed candidate.
+            var route = AttributedFailureDeveloperRoute.Decide(goal, standing, candidate);
+            return route.IsRoute
+                ? failureHandler().RouteIntroduced(goal, prefix, policy, standing, route)
+                : failureHandler().Hold(goal, prefix, policy, route.DeclineReason!);
+        }
         return SoloFreshGateAdmission.TryAdmit(kernel, goal, prefix, policy, new(candidate, main, "", ""), SoloHoldReasons.RepairValidated)
             ?? SoloRepairHold(goal, prefix, policy, SoloHoldReasons.RepairPending, "Waiting for readiness to run normal acceptance.");
     }
