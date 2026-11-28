@@ -234,22 +234,23 @@ internal static partial class TerminalGoalSweep
                         isOwnerRunning ?? TerminalBuildRootRetention.IsOwnerProcessRunning, timeProvider ?? TimeProvider.System,
                         useIncrementalRetainedBytes && maxBytes is null ? state.RetainedBytes.ForStorage(storageRoot) : null)
                         .Run(read.ReadableFacts, retentionDays, MaxTerminalBuildRootReclaimsPerSweep, maxBytes).SummaryLine;
-                if (read.Unavailable.Count == 0)
+                if (retentionDays > 0 && SchemaBehindGoalIdReader.TryReadAll(read.Unavailable, out var fallbackIds))
                 {
-                    if (retentionDays > 0)
-                    {
-                        var unstored = new UnstoredGoalBuildRootRetention(storageRoot, registry,
-                            isOwnerRunning ?? TerminalBuildRootRetention.IsOwnerProcessRunning, timeProvider ?? TimeProvider.System)
-                            .Run(read.ReadableFacts.Select(fact => fact.GoalId).ToArray(), retentionStores, retentionDays,
-                                MaxOwnedBuildRootsPerSweep, MaxUnstoredBuildRootReclaimBytesPerSweep, state.UnstoredRetentionCursor);
-                        state.UnstoredRetentionCursor = unstored.NextCursor;
-                        unstoredRetentionSummary = unstored.SummaryLine;
-                    }
+                    var unstored = new UnstoredGoalBuildRootRetention(storageRoot, registry,
+                        isOwnerRunning ?? TerminalBuildRootRetention.IsOwnerProcessRunning, timeProvider ?? TimeProvider.System)
+                        .Run(read.ReadableFacts.Select(fact => fact.GoalId).Concat(fallbackIds).ToArray(), retentionStores,
+                            retentionDays, MaxOwnedBuildRootsPerSweep, MaxUnstoredBuildRootReclaimBytesPerSweep, state.UnstoredRetentionCursor);
+                    state.UnstoredRetentionCursor = unstored.NextCursor;
+                    unstoredRetentionSummary = unstored.SummaryLine;
                 }
-                else
+                if (read.Unavailable.Count > 0)
+                {
                     retentionSummary = read.ReadableStoreCount > 0
                         ? BuildRootRetentionAvailabilitySummary.Partial(retentionSummary!, read.Unavailable)
                         : BuildRootRetentionAvailabilitySummary.NoneReadable(retentionDays, read.Unavailable);
+                    if (unstoredRetentionSummary is not null)
+                        retentionSummary = retentionSummary.Replace(" unstored-skipped=goal-store-unavailable", "", StringComparison.Ordinal);
+                }
             }
             else if (retentionStores is not null || retentionDiscoveryFailure is not null)
                 retentionSummary = $"SWEEP_BUILD_ROOT_RETENTION window-days={retentionDays} reclaimed=0 bytes=0 skipped=0 reasons=goal-store-unavailable";

@@ -10,15 +10,23 @@ internal sealed class ClaudeApiHoldFingerprint
     private const int SecretLength = 32;
     private const int ShortHexLength = 16;
     private const int LegacyHexLength = 64;
+    private const int MaxReadAttempts = 3;
+    private const int ReadRetryDelayMilliseconds = 20;
 
-    private static readonly ClaudeApiHoldFingerprint Machine = new(() => LoadSecret(MachineStateDirectory()));
+    private static readonly ClaudeApiHoldFingerprint Machine =
+        new(() => LoadSecret(MachineStateDirectory(), PublishSecret, File.OpenRead));
     private readonly Lazy<byte[]> _secret;
 
     private ClaudeApiHoldFingerprint(Func<byte[]> loadSecret) => _secret = new(loadSecret);
 
     internal static ClaudeApiHoldFingerprint ForMachine() => Machine;
 
-    internal static ClaudeApiHoldFingerprint FromStateDirectory(string directory) => new(() => LoadSecret(directory));
+    internal static ClaudeApiHoldFingerprint FromStateDirectory(string directory) =>
+        FromStateDirectory(directory, PublishSecret);
+
+    internal static ClaudeApiHoldFingerprint FromStateDirectory(
+        string directory, Action<string, string> publish, Func<string, Stream>? openRead = null) =>
+        new(() => LoadSecret(directory, publish, openRead ?? File.OpenRead));
 
     internal static ClaudeApiHoldFingerprint FromSecret(ReadOnlySpan<byte> secret)
     {
@@ -66,12 +74,12 @@ internal sealed class ClaudeApiHoldFingerprint
             : Path.Combine(localAppData, "Mcg.AgentOrchestrator");
     }
 
-    private static byte[] LoadSecret(string directory)
+    private static byte[] LoadSecret(string directory, Action<string, string> publish, Func<string, Stream> openRead)
     {
         var path = Path.Combine(directory, SecretFileName);
         try
         {
-            try { return ReadSecret(path); }
+            try { return ReadSecret(path, openRead); }
             catch (FileNotFoundException) { }
             catch (DirectoryNotFoundException) { }
 
@@ -90,31 +98,52 @@ internal sealed class ClaudeApiHoldFingerprint
                     output.Flush(flushToDisk: true);
                 }
 
-                // Publish a complete file. If another process published first, read its secret.
-                try { File.Move(temporary, path, overwrite: false); }
-                catch (IOException) when (File.Exists(path)) { }
+                try { publish(temporary, path); }
+                catch (Exception publishError)
+                {
+                    // Another initializer may have published the key before the move failed.
+                    try { return ReadSecret(path, openRead); }
+                    catch { throw CreateUnavailableError(path, publishError); }
+                }
 
-                return ReadSecret(path);
+                return ReadSecret(path, openRead);
             }
             finally
             {
-                File.Delete(temporary);
+                try { File.Delete(temporary); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
             }
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
-            throw new InvalidOperationException($"API hold fingerprint secret is unavailable at '{path}'.");
+            throw CreateUnavailableError(path, error);
         }
     }
 
-    private static byte[] ReadSecret(string path)
-    {
-        using var input = File.OpenRead(path);
-        if (input.Length != SecretLength)
-            throw new InvalidOperationException($"API hold fingerprint secret has an invalid length at '{path}'.");
+    private static void PublishSecret(string temporary, string path) => File.Move(temporary, path, overwrite: false);
 
-        var secret = new byte[SecretLength];
-        input.ReadExactly(secret);
-        return secret;
+    private static InvalidOperationException CreateUnavailableError(string path, Exception cause) =>
+        new($"API hold fingerprint secret is unavailable at '{path}'.", cause);
+
+    private static byte[] ReadSecret(string path, Func<string, Stream> openRead)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                using var input = openRead(path);
+                if (input.Length != SecretLength)
+                    throw new InvalidOperationException($"API hold fingerprint secret has an invalid length at '{path}'.");
+
+                var secret = new byte[SecretLength];
+                input.ReadExactly(secret);
+                return secret;
+            }
+            catch (Exception error) when (attempt < MaxReadAttempts &&
+                error is (IOException and not (FileNotFoundException or DirectoryNotFoundException)) or UnauthorizedAccessException)
+            {
+                Thread.Sleep(ReadRetryDelayMilliseconds);
+            }
+        }
     }
 }

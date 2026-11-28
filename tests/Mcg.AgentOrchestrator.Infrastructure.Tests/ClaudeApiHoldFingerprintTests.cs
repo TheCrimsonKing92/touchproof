@@ -61,6 +61,203 @@ public sealed class ClaudeApiHoldFingerprintTests
         finally { SharedTestSupport.RemoveTempDirectory(directory); }
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void FromStateDirectory_FailedMoveUsesPublishedSecret(bool accessDenied)
+    {
+        const string key = "fixture-key";
+        var directory = SharedTestSupport.CreateTempDirectory();
+        try
+        {
+            var winner = Enumerable.Range(0, 32).Select(value => (byte)value).ToArray();
+            Exception failure = accessDenied ? new UnauthorizedAccessException() : new NotSupportedException();
+            var fingerprint = ClaudeApiHoldFingerprint.FromStateDirectory(directory, (_, destination) =>
+            {
+                File.WriteAllBytes(destination, winner);
+                throw failure;
+            });
+
+            var identity = fingerprint.Compute(key);
+            Assert.Equal(ClaudeApiHoldFingerprint.FromSecret(winner).Compute(key), identity);
+            Assert.Equal(ClaudeApiHoldFingerprint.FromStateDirectory(directory).Compute(key), identity);
+            var file = Assert.Single(Directory.GetFiles(directory));
+            Assert.Equal(ClaudeApiHoldFingerprint.SecretFileName, Path.GetFileName(file));
+            Assert.Equal(winner, File.ReadAllBytes(file));
+        }
+        finally { SharedTestSupport.RemoveTempDirectory(directory); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FromStateDirectory_FailedMoveWithoutValidSecretReportsUnavailable(bool malformedDestination)
+    {
+        var directory = SharedTestSupport.CreateTempDirectory();
+        try
+        {
+            byte[] malformed = [1, 2, 3];
+            var failure = new IOException("Injected move failure.");
+            var fingerprint = ClaudeApiHoldFingerprint.FromStateDirectory(directory, (_, destination) =>
+            {
+                if (malformedDestination)
+                    File.WriteAllBytes(destination, malformed);
+                throw failure;
+            });
+
+            var error = Assert.Throws<InvalidOperationException>(() => fingerprint.Compute("fixture-key"));
+            var path = Path.Combine(directory, ClaudeApiHoldFingerprint.SecretFileName);
+            Assert.Equal($"API hold fingerprint secret is unavailable at '{path}'.", error.Message);
+            Assert.Same(failure, error.InnerException);
+            if (malformedDestination)
+            {
+                Assert.Equal(path, Assert.Single(Directory.GetFiles(directory)));
+                Assert.Equal(malformed, File.ReadAllBytes(path));
+            }
+            else
+            {
+                Assert.Empty(Directory.GetFiles(directory));
+            }
+        }
+        finally { SharedTestSupport.RemoveTempDirectory(directory); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReadSecret_TransientFailuresSucceedOnThirdAttempt(bool accessDenied)
+    {
+        const string key = "fixture-key";
+        var directory = SharedTestSupport.CreateTempDirectory();
+        try
+        {
+            var secret = new byte[32];
+            File.WriteAllBytes(Path.Combine(directory, ClaudeApiHoldFingerprint.SecretFileName), secret);
+            Exception failure = accessDenied ? new UnauthorizedAccessException() : new IOException();
+            var attempts = 0;
+            var fingerprint = ClaudeApiHoldFingerprint.FromStateDirectory(directory, File.Move, path =>
+            {
+                if (++attempts < 3)
+                    throw failure;
+                return File.OpenRead(path);
+            });
+
+            Assert.Equal(ClaudeApiHoldFingerprint.FromSecret(secret).Compute(key), fingerprint.Compute(key));
+            Assert.Equal(3, attempts);
+        }
+        finally { SharedTestSupport.RemoveTempDirectory(directory); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReadSecret_PersistentFailuresReportUnavailableAfterThirdAttempt(bool accessDenied)
+    {
+        var directory = SharedTestSupport.CreateTempDirectory();
+        try
+        {
+            Exception failure = accessDenied ? new UnauthorizedAccessException() : new IOException();
+            var attempts = 0;
+            var fingerprint = ClaudeApiHoldFingerprint.FromStateDirectory(directory, File.Move, _ =>
+            {
+                attempts++;
+                throw failure;
+            });
+
+            var error = Assert.Throws<InvalidOperationException>(() => fingerprint.Compute("fixture-key"));
+            var path = Path.Combine(directory, ClaudeApiHoldFingerprint.SecretFileName);
+            Assert.Equal($"API hold fingerprint secret is unavailable at '{path}'.", error.Message);
+            Assert.Same(failure, error.InnerException);
+            Assert.Equal(3, attempts);
+            Assert.Empty(Directory.GetFiles(directory));
+        }
+        finally { SharedTestSupport.RemoveTempDirectory(directory); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReadSecret_MissingPathsProceedToPublishWithoutRetry(bool missingDirectory)
+    {
+        var root = SharedTestSupport.CreateTempDirectory();
+        try
+        {
+            var directory = missingDirectory ? Path.Combine(root, "missing") : root;
+            var attempts = 0;
+            var attemptsBeforePublish = 0;
+            var fingerprint = ClaudeApiHoldFingerprint.FromStateDirectory(directory, (source, destination) =>
+            {
+                attemptsBeforePublish = attempts;
+                File.Move(source, destination);
+            }, path =>
+            {
+                attempts++;
+                return File.OpenRead(path);
+            });
+
+            var identity = fingerprint.Compute("fixture-key");
+            Assert.Equal(1, attemptsBeforePublish);
+            Assert.Equal(2, attempts);
+            Assert.Equal(ClaudeApiHoldFingerprint.FromStateDirectory(directory).Compute("fixture-key"), identity);
+        }
+        finally { SharedTestSupport.RemoveTempDirectory(root); }
+    }
+
+    [Fact]
+    public void ReadSecret_InvalidLengthReportsErrorWithoutRetry()
+    {
+        var directory = SharedTestSupport.CreateTempDirectory();
+        try
+        {
+            var path = Path.Combine(directory, ClaudeApiHoldFingerprint.SecretFileName);
+            byte[] malformed = [1, 2, 3];
+            File.WriteAllBytes(path, malformed);
+            var attempts = 0;
+            var fingerprint = ClaudeApiHoldFingerprint.FromStateDirectory(directory, File.Move, file =>
+            {
+                attempts++;
+                return File.OpenRead(file);
+            });
+
+            var error = Assert.Throws<InvalidOperationException>(() => fingerprint.Compute("fixture-key"));
+            Assert.Equal($"API hold fingerprint secret has an invalid length at '{path}'.", error.Message);
+            Assert.Equal(1, attempts);
+            Assert.Equal(malformed, File.ReadAllBytes(path));
+        }
+        finally { SharedTestSupport.RemoveTempDirectory(directory); }
+    }
+
+    [Fact]
+    public async Task FromStateDirectory_ConcurrentInitializationStressUsesOnePersistedSecret()
+    {
+        const string key = "fixture-key";
+        for (var iteration = 0; iteration < 50; iteration++)
+        {
+            var directory = SharedTestSupport.CreateTempDirectory();
+            try
+            {
+                var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                async Task<string> InitializeAsync()
+                {
+                    await start.Task;
+                    return ClaudeApiHoldFingerprint.FromStateDirectory(directory).Compute(key);
+                }
+
+                var initializers = Enumerable.Range(0, 8).Select(_ => Task.Run(InitializeAsync)).ToArray();
+                start.SetResult();
+                var identities = await Task.WhenAll(initializers);
+
+                var identity = Assert.Single(identities.Distinct());
+                var file = Assert.Single(Directory.GetFiles(directory));
+                Assert.Equal(ClaudeApiHoldFingerprint.SecretFileName, Path.GetFileName(file));
+                var secret = File.ReadAllBytes(file);
+                Assert.Equal(32, secret.Length);
+                Assert.Equal(ClaudeApiHoldFingerprint.FromSecret(secret).Compute(key), identity);
+            }
+            finally { SharedTestSupport.RemoveTempDirectory(directory); }
+        }
+    }
+
     [Fact]
     public void Matches_RequiresCurrentKeyAndMatchingProviderAndModelAcrossForms()
     {
