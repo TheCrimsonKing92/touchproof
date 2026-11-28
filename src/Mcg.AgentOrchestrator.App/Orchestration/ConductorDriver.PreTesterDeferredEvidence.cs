@@ -10,6 +10,8 @@ internal sealed partial class ConductorDriver
     internal Func<string, string>? PreTesterMainRevision { get; set; }
     internal PreTesterEvidenceRecorder? PreTesterRecorder { get; set; }
     internal PreTesterResolverObservationWindow? PreTesterResolverObservation { get; set; }
+    internal PreTesterTestImpactPlanAttemptCoordinator? PreTesterPlanningAttempts { get; set; }
+    internal TickTestImpactPlanMemo? CurrentTestImpactPlanMemo => _testImpactPlanMemo;
     private readonly PreTesterChangedFileGuardClasses _preTesterChangedFileGuards = new();
 
     private void RecordPreTesterDeferredEvidenceExit(
@@ -17,11 +19,6 @@ internal sealed partial class ConductorDriver
         string? priorOutcome, IReadOnlyList<string> notRun) =>
         _recordTaskNote(goal.Id, developer.Id,
             PreTesterDeferredEvidenceExitNote.FormatSkipped(testsField, exit, priorOutcome, notRun));
-
-    private void RecordPreTesterDeferredEvidenceContinuation(
-        Goal goal, TaskSpec developer, string candidateSha, string supersededReceiptId, string freshReceiptId) =>
-        _recordTaskNote(goal.Id, developer.Id,
-            PreTesterDeferredEvidenceExitNote.FormatContinuation(candidateSha, supersededReceiptId, freshReceiptId));
 
     private PreTesterOutOfDiffRerun OutOfDiffRerun(string worktree) => new(worktree, _executionDirectory,
         _getLandingFileScopes, PreTesterFailureHistory ?? ((goal, identities) => CrossGoalTestFailureHistory.Read(
@@ -120,11 +117,19 @@ internal sealed partial class ConductorDriver
             task.RequiredRole == AgentRole.Tester && (task.LastDispatch is not null || task.DispatchHistory.Count != 0))
             ? new PreTesterReverseDependencyObservation.Boundary(goal.Id.Value, tester.Id.Value, candidateSha!)
             : null;
-        var (guards, augmented, abandoned) = CreatePreTesterGuardRequest(worktreePath,
+        var guardRequest = TickTestImpactPlanMemo.CreateGuardRequestOrPending(PreTesterPlanningAttempts,
+            _testImpactPlanMemo, PreTesterPlanningAttempts is null ? _cohortWorkspace?.IntegrationBranch : _integrationBranch,
+            _preTesterChangedFileGuards, worktreePath,
             _getLandingFileScopes(goal), PreTesterMainRevision?.Invoke(worktreePath) ??
-            PreTesterGuardSelections.ReadMainRevision(worktreePath, _cohortWorkspace), new(selected, notRun), settings, prior,
-            (entry, line) => recorder.Run(goal.Id, tester.Id, entry, line),
-            resolverTick, resolverBoundary);
+            PreTesterGuardSelections.ReadMainRevision(worktreePath, _cohortWorkspace), candidateSha!, new(selected, notRun),
+            settings, prior, FormatFindingEvidenceSelection, (entry, line) => recorder.Run(goal.Id, tester.Id, entry, line),
+            resolverTick, resolverBoundary, out var planningHold);
+        if (guardRequest is not { } ready)
+        {
+            result = MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(fromState, planningHold!));
+            return true;
+        }
+        var (guards, augmented, abandoned) = ready;
         if (abandoned) prior = null;
         needsReplacementStartedEntry |= abandoned;
         var distinct = augmented.Selections.ToArray();
@@ -183,7 +188,8 @@ internal sealed partial class ConductorDriver
             PreTesterEvidenceIndexLines.FormatMarker(runEntry), outcome, failingTests, candidate?.TestResultPaths)));
         if (PreTesterEvidenceRefreshRule.DecideAfterRun(refresh, receiptId, outcome) == PreTesterEvidenceRefreshDecision.ContinueAfterUnusableRefresh)
         {
-            RecordPreTesterDeferredEvidenceContinuation(goal, developer, candidateSha!, refresh!.SupersededReceiptId, receiptId);
+            _recordTaskNote(goal.Id, developer.Id,
+                PreTesterDeferredEvidenceExitNote.FormatContinuation(candidateSha!, refresh!.SupersededReceiptId, receiptId));
             return false;
         }
         if (outcome == "unusable" && PreTesterApparatusReceiptClassifier.IsBuildPhaseOnly(evidence) &&
@@ -212,15 +218,6 @@ internal sealed partial class ConductorDriver
             refreshed, goalPrefix, policy, GoalLifecycle.ResolveState(refreshed, GetFacts(refreshed)));
         return true;
     }
-
-    internal (PreTesterGuardSelections Guards, DeveloperDeferredTestSelection Selection, bool Abandoned) CreatePreTesterGuardRequest(
-        string worktreePath, IReadOnlyList<string> changedPaths, string mainRevision,
-        DeveloperDeferredTestSelection declaration, AcceptanceGateEngineSettings settings, PreTesterEvidenceEntry? prior,
-        Action<PreTesterEvidenceEntry, string> record, PreTesterReverseDependencyObservation.Tick? resolverTick = null,
-        PreTesterReverseDependencyObservation.Boundary? resolverBoundary = null) =>
-        TickTestImpactPlanMemo.CreateGuardRequest(_testImpactPlanMemo, _cohortWorkspace?.IntegrationBranch, _preTesterChangedFileGuards,
-            worktreePath, changedPaths, mainRevision, declaration, settings, prior, FormatFindingEvidenceSelection, record,
-            resolverTick, resolverBoundary);
 
     private bool TryEscalatePreTesterRedLoop(
         Goal goal,

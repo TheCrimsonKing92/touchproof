@@ -51,6 +51,12 @@ if (args.Length == 3 && args[0] == SoloRepairCheckAttemptCoordinator.OwnedProces
     return SoloRepairCheckAttemptCoordinator.RunOwnedProcess(args[1], soloRepairLaunchId);
 }
 
+if (args.Length == 3 && args[0] == PreTesterTestImpactPlanAttemptCoordinator.OwnedProcessSubcommandName &&
+    Guid.TryParseExact(args[2], "D", out var preTesterPlanLaunchId))
+{
+    return PreTesterTestImpactPlanAttemptCoordinator.RunOwnedProcess(args[1], preTesterPlanLaunchId);
+}
+
 if (args.Length >= 1 && args[0] == ConductorSuccessorSelfCheck.SubcommandName)
 {
     return ConductorSuccessorSelfCheck.Run(args);

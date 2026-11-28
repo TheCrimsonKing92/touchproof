@@ -45,4 +45,7 @@ internal static class OwnedChildAttemptCoordinatorFactory
     internal static SoloRepairCheckAttemptCoordinator CreateSoloRepairCheck(
         OrchestratorWorkspace workspace, DotnetBuildStorageRoot? buildStorageRoot) =>
         new(workspace, buildStorageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot());
+
+    internal static PreTesterTestImpactPlanAttemptCoordinator CreatePreTesterTestImpactPlan(OrchestratorWorkspace workspace) =>
+        new(Path.Combine(workspace.OrchestratorDirectory, "pre-tester-test-impact-plan-attempts"), workspace.ExecutionDirectory);
 }
