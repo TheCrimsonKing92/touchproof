@@ -44,7 +44,7 @@ internal sealed partial class ConductorDriver
         }
     }
 
-    private bool TryRunPreReviewEvidenceStage(
+    internal bool TryRunPreReviewEvidenceStage(
         Goal goal,
         string goalPrefix,
         ConductorAutonomyPolicy policy,
@@ -343,15 +343,13 @@ internal sealed partial class ConductorDriver
                 return true;
             }
 
-            PreReviewEvidenceReceipts.Record(_recordPreReviewEvidence,
-                goal,
-                reviewerTask,
-                context,
-                round,
-                PreReviewEvidenceDisposition.Green,
-                evidence.Checks,
-                [],
-                evidencePointer, candidateIdentity: PreReviewEvidenceReceipts.ResolveRecordedCandidateIdentity(_executionDirectory, goal.Id, context.CandidateSha!, _integrationBranch, _parallelAcceptanceAttemptCoordinator.ProjectHomeDirectory, attemptDecision.Attempt.EffectiveManifestIdentity), sourceAttemptId: attemptDecision.Attempt.AttemptId);
+            var candidateIdentity = TickTestImpactPlanMemo.ResolvePreReviewRecordedCandidateIdentity(
+                _testImpactPlanMemo, _executionDirectory, goal.Id, context.CandidateSha!, _integrationBranch,
+                _parallelAcceptanceAttemptCoordinator.ProjectHomeDirectory, attemptDecision.Attempt.EffectiveManifestIdentity);
+            PreReviewEvidenceReceipts.Record(
+                _recordPreReviewEvidence, goal, reviewerTask, context, round,
+                PreReviewEvidenceDisposition.Green, evidence.Checks, [], evidencePointer,
+                candidateIdentity: candidateIdentity, sourceAttemptId: attemptDecision.Attempt.AttemptId);
             return false;
         }
 

@@ -1271,8 +1271,7 @@ internal sealed partial class ConductorBatchLoop
             var tickDone = 0;
             var dispatchRecordWriteSkippedGoals = new HashSet<string>(StringComparer.Ordinal);
             var dispatchRecordWriteBoundGoalIds = new HashSet<GoalId>();
-            bool SuppressNewAcceptanceAdmission() =>
-                admissionHold.Suppress(isDeferringMaxDurationStop, pendingSelfRelaunch is not null);
+            using var testImpactPlanMemoScope = driver.BeginTestImpactPlanTick();
             ConductorTickStepLedger.Measure("begin-tick", () => driver.BeginTick(kernel, totalTicks));
             var drainGoals = drain.IsDraining ? kernel.Goals.Where(goal =>
                 (onlyGoalId is null || goal.Id.Value == onlyGoalId) &&
@@ -1292,7 +1291,7 @@ internal sealed partial class ConductorBatchLoop
                 totalTicks,
                 changedGoalLines,
                 changedGoalIds,
-                suppressNewAcceptanceAdmission: SuppressNewAcceptanceAdmission);
+                suppressNewAcceptanceAdmission: () => admissionHold.Suppress(isDeferringMaxDurationStop, pendingSelfRelaunch is not null));
             admissionHold.Acknowledge();
             var previousPhaseTimingSink = driver.PhaseTimingSink;
             var perGoalPhaseTimingLines = new List<string>();
@@ -1863,6 +1862,7 @@ internal sealed partial class ConductorBatchLoop
                 }
                 PublishTick(tickSummary with { WatchSleeping = true }, tickSnapshotBytes);
                 resolverTick?.Complete();
+                testImpactPlanMemoScope.Dispose();
 
                 var sleepResult = sleepFunc is not null
                     ? (sleepFunc(fallbackInterval) ? WatchSleepResult.StopRequested : WatchSleepResult.FallbackElapsed)

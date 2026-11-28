@@ -6,6 +6,18 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// <summary>Scopes gate impact checks to the loaded manifest's declared test checks.</summary>
 internal static class ManifestScopedImpactPlan
 {
+    private static readonly AsyncLocal<Func<RepositoryChangeSummary, string, RepositoryTestImpactPlan?>?>
+        RawPlanner = new();
+
+    internal static T WithRawPlanner<T>(Func<RepositoryChangeSummary, string, RepositoryTestImpactPlan?> planner,
+        Func<T> compute)
+    {
+        var previous = RawPlanner.Value;
+        RawPlanner.Value = planner;
+        try { return compute(); }
+        finally { RawPlanner.Value = previous; }
+    }
+
     internal static VerificationPolicy CompileRequiredPolicy(string worktreePath,
         IReadOnlyList<string> changedFiles, IReadOnlyList<AcceptanceManifestCheck> manifestChecks,
         SelectionSourceTexts? sourceTexts) => VerificationPolicyCompiler.Compile(
@@ -37,7 +49,8 @@ internal static class ManifestScopedImpactPlan
         string worktreePath,
         IReadOnlyList<AcceptanceManifestCheck> manifestChecks, SelectionSourceTexts? sourceTexts = null)
     {
-        return Scope(RepositoryTestImpactPlanner.Plan(summary, worktreePath, sourceTexts), manifestChecks);
+        var plan = sourceTexts is null ? RawPlanner.Value?.Invoke(summary, worktreePath) : null;
+        return Scope(plan ?? RepositoryTestImpactPlanner.Plan(summary, worktreePath, sourceTexts), manifestChecks);
     }
 
     internal static RepositoryTestImpactPlan Scope(
