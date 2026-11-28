@@ -11,7 +11,7 @@ internal sealed class FocusedEvidenceDeclarationFactStore(FocusedEvidenceParsedR
     internal const string DirectoryName = "focused-evidence-declaration-facts";
     // Bump when the envelope or extracted facts change incompatibly, including usings,
     // declaration shape, attributes, trait arguments, diagnostics, and directives.
-    internal const int ExtractorVersion = 3;
+    internal const int ExtractorVersion = 4;
 
     private static readonly FocusedEvidenceDeclarationFactStore Shared = new();
     private static readonly AsyncLocal<FocusedEvidenceDeclarationFactStore?> Override = new();
@@ -36,8 +36,13 @@ internal sealed class FocusedEvidenceDeclarationFactStore(FocusedEvidenceParsedR
     // Consumers of both facts and text should use the same source snapshot.
     internal FocusedEvidenceDeclarationFacts Read(string path, string? worktreePath, out string source)
     {
-        var fullPath = Path.GetFullPath(path);
         source = SelectionFileReadProbe.ReadAllText(path);
+        return ReadSnapshot(path, worktreePath, source);
+    }
+
+    internal FocusedEvidenceDeclarationFacts ReadSnapshot(string path, string? worktreePath, string source)
+    {
+        var fullPath = Path.GetFullPath(path);
         var hash = AcceptanceTestClassSourceExtractStore.HashText(source);
         lock (_sync)
         {

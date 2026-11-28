@@ -5,6 +5,9 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record FocusedEvidenceTypeShapeFact(
     [property: JsonRequired] bool IsAbstract,
+    [property: JsonRequired] bool IsPublic,
+    [property: JsonRequired] bool IsStatic,
+    [property: JsonRequired] bool IsRecord,
     [property: JsonRequired] bool HasTypeParameters,
     [property: JsonRequired] bool IsStructOrInterface,
     [property: JsonRequired] bool IsNested,
