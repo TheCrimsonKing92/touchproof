@@ -396,12 +396,6 @@ public sealed class MtpTestRunnerScriptTestsWorkerBuildNoBuildBridge
         public string BootstrapLog() => File.ReadAllText(Assert.Single(Directory.GetFiles(IsolatedRoot, "scope-bootstrap.txt", SearchOption.AllDirectories)));
         public void VerifyHostUnchanged() => _bindings.VerifyHostUnchanged();
 
-        public TestChildProcessCapture.Result Shell(params string[] args)
-        {
-            // Hang-only guard names process termination, never a performance verdict.
-            return TestChildProcessCapture.Run(ShellStart(args), hangBound: TimeSpan.FromMinutes(2));
-        }
-
         private ProcessStartInfo ShellStart(params string[] args)
         {
             var start = StartInfo(Root, WorkerShell.Executable, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", .. args]);
@@ -410,8 +404,15 @@ public sealed class MtpTestRunnerScriptTestsWorkerBuildNoBuildBridge
             return start;
         }
 
-        public TestChildProcessCapture.Result Test() => Shell("-File", Path.Combine(Root, "scripts", "Invoke-TestSummary.ps1"),
-            "-Target", Project, "-NoBuild", "-Filter", "FullyQualifiedName~BridgeCanary", "-ResultsRoot", _resultsRoot);
+        public TestChildProcessCapture.Result Test()
+        {
+            var start = ShellStart("-File", Path.Combine(Root, "scripts", "Invoke-TestSummary.ps1"),
+                "-Target", Project, "-NoBuild", "-Filter", "FullyQualifiedName~BridgeCanary", "-ResultsRoot", _resultsRoot);
+            // The fixture runner supplies its own fault-dialog startup hook to the canary.
+            start.Environment.Remove("DOTNET_STARTUP_HOOKS");
+            // Hang-only guard names process termination, never a performance verdict.
+            return TestChildProcessCapture.Run(start, hangBound: TimeSpan.FromMinutes(2));
+        }
 
         public void Dispose() => ScriptSandboxCleanup.DeleteOrThrow([_parent, _resultsRoot]);
     }

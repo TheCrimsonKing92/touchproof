@@ -172,7 +172,8 @@ internal static partial class StorageRetentionMaintenance
         Action<string>? beforeEachAttemptCandidateDeletionForTests = null,
         Func<string, IEnumerable<string>>? attemptDirectoryEnumeratorForTests = null,
         Action<AttemptDirectoryPassStats>? attemptDirectoryPassObserverForTests = null,
-        StorageHealthSnapshotWriter? storageHealthSnapshotWriter = null)
+        StorageHealthSnapshotWriter? storageHealthSnapshotWriter = null,
+        string? workerBuildScopeToolCacheRoot = null)
     {
         var decisions = new List<EvidenceRetentionDecision>();
         var sweepId = Guid.NewGuid().ToString("N");
@@ -235,6 +236,7 @@ internal static partial class StorageRetentionMaintenance
                 SweepOperatorLogs(logDirectory, now, reclaim, decisions);
                 ConductorDiagnosticDumpRetention.Sweep(logDirectory, now, decisions);
                 RelaunchBuildCacheRetention.Sweep(RelaunchBuildCacheIdentity.Parent, executionDirectory, now, decisions);
+                WorkerBuildScopeToolCacheRetention.Sweep(workerBuildScopeToolCacheRoot, now, decisions);
                 LogDirectoryFamilyRetention.Sweep(logDirectory, goals, now, reclaim.ProtectedOperatorLogPaths, decisions);
                 LandedMergeTrainEvidenceRetention.Sweep(orchestratorDirectory, goals, now, decisions);
                 MergeTrainEvidenceRetention.Sweep(orchestratorDirectory, goals, now, decisions);

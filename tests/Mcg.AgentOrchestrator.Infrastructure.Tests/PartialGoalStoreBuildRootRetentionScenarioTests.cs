@@ -24,17 +24,16 @@ public sealed class PartialGoalStoreBuildRootRetentionScenarioTests : IDisposabl
     }
 
     [Fact]
-    public void SchemaBehind_ReclaimsReadableTerminalAndDefersUnstoredUntilRepair()
+    public void SchemaBehind_ReclaimsUnstoredAndKeepsFallbackGoalRoot()
     {
         var projectDb = CreateProjectStore("price-selector");
         var terminal = CreateStoredRoot(Db, "aaaa0001", "Completed");
         var hidden = CreateStoredRoot(projectDb, "aaaa0002", "Active");
         var unstored = CreateLeaseless("aaaa0003");
         var hiddenBefore = Snapshot(hidden);
-        var unstoredBefore = Snapshot(unstored);
+        var unstoredBytes = Size(unstored);
         _state.UnstoredRetentionCursor = "12345678";
-        Execute(projectDb, "CREATE TABLE saved_migration AS SELECT * FROM schema_migrations WHERE migration_number = (SELECT MAX(migration_number) FROM schema_migrations)");
-        Execute(projectDb, "DELETE FROM schema_migrations WHERE migration_number = (SELECT migration_number FROM saved_migration)");
+        MarkSchemaBehind(projectDb);
         Assert.True(StateDbMigrations.IsUpToDate(Db));
         Assert.False(StateDbMigrations.IsUpToDate(projectDb));
         Assert.Equal(2, TerminalGoalSweep.GetSharedGoalStorePaths(Db, out _, Repo, _projects)!.Count);
@@ -43,25 +42,77 @@ public sealed class PartialGoalStoreBuildRootRetentionScenarioTests : IDisposabl
 
         Assert.False(Directory.Exists(terminal));
         Assert.Equal(hiddenBefore, Snapshot(hidden));
-        Assert.Equal(unstoredBefore, Snapshot(unstored));
-        Assert.Equal("12345678", _state.UnstoredRetentionCursor);
+        Assert.False(Directory.Exists(unstored));
+        Assert.Equal("aaaa0003", _state.UnstoredRetentionCursor);
         var summary = StoredSummary(partial);
         Assert.Contains("reclaimed=1", summary);
         Assert.Contains("unavailable-stores=price-selector:schema-behind", summary);
-        Assert.Contains("unstored-skipped=goal-store-unavailable", summary);
+        Assert.DoesNotContain("unstored-skipped=", summary);
         Assert.DoesNotContain("reasons=goal-store-unavailable", summary);
-        AssertNoUnstored(partial);
+        Assert.Equal(FormattableString.Invariant(
+            $"SWEEP_UNSTORED_BUILD_ROOT_RETENTION window-days=7 inspected=1 reclaimed=1 bytes={unstoredBytes} kept=1 reasons=goal-stored:1"), UnstoredSummary(partial));
+    }
 
-        Execute(projectDb, "INSERT INTO schema_migrations SELECT * FROM saved_migration");
-        Assert.True(StateDbMigrations.IsUpToDate(projectDb));
-        var repaired = Sweep();
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void SchemaBehind_IdReadPreservesStoreBytes(bool hasGoal)
+    {
+        const string id = "aaaa0002000000000000000000000000";
+        var projectDb = CreateProjectStore("price-selector");
+        if (hasGoal)
+            InsertGoal(projectDb, id, "Active");
+        MarkSchemaBehind(projectDb);
+        Assert.False(StateDbMigrations.IsUpToDate(projectDb));
+        var before = SHA256.HashData(File.ReadAllBytes(projectDb));
 
-        Assert.False(Directory.Exists(unstored));
-        Assert.Equal(hiddenBefore, Snapshot(hidden));
-        Assert.Contains("reclaimed=1", UnstoredSummary(repaired));
-        Assert.Equal("aaaa0003", _state.UnstoredRetentionCursor);
-        Assert.DoesNotContain("unavailable-stores=", StoredSummary(repaired));
-        Assert.DoesNotContain("unstored-skipped=", StoredSummary(repaired));
+        Assert.True(SchemaBehindGoalIdReader.TryReadGoalIds(projectDb, out var ids));
+
+        Assert.Equal(hasGoal ? new[] { id } : Array.Empty<string>(), ids);
+        Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(projectDb)));
+        Assert.False(StateDbMigrations.IsUpToDate(projectDb));
+    }
+
+    [Fact]
+    public void SchemaBehind_MissingGoalsTableKeepsUnstoredRoot()
+    {
+        var projectDb = CreateProjectStore("price-selector");
+        MarkSchemaBehind(projectDb);
+        Execute(projectDb, "ALTER TABLE goals RENAME TO goals_legacy");
+        Assert.False(StateDbMigrations.IsUpToDate(projectDb));
+        Assert.False(SchemaBehindGoalIdReader.TryReadGoalIds(projectDb, out var ids));
+        Assert.Empty(ids);
+        var unstored = CreateLeaseless("aaaa0003");
+        var before = Snapshot(unstored);
+        _state.UnstoredRetentionCursor = "12345678";
+
+        var result = Sweep();
+
+        Assert.Equal(before, Snapshot(unstored));
+        Assert.Equal("12345678", _state.UnstoredRetentionCursor);
+        Assert.Contains("unavailable-stores=price-selector:schema-behind", StoredSummary(result));
+        Assert.Contains("unstored-skipped=goal-store-unavailable", StoredSummary(result));
+        AssertNoUnstored(result);
+    }
+
+    [Fact]
+    public void SchemaBehind_WithReadFailedStoreKeepsUnstoredRoot()
+    {
+        var projectDb = CreateProjectStore("price-selector");
+        InsertGoal(projectDb, "aaaa0002000000000000000000000000", "Active");
+        MarkSchemaBehind(projectDb);
+        InsertGoal(Db, "aaaa0001000000000000000000000000", "unknown-status");
+        var unstored = CreateLeaseless("aaaa0003");
+        var before = Snapshot(unstored);
+        _state.UnstoredRetentionCursor = "12345678";
+
+        var result = Sweep();
+
+        Assert.Equal(before, Snapshot(unstored));
+        Assert.Equal("12345678", _state.UnstoredRetentionCursor);
+        Assert.Contains("unavailable-stores=default:read-failed,price-selector:schema-behind", StoredSummary(result));
+        Assert.Contains("unstored-skipped=goal-store-unavailable", StoredSummary(result));
+        AssertNoUnstored(result);
     }
 
     [Fact]
@@ -205,6 +256,9 @@ public sealed class PartialGoalStoreBuildRootRetentionScenarioTests : IDisposabl
         connection.Open();
         return connection;
     }
+
+    private static void MarkSchemaBehind(string db) =>
+        Execute(db, "DELETE FROM schema_migrations WHERE migration_number = (SELECT MAX(migration_number) FROM schema_migrations)");
 
     private static void Execute(string db, string sql)
     {

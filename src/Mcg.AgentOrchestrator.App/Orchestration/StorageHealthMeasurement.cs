@@ -17,10 +17,41 @@ internal static class StorageHealthMeasurement
         var sizes = entries.ToDictionary(e => e.Pattern, _ => (Bytes: 0L, Files: 0L, Present: false), StringComparer.OrdinalIgnoreCase);
         var unregistered = new List<UnregisteredRow>();
         long unreadable = 0;
+        var topLevelEntries = new List<OrchestratorArtifactRegistry.Entry>();
+        foreach (var entry in entries)
+        {
+            if (entry.ExternalRoot is null)
+            {
+                topLevelEntries.Add(entry);
+                continue;
+            }
+
+            try
+            {
+                var root = entry.ExternalRoot();
+                var relative = Path.GetRelativePath(orchestratorDirectory, root);
+                if (!Path.IsPathRooted(relative) && relative != ".." &&
+                    !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                {
+                    topLevelEntries.Add(entry);
+                    continue;
+                }
+
+                if ((File.GetAttributes(root) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == FileAttributes.Directory)
+                {
+                    var size = Measure(root, ref unreadable);
+                    sizes[entry.Pattern] = (size.Bytes, size.Files, true);
+                }
+            }
+            catch (Exception ex) when (ex is DirectoryNotFoundException or FileNotFoundException) { }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or
+                NotSupportedException or InvalidOperationException or System.Security.SecurityException) { unreadable++; }
+        }
+
         foreach (var path in TopLevelPaths(orchestratorDirectory, ref unreadable))
         {
             var name = Path.GetFileName(path);
-            var entry = OrchestratorArtifactRegistry.Classify(name, entries);
+            var entry = OrchestratorArtifactRegistry.Classify(name, topLevelEntries);
             var size = Measure(path, ref unreadable);
             if (entry is null) unregistered.Add(new(name, size.Bytes, size.Files));
             else
@@ -53,7 +84,7 @@ internal static class StorageHealthMeasurement
         return Children(directory, ref unreadable);
     }
 
-    private static (long Bytes, long Files) Measure(string path, ref long unreadable)
+    internal static (long Bytes, long Files) Measure(string path, ref long unreadable)
     {
         long bytes = 0;
         long files = 0;
