@@ -598,13 +598,128 @@ public sealed class SoloRepairReplayTests
         Assert.Empty(escalations);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RepairValidatedOnAdvancedMain_RequiresCandidateChangeForMixedAttempt(bool mixed)
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        await fixture.Produce(mixed: mixed, baselineFails: !mixed, singleRow: !mixed);
+        if (mixed)
+        {
+            // The shared mixed fixture also emits Unknown. Bind this replay to two failing rows.
+            var path = Path.Combine(fixture.Summary.SoloFailureReceipt!.ResultsRoot, "mixed-replay.trx");
+            WriteTrx(path, false, First, Long);
+            var artifact = new SoloAcceptanceArtifact(path, SoloAcceptanceFailureEvidenceWriter.Digest(File.ReadAllBytes(path)));
+            fixture.ReplaceProof(proof =>
+            {
+                var evidence = Assert.Single(proof.Checks);
+                var check = evidence.Check with
+                {
+                    ExecutedTestCount = 2,
+                    DiscoveredTestCount = 2,
+                    FailingTestIdentities = [First, Long],
+                    FailingTestAttributions = evidence.Check.FailingTestAttributions!
+                        .Where(attribution => attribution.TestIdentity != Unknown).ToArray()
+                };
+                return proof with { Checks = [evidence with { Artifacts = [artifact], Check = check }] };
+            });
+        }
+
+        fixture.Record(fixture.Summary);
+        var goal = fixture.Goal;
+        var original = fixture.Context;
+        var workspace = SoloRepairWorkflowTests.Workspace(fixture);
+        await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(fixture.Kernel);
+        await new PortfolioStore(workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
+        var store = new SoloBaselineRepairStore(Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName));
+        var verifier = new SoloRepairWorkflowTests.ControlledVerifier(fixture.Root);
+        var escalations = new List<string>();
+        var routes = new List<AttributedFailureRouteDecision>();
+        var handler = new SoloAcceptanceFailureHandler(() => fixture.Kernel,
+            (_, _, _, _, _, _) => throw new InvalidOperationException("The attempt is already recorded."),
+            () => DateTimeOffset.UtcNow, _ => fixture.Context, (_, _, _) => 0,
+            (dependent, prefix, policy, route) =>
+            {
+                routes.Add(route);
+                return new(dependent.Id.Value, prefix, policy.Name,
+                    new ConductorAdvanceOutcome.Executed(GoalLifecycleState.AcceptanceFailed, route.Feedback!));
+            },
+            (_, _, detail) => escalations.Add(detail));
+        var coordinator = Coordinator(fixture, workspace, fixture.Kernel, escalations, verifier,
+            failureHandler: () => handler);
+
+        var waiting = Advance(coordinator, goal)?.Outcome;
+        if (mixed)
+        {
+            Assert.IsType<ConductorAdvanceOutcome.Executed>(waiting);
+            Assert.Equal(Long, Assert.Single(Assert.Single(routes).Failure!.FailingTests));
+            var introduced = Assert.Single(store.ReadFindings(goal.Id.Value, introduced: true));
+            Assert.Equal(Long, introduced.Identity);
+            Assert.Equal(goal.LatestAcceptanceFailure!.AttemptId, introduced.Attempt);
+            Assert.Equal((original.CandidateSha, original.MainSha), (introduced.Candidate, introduced.Main));
+        }
+        else
+        {
+            var hold = Assert.IsType<ConductorAdvanceOutcome.Held>(waiting);
+            Assert.Equal(SoloHoldReasons.RepairPending, hold.Decision?.DiscriminatingEvidence);
+            Assert.Empty(store.ReadFindings(goal.Id.Value, introduced: true));
+        }
+        var inherited = Assert.Single(store.ReadFindings(goal.Id.Value));
+        Assert.True(inherited.Inherited, inherited.Reason);
+        Assert.Equal(First, inherited.Identity);
+        Assert.Equal(goal.LatestAcceptanceFailure!.AttemptId, inherited.Attempt);
+        verifier.Finding = inherited;
+
+        var group = Assert.IsType<SoloRepairGroup>(store.ReadGroup(inherited.GroupKey));
+        var repair = fixture.Kernel.GetGoal(new GoalId(Assert.IsType<string>(group.RepairGoal)));
+        fixture.Git("checkout", "main");
+        fixture.Git("commit", "--allow-empty", "-m", $"Integrate goal/{repair.Id.Value}: repair baseline");
+        var main = fixture.Git("rev-parse", "HEAD");
+        Assert.NotEqual(original.MainSha, main);
+        var repairBranch = GoalWorktrees.BranchName(repair.Id);
+        GoalOperationJournal.RecordLandingIntent(fixture.Repo, repair, repairBranch, "main", main, "fixture landing intent");
+        new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory).AppendGoalLanded(repair.Id, "main",
+            repairBranch, LandingAdmissionReceipt.Recovered(main));
+        fixture.Git("checkout", "candidate");
+        Assert.Equal(original.CandidateSha, fixture.Git("rev-parse", "HEAD"));
+        fixture.Context = original with { MainSha = main };
+
+        var outcome = Advance(coordinator, goal)?.Outcome;
+        Assert.Equal((inherited.Request!, main), Assert.Single(verifier.FocusedRuns));
+        Assert.Equal("passed", store.ReadRepairValidation(inherited, main)?.Outcome);
+        if (mixed)
+        {
+            Assert.DoesNotContain(goal.Timeline, entry =>
+                entry.Message.StartsWith("SOLO_FRESH_GATE ", StringComparison.Ordinal));
+            Assert.Equal(GoalStatus.AcceptanceFailed, goal.Status);
+            Assert.IsType<ConductorAdvanceOutcome.Executed>(outcome);
+            Assert.Equal(2, routes.Count);
+            Assert.Equal(Long, Assert.Single(routes[1].Failure!.FailingTests));
+
+            fixture.Git("commit", "--allow-empty", "-m", "Correct introduced failure");
+            fixture.Context = fixture.Context with { CandidateSha = fixture.Git("rev-parse", "HEAD") };
+            Assert.NotEqual(original.CandidateSha, fixture.Context.CandidateSha);
+            outcome = Advance(coordinator, goal)?.Outcome;
+        }
+
+        var admitted = Assert.IsType<ConductorAdvanceOutcome.Executed>(outcome);
+        Assert.Equal("FreshGate", admitted.Decision?.Action);
+        Assert.Equal(SoloHoldReasons.RepairValidated, admitted.Decision?.DiscriminatingEvidence);
+        Assert.True(SoloFreshGateAdmission.WasAdmitted(goal, SoloHoldReasons.RepairValidated, fixture.Context.CandidateSha, main));
+        Assert.Equal(GoalStatus.Verified, goal.Status);
+        Assert.Single(verifier.FocusedRuns);
+        Assert.Empty(escalations);
+    }
+
     private static SoloBaselineRepairCoordinator Coordinator(SoloAttributedFailureRouteFixture fixture,
         OrchestratorWorkspace workspace, AgentOrchestratorKernel kernel, List<string> escalations,
         SoloRepairWorkflowTests.ControlledVerifier? verifier = null,
-        Func<string, CancellationToken, DotnetBuildEnvironmentLease>? acquireSlot = null) =>
+        Func<string, CancellationToken, DotnetBuildEnvironmentLease>? acquireSlot = null,
+        Func<SoloAcceptanceFailureHandler>? failureHandler = null) =>
         new(workspace, kernel, verifier ?? new SoloRepairWorkflowTests.ControlledVerifier(fixture.Root),
             _ => new(fixture.Context.CandidateSha, fixture.Context.MainSha), _ => fixture.Context,
-            () => throw new InvalidOperationException("The inherited rows must not route to a Developer."),
+            failureHandler ?? (() => throw new InvalidOperationException("The inherited rows must not route to a Developer.")),
             _ => new(true, false, false, false, false, false),
             (_, _, message, _) =>
             {
