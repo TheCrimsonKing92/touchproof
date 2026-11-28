@@ -138,23 +138,12 @@ internal sealed class AcceptanceSelectedExecutionSession(
                 IReadOnlyList<AcceptanceWholeProjectCheckInventory> Inventories() => wholeProjectChecks.Select(Inventory).ToArray();
                 IReadOnlyList<AcceptanceWholeProjectCheckInventory> SelectableInventories() => targets.Select(Inventory).ToArray();
                 var projectReachAvailable = true;
-                var changedTestProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                IReadOnlySet<string>? wholeChangedTestProjects = null;
                 if (read is null && input.Selection.Outcome == ReverseDependencySelectionOutcome.Resolved && targets.Length > 0)
                 {
                     var routing = new ImpactReplayChangedSourceRouting(worktreePath);
                     var changedPaths = changedFiles.Select(path => Path.GetFullPath(path, worktreePath)).ToArray();
-                    foreach (var check in targets)
-                    {
-                        var project = routing.TestProjects.FirstOrDefault(item => item.Path.Equals(
-                            Path.GetFullPath(check.Project, worktreePath), StringComparison.OrdinalIgnoreCase));
-                        if (project is null) continue;
-                        var directory = Path.GetDirectoryName(project.Path)! + Path.DirectorySeparatorChar;
-                        // Support selection currently reports non-infrastructure readers as files, not classes.
-                        // Until those classes are available, changes to project files or linked sources require it whole.
-                        if (changedPaths.Any(path => path.StartsWith(directory, StringComparison.OrdinalIgnoreCase) ||
-                            project.Sources.Contains(path, StringComparer.OrdinalIgnoreCase)))
-                            changedTestProjects.Add(check.Project);
-                    }
+                    var seeds = AcceptanceChangedTestClassSeeds.Classify(worktreePath, routing, changedPaths, targets, Inventory);
                     var productionSources = changedFiles.Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) &&
                         !routing.IsTestSource(path)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                     if (productionSources.Length > 0)
@@ -172,12 +161,38 @@ internal sealed class AcceptanceSelectedExecutionSession(
                                 .Concat(reached).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray() } };
                         }
                     }
+                    if (seeds.MappedSources.Count > 0)
+                    {
+                        ReverseDependencyTestSelection? testReach = null;
+                        try
+                        {
+                            testReach = ReverseDependencyTestImpactReader.Read(worktreePath, seeds.MappedSources.ToArray(),
+                                propagateShippingSourceReach: true, additionalTargetTestProjects: targets.Select(check => check.Project)
+                                    .Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            // Without test reach the changed projects keep their original checks.
+                        }
+
+                        if (testReach?.Outcome == ReverseDependencySelectionOutcome.Resolved)
+                        {
+                            var inventory = input.Classes.Concat(SelectableInventories().SelectMany(check => check.Classes)).ToArray();
+                            var reached = testReach.TestClassNames.Where(name => inventory.Any(item =>
+                                name.Contains('.') || name.Contains('+') ? item.FullName == name : item.FullName.Split('.', '+').Last() == name));
+                            input = input with { Selection = input.Selection with { TestClassNames = input.Selection.TestClassNames
+                                .Concat(seeds.DeclaredClassesByProject.Values.SelectMany(names => names)).Concat(reached)
+                                .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray() } };
+                        }
+                        else seeds.WholeProjects.UnionWith(seeds.DeclaredClassesByProject.Keys);
+                    }
+                    wholeChangedTestProjects = seeds.WholeProjects;
                 }
                 _plan = AcceptanceSelectedExecutionPlan.Create(changedFiles, input.Selection, lanes, input.Classes,
                     lanes.Where(lane => AcceptanceSelectedExecutionPlan.IsDefaultFloor(lane.Name))
                         .Select(lane => lane.Name).ToArray(), input.GuardClasses,
                     obligationSelectors ?? input.ObligationSelectors, Inventories, projectReachAvailable, SelectableInventories,
-                    changedTestProjects, input.AssemblyScanReasons, input.SupportSelections, input.SupportProjectClasses);
+                    wholeChangedTestProjects, input.AssemblyScanReasons, input.SupportSelections, input.SupportProjectClasses);
                 IReadOnlyList<AcceptanceTestClassDescriptor> ReadProject(string project)
                 {
                     try { return input.ProjectClasses?.Invoke(project) ?? []; }
@@ -208,8 +223,10 @@ internal sealed class AcceptanceSelectedExecutionSession(
         var original = proposed.SelectMany(lane => lane.SelectedClasses.Concat(lane.SkippedClasses))
             .Distinct(StringComparer.Ordinal).ToArray();
         var scheduled = _actual.Where(lane => observation.Scheduled.Contains(lane.Name, StringComparer.Ordinal)).ToArray();
-        var executed = CountExecuted(scheduled);
+        var executed = CountExecuted(scheduled, observation.Scheduled);
         var skipped = original.Except(kept, StringComparer.Ordinal).Count();
+        var proposedExecuted = _plan?.HasPlan == true ? kept.Concat(ProjectChecks.SelectMany(entry => entry.Lane.SelectedClasses))
+            .Distinct(StringComparer.Ordinal).Count() : (int?)null;
         var record = new AcceptanceSelectedExecutionRecord(_effectiveMode.ToString(), _plan?.HasPlan == true ? "plan" : "full-gate",
             _plan?.Outcome.ToString(), _plan?.FullGateReason, _plan?.FloorLanes ?? [], _plan?.GuardClasses ?? [],
             _plan?.ObligationClasses ?? [],
@@ -220,7 +237,7 @@ internal sealed class AcceptanceSelectedExecutionSession(
                 ClassSkipReason = lane.SkippedClasses.Count > 0 ? shadow
                     ? AcceptanceGateLaneSkip.ShadowClassNotSelected : AcceptanceGateLaneSkip.ClassNotSelected : null
             }).ToArray(), executed, Applied ? skipped : 0,
-            _plan?.HasPlan == true ? kept.Length : null, _plan?.HasPlan == true ? skipped : null,
+            proposedExecuted, _plan?.HasPlan == true ? skipped : null,
             _milliseconds, Applied, Applied,
             mode == AcceptanceSelectedExecutionMode.Enforce && suspension is not null ? "suspended-by-backstop-miss" : null,
             mode == AcceptanceSelectedExecutionMode.Enforce ? suspension?.MissId : null)
@@ -234,14 +251,18 @@ internal sealed class AcceptanceSelectedExecutionSession(
         return observation with { SelectedExecution = record };
     }
 
-    private int? CountExecuted(IReadOnlyList<AcceptanceTestLane> scheduled)
+    private int? CountExecuted(IReadOnlyList<AcceptanceTestLane> scheduled, IReadOnlyList<string> scheduledChecks)
     {
         if (_classes.Count == 0) return null;
         try
         {
             var membership = scheduled.Select(AcceptanceLaneMembership.CreateClassMatcher).ToArray();
-            return _classes.Where(item => membership.Any(includes => includes(item.FullName)))
-                .Select(item => item.FullName).Distinct(StringComparer.Ordinal).Count();
+            var infrastructure = _classes.Where(item => membership.Any(includes => includes(item.FullName)))
+                .Select(item => item.FullName);
+            // Shadow records the proposed filter, but the scheduled project check still runs in full.
+            var project = ProjectChecks.Where(entry => scheduledChecks.Contains(entry.Name, StringComparer.Ordinal))
+                .SelectMany(entry => Applied ? entry.Lane.SelectedClasses : entry.Lane.SelectedClasses.Concat(entry.Lane.SkippedClasses));
+            return infrastructure.Concat(project).Distinct(StringComparer.Ordinal).Count();
         }
         catch (Exception ex) when (ex is InvalidOperationException or InvalidDataException)
         {
