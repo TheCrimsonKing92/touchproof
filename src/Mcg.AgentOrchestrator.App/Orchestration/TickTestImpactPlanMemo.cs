@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using PlanningAttempt = Mcg.AgentOrchestrator.App.Orchestration.PreTesterTestImpactPlanAttemptCoordinator;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -79,11 +80,109 @@ internal sealed class TickTestImpactPlanMemo(
             return PreTesterGuardSelections.CreateForRequest(cache, worktreePath, changedPaths, mainRevision, declaration,
                 settings, prior, format, record, resolverTick, resolverBoundary);
 
-        PreTesterGuardSelections CreateForPrior(PreTesterEvidenceEntry? entry) => ManifestScopedImpactPlan.WithRawPlanner(
+        return CreateGuardRequestWithPlanning(cache, worktreePath, changedPaths, mainRevision, declaration, settings, prior,
+            format, record, resolverTick, resolverBoundary,
             (summary, root) => string.Equals(root, worktreePath, StringComparison.Ordinal) ? memo.Plan(candidate, summary) : null,
+            (_, paths) => memo.SelectReverseDependents(candidate, paths));
+    }
+
+    internal static (PreTesterGuardSelections Guards, DeveloperDeferredTestSelection Selection, bool Abandoned)?
+        CreateGuardRequestOrPending(PlanningAttempt? attempts, TickTestImpactPlanMemo? memo, string? integrationBranch,
+        PreTesterChangedFileGuardClasses cache, string worktreePath, IReadOnlyList<string> changedPaths, string mainRevision,
+        string candidateSha, DeveloperDeferredTestSelection declaration, AcceptanceGateEngineSettings settings,
+        PreTesterEvidenceEntry? prior, Func<FindingEvidenceSelection, string> format, Action<PreTesterEvidenceEntry, string> record,
+        PreTesterReverseDependencyObservation.Tick? resolverTick, PreTesterReverseDependencyObservation.Boundary? resolverBoundary,
+        out string? holdReason)
+    {
+        holdReason = null;
+        if (attempts is null || integrationBranch is null)
+            return Inline();
+        var candidate = Candidate.Read(worktreePath, integrationBranch, mainRevision);
+        if (candidate is null || !string.Equals(candidate.Head, candidateSha, StringComparison.OrdinalIgnoreCase))
+        {
+            holdReason = $"PRE_TESTER_PLANNING_FAILED: candidate_sha={candidateSha}; could not verify the candidate revisions";
+            return null;
+        }
+
+        // These are the inputs passed to the raw callbacks by the coupled-class and reverse-dependency guards.
+        var summary = settings.DeclaredDotnetTestChecks.Count != 0 && changedPaths.Count != 0
+            ? RepositoryChangeClassifier.Classify(changedPaths.Select(PreTesterChangedFileGuardClasses.Normalize)
+                .Distinct(StringComparer.OrdinalIgnoreCase)) : null;
+        var paths = PreTesterReverseDependencySelections.ShippingSourcePaths(changedPaths);
+        var summaryJson = summary is null ? null : JsonSerializer.Serialize(summary);
+        var pathsJson = paths.Length != 0 && paths.All(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) &&
+            File.Exists(Path.Combine(worktreePath, path))) ? JsonSerializer.Serialize(paths) : null;
+        if (summaryJson is null && pathsJson is null)
+            return Inline();
+        var inputs = (summary?.Files.Select(file => file.Path) ?? []).Concat(paths).ToArray();
+        if (!CanReuse(candidate, inputs))
+            return Inline();
+
+        memo ??= new();
+        var planKey = new Key(candidate, summaryJson ?? string.Empty);
+        var reverseKey = new Key(candidate, pathsJson ?? string.Empty);
+        var plan = summaryJson is null ? null : ReadMemo(memo._plans, planKey);
+        var selection = pathsJson is null ? null : ReadMemo(memo._reverseSelections, reverseKey);
+        PlanningAttempt.StoredResult? stored = null;
+        if ((summaryJson is not null && plan is null) || (pathsJson is not null && selection is null))
+        {
+            var key = new PlanningAttempt.AttemptKey(candidate, summaryJson, pathsJson);
+            var observation = attempts.Observe(key);
+            if (observation.Status != PlanningAttempt.State.Completed)
+            {
+                var marker = observation.Status == PlanningAttempt.State.Pending
+                    ? "PRE_TESTER_PLANNING_PENDING" : "PRE_TESTER_PLANNING_FAILED";
+                holdReason = $"{marker}: candidate_sha={candidateSha}; attempt={key.Hash}; {observation.Detail}";
+                return null;
+            }
+            if (!CanReuse(candidate, inputs))
+            {
+                holdReason = $"PRE_TESTER_PLANNING_FAILED: candidate_sha={candidateSha}; planning inputs changed before use";
+                return null;
+            }
+            stored = observation.Result!;
+            if (plan is null && stored.Plan?.Value is { } storedPlan)
+                plan = GetOrCompute(memo._plans, planKey, () => Freeze(storedPlan.Restore()));
+            if (selection is null && stored.ReverseSelection?.Value is { } storedSelection)
+                selection = GetOrCompute(memo._reverseSelections, reverseKey, () => Freeze(storedSelection));
+        }
+
+        try
+        {
+            return CreateGuardRequestWithPlanning(cache, worktreePath, changedPaths, mainRevision, declaration, settings, prior,
+                format, record, resolverTick, resolverBoundary,
+                (request, root) => root == worktreePath && JsonSerializer.Serialize(request) == summaryJson
+                    ? plan ?? stored!.Plan!.Read().Restore() : throw new PlanningInputMismatchException(),
+                (root, request) => root == worktreePath && JsonSerializer.Serialize(request) == pathsJson
+                    ? selection ?? stored!.ReverseSelection!.Read() : throw new PlanningInputMismatchException());
+        }
+        catch (PlanningInputMismatchException)
+        {
+            holdReason = $"PRE_TESTER_PLANNING_FAILED: candidate_sha={candidateSha}; guard planning inputs no longer match";
+            return null;
+        }
+
+        (PreTesterGuardSelections, DeveloperDeferredTestSelection, bool) Inline() =>
+            CreateGuardRequest(memo, integrationBranch, cache, worktreePath, changedPaths, mainRevision, declaration,
+                settings, prior, format, record, resolverTick, resolverBoundary);
+    }
+
+    private sealed class PlanningInputMismatchException : Exception { }
+
+    private static (PreTesterGuardSelections Guards, DeveloperDeferredTestSelection Selection, bool Abandoned)
+        CreateGuardRequestWithPlanning(PreTesterChangedFileGuardClasses cache,
+        string worktreePath, IReadOnlyList<string> changedPaths, string mainRevision,
+        DeveloperDeferredTestSelection declaration, AcceptanceGateEngineSettings settings, PreTesterEvidenceEntry? prior,
+        Func<FindingEvidenceSelection, string> format, Action<PreTesterEvidenceEntry, string> record,
+        PreTesterReverseDependencyObservation.Tick? resolverTick, PreTesterReverseDependencyObservation.Boundary? resolverBoundary,
+        Func<RepositoryChangeSummary, string, RepositoryTestImpactPlan?> readPlan,
+        Func<string, IReadOnlyList<string>, RepositoryRecheckTestSelection> selectReverseDependents)
+    {
+        PreTesterGuardSelections CreateForPrior(PreTesterEvidenceEntry? entry) => ManifestScopedImpactPlan.WithRawPlanner(
+            readPlan,
             () => PreTesterGuardSelections.Create(cache, worktreePath, changedPaths, mainRevision, settings: settings,
                 priorSelections: entry?.Outcome == "started" ? entry.Selections : null,
-                reverseDependencySelector: (_, paths) => memo.SelectReverseDependents(candidate, paths),
+                reverseDependencySelector: selectReverseDependents,
                 resolverTick: resolverTick, resolverBoundary: resolverBoundary));
 
         var guards = CreateForPrior(prior);
@@ -106,20 +205,7 @@ internal sealed class TickTestImpactPlanMemo(
         if (!CanReuse(candidate, summary.Files.Select(file => file.Path)))
             return Compute();
 
-        return GetOrCompute(_plans, new(candidate, JsonSerializer.Serialize(summary)), () =>
-        {
-            var plan = Compute();
-            return plan with
-            {
-                Checks = Array.AsReadOnly(plan.Checks.Select(check => check with
-                {
-                    Command = Array.AsReadOnly(check.Command.ToArray()),
-                    TestClassSelections = check.TestClassSelections is { } classes
-                        ? Array.AsReadOnly(classes.ToArray()) : null,
-                    ChangedTestClasses = Array.AsReadOnly(check.ChangedTestClasses.ToArray())
-                }).ToArray())
-            };
-        });
+        return GetOrCompute(_plans, new(candidate, JsonSerializer.Serialize(summary)), () => Freeze(Compute()));
     }
 
     internal RepositoryRecheckTestSelection SelectReverseDependents(Candidate candidate, IReadOnlyList<string> paths)
@@ -128,14 +214,24 @@ internal sealed class TickTestImpactPlanMemo(
         if (!CanReuse(candidate, paths))
             return Compute();
 
-        return GetOrCompute(_reverseSelections, new(candidate, JsonSerializer.Serialize(paths)), () =>
-        {
-            var selection = Compute();
-            return selection with { TestClasses = Array.AsReadOnly(selection.TestClasses.ToArray()) };
-        });
+        return GetOrCompute(_reverseSelections, new(candidate, JsonSerializer.Serialize(paths)), () => Freeze(Compute()));
     }
 
-    private static bool CanReuse(Candidate candidate, IEnumerable<string> paths)
+    private static RepositoryTestImpactPlan Freeze(RepositoryTestImpactPlan plan) => plan with
+    {
+        Checks = Array.AsReadOnly(plan.Checks.Select(check => check with
+        {
+            Command = Array.AsReadOnly(check.Command.ToArray()),
+            TestClassSelections = check.TestClassSelections is { } classes
+                ? Array.AsReadOnly(classes.ToArray()) : null,
+            ChangedTestClasses = Array.AsReadOnly(check.ChangedTestClasses.ToArray())
+        }).ToArray())
+    };
+
+    private static RepositoryRecheckTestSelection Freeze(RepositoryRecheckTestSelection selection) =>
+        selection with { TestClasses = Array.AsReadOnly(selection.TestClasses.ToArray()) };
+
+    internal static bool CanReuse(Candidate candidate, IEnumerable<string> paths)
     {
         // Git's clean status omits ignored files. The planners also inspect project/source
         // files and the presence of changed paths on disk.
@@ -148,6 +244,12 @@ internal sealed class TickTestImpactPlanMemo(
         return ignored.ProcessStarted && !ignored.DrainTimedOut && ignored.ExitCode == 0 &&
             !HasIgnoredPlanningInputs(candidate.WorktreePath, ignored.Output, changedPaths) &&
             string.Equals(ConductorDriver.TryResolveGitHead(candidate.WorktreePath), candidate.Head, StringComparison.Ordinal);
+    }
+
+    private static T? ReadMemo<T>(Dictionary<Key, T> values, Key key) where T : class
+    {
+        lock (values)
+            return values.GetValueOrDefault(key);
     }
 
     private static bool HasIgnoredPlanningInputs(string worktreePath, string ignoredPaths, HashSet<string> changedPaths)

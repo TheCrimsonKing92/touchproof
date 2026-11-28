@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
+using PlanningAttempt = Mcg.AgentOrchestrator.App.Orchestration.PreTesterTestImpactPlanAttemptCoordinator;
 
 [Trait("Isolation", "ProcessSpawning")]
 public sealed class TickTestImpactPlanMemoTests
@@ -280,6 +281,126 @@ public sealed class TickTestImpactPlanMemoTests
         Assert.Equal(1, fixture.GuardCalls);
     }
 
+    [Theory]
+    [InlineData(false, "failed: planning worker failed")]
+    [InlineData(true, "owner-dead: Planning process 42 exited without a result.")]
+    public void BackgroundGuardRequestHoldsWithoutPlanningOrDispatch(bool ownerDied, string failure)
+    {
+        using var fixture = new Fixture();
+        var candidate = fixture.Candidate;
+        var goal = fixture.CreateDeferredGoal(candidate.MergeBase);
+        var launch = new PlanningLaunch(fixture.Root);
+        var dispatches = 0;
+        var evidenceRuns = 0;
+        var driver = ConductorDriverTests.MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getPreReviewEvidenceContext: _ => ConductorDriverTests.NoPreReviewContext(candidate.Head),
+            getLandingFileScopes: _ => fixture.ChangedFiles,
+            getFindingEvidenceEngineSettings: _ => AcceptanceGateEngineSettings.Load(fixture.Worktree),
+            runFocusedEvidence: (_, _) =>
+            {
+                evidenceRuns++;
+                throw new InvalidOperationException("Focused evidence ran before planning was ready.");
+            },
+            dispatchAndStart: _ =>
+            {
+                dispatches++;
+                return DispatchStartOutcome.Started();
+            },
+            executionDirectory: fixture.Root);
+        driver.PreTesterMainRevision = _ => candidate.MergeBase;
+        driver.PreTesterPlanningAttempts = launch.Coordinator;
+        driver.TestImpactPlanMemoFactory = fixture.CreateMemo;
+        driver.OverrideDeveloperCompletionStructuralPreflightForTests(
+            _ => new DeveloperCompletionStructuralFindings(false, "clean"), TimeSpan.FromSeconds(5));
+
+        Assert.StartsWith("PRE_TESTER_PLANNING_PENDING:", Advance().Reason, StringComparison.Ordinal);
+        var (path, id) = Assert.Single(launch.Attempts);
+        if (ownerDied)
+            launch.OwnerStatus = SpawnTrackedProcessStatus.DeadOrRecycled;
+        else
+            Assert.Equal(1, PlanningAttempt.RunAttempt(path, id, _ => throw new InvalidOperationException("planning worker failed")));
+
+        var failed = Advance();
+        Assert.StartsWith("PRE_TESTER_PLANNING_FAILED:", failed.Reason, StringComparison.Ordinal);
+        Assert.Contains(failure, failed.Reason, StringComparison.Ordinal);
+        Assert.Equal(failed.Reason, Advance().Reason);
+        Assert.Single(launch.Attempts);
+
+        ConductorAdvanceOutcome.Held Advance()
+        {
+            using var tick = driver.BeginTestImpactPlanTick();
+            var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+            Assert.Equal(0, fixture.PlannerCalls);
+            Assert.Equal(0, fixture.GuardCalls);
+            Assert.Equal(0, dispatches);
+            Assert.Equal(0, evidenceRuns);
+            return Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        }
+    }
+
+    [Fact]
+    public void BackgroundGuardRequestServesStoredResultEqualToInlinePlanning()
+    {
+        using var fixture = new Fixture();
+        var launch = new PlanningLaunch(fixture.Root);
+        var memo = fixture.CreateMemo();
+        var candidate = fixture.Candidate;
+        var changed = fixture.ChangedFiles;
+        var settings = AcceptanceGateEngineSettings.Load(fixture.Worktree);
+        var cache = new PreTesterChangedFileGuardClasses();
+
+        Assert.Null(ReadBackground(out var hold));
+        Assert.StartsWith("PRE_TESTER_PLANNING_PENDING:", hold, StringComparison.Ordinal);
+        Assert.Equal(0, fixture.PlannerCalls);
+        Assert.Equal(0, fixture.GuardCalls);
+        var (path, id) = Assert.Single(launch.Attempts);
+        Assert.Equal(0, PlanningAttempt.RunAttempt(path, id, key => PlanningAttempt.Compute(key)));
+
+        var ready = ReadBackground(out hold);
+        Assert.Null(hold);
+        Assert.True(ready.HasValue);
+        Assert.Equal(0, fixture.PlannerCalls);
+        Assert.Equal(0, fixture.GuardCalls);
+        Assert.Contains(ready.Value.Guards.Selections, selection => selection.TestClass == "WidgetGuardTests");
+        var expected = TickTestImpactPlanMemo.CreateGuardRequest(fixture.CreateMemo(), "main", cache,
+            fixture.Worktree, changed, candidate.MergeBase, new([], []), settings, null, selection => selection.TestClass,
+            (_, _) => { }, null, null);
+        Assert.Equal(JsonSerializer.Serialize(expected.Guards.Selections), JsonSerializer.Serialize(ready.Value.Guards.Selections));
+        Assert.Equal(JsonSerializer.Serialize(expected.Selection), JsonSerializer.Serialize(ready.Value.Selection));
+        Assert.Equal(1, fixture.PlannerCalls);
+        Assert.Equal(1, fixture.GuardCalls);
+
+        // A second lookup in this tick uses the memo even if the attempt artifact disappears.
+        File.Delete(Path.Combine(Path.GetDirectoryName(path)!, "result.json"));
+        var memoized = ReadBackground(out hold);
+        Assert.Null(hold);
+        Assert.True(memoized.HasValue);
+        Assert.Equal(JsonSerializer.Serialize(expected.Selection), JsonSerializer.Serialize(memoized.Value.Selection));
+        Assert.Equal(1, fixture.PlannerCalls);
+        Assert.Equal(1, fixture.GuardCalls);
+        Assert.Single(launch.Attempts);
+
+        (PreTesterGuardSelections Guards, DeveloperDeferredTestSelection Selection, bool Abandoned)? ReadBackground(out string? reason) =>
+            TickTestImpactPlanMemo.CreateGuardRequestOrPending(launch.Coordinator, memo, "main", cache, fixture.Worktree,
+                changed, candidate.MergeBase, candidate.Head, new([], []), settings, null, selection => selection.TestClass,
+                (_, _) => { }, null, null, out reason);
+    }
+
+    private sealed class PlanningLaunch
+    {
+        internal List<(string Path, Guid Id)> Attempts { get; } = [];
+        internal SpawnTrackedProcessStatus OwnerStatus { get; set; } = SpawnTrackedProcessStatus.LiveMatch;
+        internal PlanningAttempt Coordinator { get; }
+
+        internal PlanningLaunch(string root) =>
+            Coordinator = new(Path.Combine(root, "planning"), root, (path, id) =>
+            {
+                Attempts.Add((path, id));
+                return new(42, DateTimeOffset.UnixEpoch, "planning-child");
+            }, _ => OwnerStatus);
+    }
+
     private static string ReadOutputs(ConductorDriver driver, Goal goal, Fixture fixture)
     {
         var guards = ReadGuards(driver, fixture);
@@ -302,8 +423,10 @@ public sealed class TickTestImpactPlanMemoTests
 
     private static (PreTesterGuardSelections Guards, DeveloperDeferredTestSelection Selection, bool Abandoned)
         ReadGuards(ConductorDriver driver, Fixture fixture) =>
-        driver.CreatePreTesterGuardRequest(fixture.Worktree, fixture.ChangedFiles, fixture.Candidate.MergeBase,
-            new([], []), AcceptanceGateEngineSettings.Load(fixture.Worktree), null, (_, _) => { });
+        TickTestImpactPlanMemo.CreateGuardRequestOrPending(null, driver.CurrentTestImpactPlanMemo, "main",
+            new(), fixture.Worktree, fixture.ChangedFiles, fixture.Candidate.MergeBase, fixture.Candidate.Head,
+            new([], []), AcceptanceGateEngineSettings.Load(fixture.Worktree), null, ConductorDriver.FormatFindingEvidenceSelection,
+            (_, _) => { }, null, null, out _)!.Value;
 
     private static ConductorAdvanceOutcome.Escalated ReadDecision(ConductorDriver driver, Goal goal)
     {
@@ -365,6 +488,33 @@ public sealed class TickTestImpactPlanMemoTests
             var reviewer = new TaskSpec(_reviewerId, "Review the candidate", AgentRole.Reviewer);
             reviewer.SetStatus(WorkTaskStatus.Assigned);
             return kernel.CreateGoal(_goalId, "Verify test impact reuse", [reviewer]);
+        }
+
+        internal Goal CreateDeferredGoal(string baseCommit)
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var developer = new TaskSpec(TaskId.New(), "Implement the candidate", AgentRole.Developer);
+            var tester = new TaskSpec(TaskId.New(), "Test the candidate", AgentRole.Tester);
+            var goal = kernel.CreateGoal(_goalId, "Verify pre-Tester planning", [developer, tester]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            ConductorDriverTests.DispatchTask(kernel, goal, developer, baseCommit: baseCommit);
+            var report = """
+                WORKER_RESULT:
+                files: tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WidgetGuardTests.cs
+                commands: none
+                tests: deferred - WidgetGuardTests
+                commit: none
+                blockers: none
+                assigned_scope_complete: true
+                model_fit: test/model - adequate - fixture
+                skills: none
+                confidence: high
+                END_WORKER_RESULT
+                """;
+            kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
+                "test.exe", Worktree, 0, report, "", DateTimeOffset.UnixEpoch,
+                WorkerResultPresent: true, HasCommittedChanges: true));
+            return goal;
         }
 
         internal ConductorDriver CreateDriver(AgentOrchestratorKernel kernel)

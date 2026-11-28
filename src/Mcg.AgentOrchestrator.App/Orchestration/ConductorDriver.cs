@@ -229,8 +229,7 @@ internal sealed partial class ConductorDriver
         _executionDirectory = dir;
         _readAcceptanceEngineHealth = () => PostLandingCanaryFactory.CreateCircuit(workspace).Read();
         _integrationBranch = workspace.IntegrationBranch;
-        _resolveAcceptanceHeads = goal =>
-            (TryResolveAcceptanceBranchHead(goal), TryResolveGitHead(dir));
+        _resolveAcceptanceHeads = goal => (TryResolveAcceptanceBranchHead(goal), TryResolveGitHead(dir));
         _getAcceptanceSlotCount = _ => ConductorBatchLoop.DefaultParallelAcceptanceCapacity;
         _getWorkerAdmissionCapacity = () => ConductorBatchLoop.WorkerAdmissionCapacity;
         _parallelAcceptanceEnabled = true;
@@ -253,6 +252,7 @@ internal sealed partial class ConductorDriver
         _cohortKernel = kernel;
         ConfigureCandidateIdentity(kernel, workspace);
         _cohortWorkspace = workspace;
+        PreTesterPlanningAttempts = runAcceptanceAttemptsInCurrentProcess ? null : OwnedChildAttemptCoordinatorFactory.CreatePreTesterTestImpactPlan(workspace);
         _soloBaselineRepair = new(workspace, kernel, acceptanceVerifier, ReadCurrentCohortAttributionRevisions,
             ReadSoloAcceptanceContext, () => SoloAcceptanceFailure, GetFacts, WriteEscalation,
             (key, token) => CohortPartitionStableSlotLeaseSource?.Invoke(key, token) ?? _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(key, token),
