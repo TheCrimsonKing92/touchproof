@@ -172,8 +172,42 @@ public sealed class FocusedEvidenceDeclarationFactStoreTests
         Assert.Equal(2, parses.CountFor(source));
     }
 
+    [Fact]
+    public void ExtractsExplicitModifiersRecordKindAndErrorSeverity()
+    {
+        using var tree = new SourceTree(ownerState: true);
+        var path = tree.Write("Shapes.cs", """
+            #warning Fixture warning
+            public static class PublicStatic { }
+            internal class Internal { }
+            public abstract class PublicAbstract { }
+            public record PublicRecord;
+            """);
+        var invalidPath = tree.Write("Malformed.cs", "public class Malformed {");
+        using var store = UseColdStore();
+
+        var facts = FocusedEvidenceDeclarationFactStore.Current.Read(path, tree.Root);
+        var shapes = facts.Types.ToDictionary(type => type.SimpleName, type => type.Shape);
+        Assert.True(facts.ContainsDiagnostics);
+        Assert.False(facts.ContainsErrorDiagnostics);
+        Assert.True(FocusedEvidenceDeclarationFactStore.Current.Read(invalidPath, tree.Root).ContainsErrorDiagnostics);
+        Assert.True(shapes["PublicStatic"].IsPublic);
+        Assert.True(shapes["PublicStatic"].IsStatic);
+        Assert.False(shapes["PublicStatic"].IsRecord);
+        Assert.False(shapes["Internal"].IsPublic);
+        Assert.False(shapes["Internal"].IsStatic);
+        Assert.False(shapes["Internal"].IsRecord);
+        Assert.True(shapes["PublicAbstract"].IsPublic);
+        Assert.False(shapes["PublicAbstract"].IsStatic);
+        Assert.True(shapes["PublicRecord"].IsPublic);
+        Assert.False(shapes["PublicRecord"].IsStatic);
+        Assert.True(shapes["PublicRecord"].IsRecord);
+        Assert.Equal(4, FocusedEvidenceDeclarationFactStore.ExtractorVersion);
+    }
+
     [Theory]
     [InlineData("version")]
+    [InlineData("older-version")]
     [InlineData("hash")]
     [InlineData("truncated")]
     [InlineData("non-json")]
@@ -187,6 +221,10 @@ public sealed class FocusedEvidenceDeclarationFactStoreTests
     [InlineData("methods-null")]
     [InlineData("method-null")]
     [InlineData("diagnostics-missing")]
+    [InlineData("error-diagnostics-missing")]
+    [InlineData("public-missing")]
+    [InlineData("static-missing")]
+    [InlineData("record-missing")]
     [InlineData("directives-missing")]
     [InlineData("base-list-missing")]
     [InlineData("attributes-null")]
@@ -406,6 +444,7 @@ public sealed class FocusedEvidenceDeclarationFactStoreTests
         {
             ["Types"] = types,
             ["ContainsDiagnostics"] = false,
+            ["ContainsErrorDiagnostics"] = false,
             ["ContainsDirectives"] = false,
             ["Usings"] = new JsonArray()
         };
@@ -432,6 +471,10 @@ public sealed class FocusedEvidenceDeclarationFactStoreTests
             case "methods-null": type["TestMethodNames"] = null; break;
             case "method-null": type["TestMethodNames"]![0] = null; break;
             case "diagnostics-missing": facts.Remove("ContainsDiagnostics"); break;
+            case "error-diagnostics-missing": facts.Remove("ContainsErrorDiagnostics"); break;
+            case "public-missing": type["Shape"]!.AsObject().Remove("IsPublic"); break;
+            case "static-missing": type["Shape"]!.AsObject().Remove("IsStatic"); break;
+            case "record-missing": type["Shape"]!.AsObject().Remove("IsRecord"); break;
             case "directives-missing": facts.Remove("ContainsDirectives"); break;
             case "base-list-missing": type.Remove("HasBaseList"); break;
             case "attributes-null": type["MethodAttributeNames"] = null; break;
@@ -444,6 +487,9 @@ public sealed class FocusedEvidenceDeclarationFactStoreTests
     private static JsonObject EmptyTypeShape() => new()
     {
         ["IsAbstract"] = false,
+        ["IsPublic"] = false,
+        ["IsStatic"] = false,
+        ["IsRecord"] = false,
         ["HasTypeParameters"] = false,
         ["IsStructOrInterface"] = false,
         ["IsNested"] = false,

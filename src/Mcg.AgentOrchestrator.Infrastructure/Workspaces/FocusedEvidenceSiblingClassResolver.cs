@@ -1,6 +1,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using DeclaredType = Mcg.AgentOrchestrator.Infrastructure.FocusedEvidenceDeclarationFacts.DeclaredType;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -10,11 +11,24 @@ internal static class FocusedEvidenceSiblingClassResolver
         string worktreePath,
         string project,
         string requestedClass)
-        => ResolveSiblingTestClassNames(
-            worktreePath, project, requestedClass,
-            FocusedEvidenceSiblingClassMemo.Shared,
-            File.ReadAllText,
-            (path, text) => CSharpSyntaxTree.ParseText(text, path: path));
+    {
+        try
+        {
+            if (!TryGetProjectDirectory(worktreePath, project, out var projectDirectory))
+            {
+                return [];
+            }
+
+            var store = FocusedEvidenceDeclarationFactStore.Current;
+            return FocusedEvidenceSiblingClassMemo.Shared.GetOrCompute(worktreePath, project, requestedClass,
+                projectDirectory, () => ResolveFromFacts(worktreePath, projectDirectory, requestedClass, store));
+        }
+        catch
+        {
+            // Keep failures outside the memo so a later call can retry.
+            return [];
+        }
+    }
 
     internal static IReadOnlyList<string> ResolveSiblingTestClassNames(
         string worktreePath,
@@ -61,6 +75,193 @@ internal static class FocusedEvidenceSiblingClassResolver
         }
     }
 
+    private static IReadOnlyList<string> ResolveFromFacts(
+        string worktreePath,
+        string projectDirectory,
+        string requestedClass,
+        FocusedEvidenceDeclarationFactStore store)
+    {
+        var normalizedRequestedClass = requestedClass.Trim();
+        if (normalizedRequestedClass.Length == 0)
+        {
+            return [];
+        }
+
+        var requestedSimpleName = normalizedRequestedClass.Split('.').Last();
+        var sourcePaths = DiscoverSourcePaths(projectDirectory);
+        var sourceTexts = new string[sourcePaths.Length];
+        var fileFacts = new FocusedEvidenceDeclarationFacts?[sourcePaths.Length];
+        var requestedDeclarations = new List<(int Index, DeclaredType Declaration)>();
+
+        for (var index = 0; index < sourcePaths.Length; index++)
+        {
+            var source = File.ReadAllText(sourcePaths[index]);
+            sourceTexts[index] = source;
+            if (!source.Contains(requestedSimpleName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var facts = ReadCandidateFacts(store, worktreePath, sourcePaths[index], source);
+            if (facts.ContainsErrorDiagnostics)
+            {
+                return [];
+            }
+
+            fileFacts[index] = facts;
+            requestedDeclarations.AddRange(facts.Types
+                .Where(declaration => !declaration.Shape.IsNested && TypeMatches(declaration, normalizedRequestedClass))
+                .Select(declaration => (index, declaration)));
+        }
+
+        if (requestedDeclarations.Count != 1)
+        {
+            return [];
+        }
+
+        var (declaringIndex, requestedDeclaration) = requestedDeclarations[0];
+        var abstractClasses = fileFacts[declaringIndex]!.Types
+            .Where(declaration => IsTopLevelClass(declaration) && declaration.Shape.IsAbstract)
+            .Select(declaration => declaration.SimpleName)
+            .ToHashSet(StringComparer.Ordinal);
+        var familyBaseNames = requestedDeclaration.Shape.BaseTypeNames.Select(SimpleTypeName)
+            .Where(abstractClasses.Contains)
+            .ToHashSet(StringComparer.Ordinal);
+        var siblingFileIndices = new List<int> { declaringIndex };
+        if (familyBaseNames.Count > 0)
+        {
+            ExpandFamilyFromFacts(store, worktreePath, sourcePaths, sourceTexts, fileFacts, familyBaseNames);
+            for (var index = 0; index < sourcePaths.Length; index++)
+            {
+                if (fileFacts[index] is { ContainsErrorDiagnostics: false } &&
+                    !sourcePaths[index].Equals(sourcePaths[declaringIndex], StringComparison.OrdinalIgnoreCase))
+                {
+                    siblingFileIndices.Add(index);
+                }
+            }
+        }
+
+        var declarations = siblingFileIndices.SelectMany(index =>
+            fileFacts[index]!.Types.Select(declaration => (Index: index, Declaration: declaration))).ToArray();
+        var classDeclarationsByName = declarations.Select(item => item.Declaration)
+            .Where(IsTopLevelClass)
+            .GroupBy(declaration => declaration.SimpleName, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
+
+        return declarations
+            .Where(item => IsQualifyingTestClass(item.Declaration))
+            .Where(item => !TypeMatches(item.Declaration, normalizedRequestedClass))
+            .Where(item => item.Index == declaringIndex ||
+                DerivesFromFamily(item.Declaration, familyBaseNames, classDeclarationsByName, []))
+            .Select(item => item.Declaration.SimpleName)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static void ExpandFamilyFromFacts(
+        FocusedEvidenceDeclarationFactStore store,
+        string worktreePath,
+        string[] sourcePaths,
+        string[] sourceTexts,
+        FocusedEvidenceDeclarationFacts?[] fileFacts,
+        HashSet<string> familyBaseNames)
+    {
+        var familyNames = new HashSet<string>(familyBaseNames, StringComparer.Ordinal);
+        int previousNameCount;
+        do
+        {
+            previousNameCount = familyNames.Count;
+            foreach (var facts in fileFacts)
+            {
+                if (facts is { ContainsErrorDiagnostics: false })
+                {
+                    AddFamilyNames(facts, familyNames);
+                }
+            }
+
+            for (var index = 0; index < sourcePaths.Length; index++)
+            {
+                if (fileFacts[index] is not null || !familyNames.Any(name =>
+                        sourceTexts[index].Contains(name, StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+
+                var facts = ReadCandidateFacts(store, worktreePath, sourcePaths[index], sourceTexts[index]);
+                fileFacts[index] = facts;
+                if (!facts.ContainsErrorDiagnostics)
+                {
+                    AddFamilyNames(facts, familyNames);
+                }
+            }
+        }
+        while (familyNames.Count != previousNameCount);
+    }
+
+    private static FocusedEvidenceDeclarationFacts ReadCandidateFacts(
+        FocusedEvidenceDeclarationFactStore store, string worktreePath, string path, string source)
+    {
+        try
+        {
+            return store.ReadSnapshot(path, worktreePath, source);
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            var root = CSharpSyntaxTree.ParseText(source, path: path).GetCompilationUnitRoot();
+            FocusedEvidenceParsedRootCache.RecordParse(path);
+            return FocusedEvidenceDeclarationFacts.Extract(root);
+        }
+    }
+
+    private static void AddFamilyNames(FocusedEvidenceDeclarationFacts facts, HashSet<string> familyNames)
+    {
+        foreach (var declaration in facts.Types)
+        {
+            if (!declaration.Shape.IsNested && declaration.Shape.BaseTypeNames.Select(SimpleTypeName).Any(familyNames.Contains))
+            {
+                familyNames.Add(declaration.SimpleName);
+            }
+        }
+    }
+
+    private static bool IsTopLevelClass(DeclaredType declaration) =>
+        !declaration.Shape.IsNested && !declaration.Shape.IsRecord && declaration.IsClassOrNonStructRecord;
+
+    private static bool IsQualifyingTestClass(DeclaredType declaration) =>
+        !declaration.Shape.IsNested && declaration.Shape.IsPublic &&
+        !declaration.Shape.IsAbstract && !declaration.Shape.IsStatic && declaration.IsClassOrNonStructRecord &&
+        declaration.Shape.Methods.Any(method => method.Attributes.Any(attribute => IsTestAttribute(attribute.Name)));
+
+    private static bool TypeMatches(DeclaredType declaration, string requestedClass) =>
+        declaration.SimpleName.Equals(requestedClass, StringComparison.Ordinal) ||
+        declaration.QualifiedName.Equals(requestedClass, StringComparison.Ordinal) ||
+        declaration.QualifiedName.EndsWith('.' + requestedClass, StringComparison.Ordinal);
+
+    private static bool DerivesFromFamily(
+        DeclaredType declaration,
+        IReadOnlySet<string> familyBaseNames,
+        IReadOnlyDictionary<string, DeclaredType[]> classDeclarationsByName,
+        HashSet<string> visited)
+    {
+        foreach (var baseName in declaration.Shape.BaseTypeNames.Select(SimpleTypeName))
+        {
+            if (familyBaseNames.Contains(baseName))
+            {
+                return true;
+            }
+
+            if (visited.Add(baseName) && classDeclarationsByName.TryGetValue(baseName, out var baseDeclarations) &&
+                baseDeclarations.Length == 1 &&
+                DerivesFromFamily(baseDeclarations[0], familyBaseNames, classDeclarationsByName, visited))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static IReadOnlyList<string> ResolveSiblingTestClassNamesCore(
         string worktreePath,
         string project,
@@ -80,22 +281,8 @@ internal static class FocusedEvidenceSiblingClassResolver
             return [];
         }
 
-        var nestedProjectDirectories = Directory
-            .EnumerateFiles(projectDirectory, "*.csproj", SearchOption.AllDirectories)
-            .Select(Path.GetDirectoryName)
-            .Where(path =>
-                !string.IsNullOrWhiteSpace(path) &&
-                !path.Equals(projectDirectory, StringComparison.OrdinalIgnoreCase))
-            .Cast<string>()
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
         var requestedSimpleName = normalizedRequestedClass.Split('.').Last();
-        var sourcePaths = Directory
-            .EnumerateFiles(projectDirectory, "*.cs", SearchOption.AllDirectories)
-            .Where(path =>
-                !HasGeneratedPathSegment(path) &&
-                !nestedProjectDirectories.Any(directory => IsWithinDirectory(path, directory)))
-            .ToArray();
+        var sourcePaths = DiscoverSourcePaths(projectDirectory);
         var requestedDeclarations = new List<TypeDeclarationSyntax>();
         var sourceTexts = new string[sourcePaths.Length];
         var parsedRoots = new CompilationUnitSyntax?[sourcePaths.Length];
@@ -244,6 +431,24 @@ internal static class FocusedEvidenceSiblingClassResolver
         }
     }
 
+    private static string[] DiscoverSourcePaths(string projectDirectory)
+    {
+        var nestedProjectDirectories = Directory
+            .EnumerateFiles(projectDirectory, "*.csproj", SearchOption.AllDirectories)
+            .Select(Path.GetDirectoryName)
+            .Where(path =>
+                !string.IsNullOrWhiteSpace(path) &&
+                !path.Equals(projectDirectory, StringComparison.OrdinalIgnoreCase))
+            .Cast<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return Directory.EnumerateFiles(projectDirectory, "*.cs", SearchOption.AllDirectories)
+            .Where(path =>
+                !HasGeneratedPathSegment(path) &&
+                !nestedProjectDirectories.Any(directory => IsWithinDirectory(path, directory)))
+            .ToArray();
+    }
+
     private static bool TryGetProjectDirectory(string worktreePath, string project, out string projectDirectory)
     {
         projectDirectory = string.Empty;
@@ -295,9 +500,10 @@ internal static class FocusedEvidenceSiblingClassResolver
         return false;
     }
 
-    private static string SimpleTypeName(BaseTypeSyntax baseType)
+    private static string SimpleTypeName(BaseTypeSyntax baseType) => SimpleTypeName(baseType.Type.ToString());
+
+    private static string SimpleTypeName(string name)
     {
-        var name = baseType.Type.ToString();
         var genericStart = name.IndexOf('<');
         if (genericStart >= 0)
         {

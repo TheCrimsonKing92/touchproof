@@ -9,6 +9,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal sealed record FocusedEvidenceDeclarationFacts(
     ImmutableArray<FocusedEvidenceDeclarationFacts.DeclaredType> Types,
     [property: JsonRequired] bool ContainsDiagnostics,
+    [property: JsonRequired] bool ContainsErrorDiagnostics,
     [property: JsonRequired] bool ContainsDirectives,
     ImmutableArray<FocusedEvidenceUsingDirectiveFact> Usings)
 {
@@ -22,7 +23,10 @@ internal sealed record FocusedEvidenceDeclarationFacts(
 
     internal static FocusedEvidenceDeclarationFacts Extract(CompilationUnitSyntax root) =>
         new(root.DescendantNodes().OfType<TypeDeclarationSyntax>().Select(ExtractType).ToImmutableArray(),
-            root.ContainsDiagnostics, root.ContainsDirectives,
+            root.ContainsDiagnostics,
+            root.SyntaxTree.GetDiagnostics().Any(diagnostic =>
+                diagnostic.Severity == DiagnosticSeverity.Error),
+            root.ContainsDirectives,
             root.DescendantNodes().OfType<UsingDirectiveSyntax>()
                 .Select(item => new FocusedEvidenceUsingDirectiveFact(item.Name?.ToString(), item.Alias is not null,
                     item.Parent is CompilationUnitSyntax && item.GlobalKeyword.IsKind(SyntaxKind.GlobalKeyword)))
@@ -47,6 +51,9 @@ internal sealed record FocusedEvidenceDeclarationFacts(
         }
         var shape = new FocusedEvidenceTypeShapeFact(
             type.Modifiers.Any(modifier => modifier.IsKind(SyntaxKind.AbstractKeyword)),
+            type.Modifiers.Any(modifier => modifier.IsKind(SyntaxKind.PublicKeyword)),
+            type.Modifiers.Any(modifier => modifier.IsKind(SyntaxKind.StaticKeyword)),
+            type is RecordDeclarationSyntax,
             type.TypeParameterList is not null,
             type is InterfaceDeclarationSyntax or StructDeclarationSyntax || isRecordStruct,
             type.Ancestors().OfType<TypeDeclarationSyntax>().Any(),
