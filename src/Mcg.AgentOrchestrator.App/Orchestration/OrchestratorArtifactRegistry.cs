@@ -1,10 +1,10 @@
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-// Top-level storage classes describe custody and current policy; budgets are advisory.
+// Storage classes describe custody and current policy. Budgets are advisory.
 internal static class OrchestratorArtifactRegistry
 {
     internal enum WriterKind { Source, Operator, Retired }
-    internal enum RetentionKind { KeepForever, KeepDays, ReclaimAfterGoalTerminalPlusDays, Unmanaged }
+    internal enum RetentionKind { KeepForever, KeepDays, ReclaimAfterGoalTerminalPlusDays, Unmanaged, WorkerBuildScopeToolCacheRetention }
 
     internal sealed record Entry(
         string Pattern, string Owner, WriterKind Writer, string? WriterPath,
@@ -12,6 +12,7 @@ internal static class OrchestratorArtifactRegistry
         string? WriterLiteral = null)
     {
         public string WriterLiteral { get; init; } = WriterLiteral ?? Pattern.Replace("*", "");
+        public Func<string>? ExternalRoot { get; init; }
     }
 
     private const long MiB = 1024L * 1024;
@@ -130,6 +131,12 @@ internal static class OrchestratorArtifactRegistry
             "scripts/Remove-TestSlotFirewallRules.ps1", RetentionKind.Unmanaged, null, 256 * MiB, "Operator script output."),
         new Entry("last-drive.json", "Start-OrchestratorCommand", WriterKind.Source,
             "scripts/Start-OrchestratorCommand.ps1", RetentionKind.KeepForever, null, 256 * MiB, "Last operator launch configuration."),
+        new Entry(WorkerBuildScopeToolCacheIdentity.ClassPattern, "WorkerBuildScopeToolCache", WriterKind.Source,
+            "scripts/WorkerBuildScopeToolCache.ps1", RetentionKind.WorkerBuildScopeToolCacheRetention,
+            WorkerBuildScopeToolCacheRetention.KeepAge, 4 * GiB,
+            "WorkerBuildScopeToolCacheRetention keeps the newest 8 digest entries and all entries written within 2 days.",
+            WriterLiteral: "Get-WorkerBuildScopeToolCacheRoot")
+        { ExternalRoot = WorkerBuildScopeToolCacheIdentity.Root },
         Source("rollback", "App/Orchestration/GoalRollbackPlanner.cs",
             note: "Written only by the CLI accept fast-forward path; last write 2026-09-12; 215 per-goal JSON files."),
         Operator("operator-evidence", RetentionKind.KeepForever),

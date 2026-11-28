@@ -19,7 +19,14 @@ internal static partial class AssemblyTempRedirect
     internal static void Install()
     {
         try { InstallProcessRoot(); }
-        finally { InstallSourceReaderCache(processRootPath); }
+        finally
+        {
+            // Storage health and retention can run in any of the linked test hosts.
+            // Give each host a private publisher root, even if it inherited a live override.
+            var cacheRoot = Path.Combine(processRootPath ?? Path.GetTempPath(), $"scope-cache-{Guid.NewGuid():N}");
+            Environment.SetEnvironmentVariable("MCG_WORKER_BUILD_SCOPE_TOOL_CACHE", cacheRoot);
+            InstallSourceReaderCache(processRootPath);
+        }
     }
 
     // Only the test assembly that compiles the source-reader cache fixture implements this hook.

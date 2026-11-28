@@ -13,7 +13,8 @@ internal enum EvidenceArtifactFamily
     DiagnosticDumps,
     MergeTrainEvidence,
     CohortAcceptanceEvidence,
-    RelaunchBuildCaches
+    RelaunchBuildCaches,
+    WorkerBuildScopeToolCaches
 }
 
 internal enum EvidenceRetentionAction
