@@ -14,7 +14,8 @@ public sealed record BuildReceipt(
     [property: JsonRequired] double? CpuMs,
     [property: JsonRequired] string? CpuMsUnavailableReason,
     [property: JsonRequired] string Cache,
-    [property: JsonRequired] int Version = 1)
+    [property: JsonRequired] int Version = 1,
+    string? RefusalReason = null)
 {
     private static readonly JsonSerializerOptions Json = new()
     {

@@ -1,4 +1,3 @@
-using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using FocusedEvidenceFilter = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.FocusedEvidenceFilter;
 using FocusedEvidenceTokenKind = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.FocusedEvidenceTokenKind;
@@ -75,7 +74,7 @@ internal static partial class FocusedEvidenceRequestResolver
         return new FocusedEvidenceBudget(Math.Max(totalTargets, expandedTargets), matchesByProject);
     }
 
-    private static IReadOnlyDictionary<string, string> ReadFocusedEvidenceBudgetDeclarations(
+    internal static IReadOnlyDictionary<string, string> ReadFocusedEvidenceBudgetDeclarations(
         string worktreePath, string project, IReadOnlyList<string> terms)
     {
         var declarations = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -89,7 +88,7 @@ internal static partial class FocusedEvidenceRequestResolver
                     continue;
                 }
 
-                var root = CSharpSyntaxTree.ParseText(text, path: path).GetCompilationUnitRoot();
+                var root = CSharpSourceFileRootReader.Read(path);
                 foreach (var declaration in root.DescendantNodes().OfType<TypeDeclarationSyntax>()
                              .Where(declaration => declaration is ClassDeclarationSyntax or RecordDeclarationSyntax))
                 {

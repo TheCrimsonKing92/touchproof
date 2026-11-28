@@ -60,7 +60,7 @@ internal static class ImpactReplayChangedTestSupportSelection
                     var replaced = false;
                     for (var index = 0; index < files.Length; index++)
                     {
-                        var root = CSharpSyntaxTree.ParseText(File.ReadAllText(files[index])).GetRoot();
+                        var root = CSharpSourceFileRootReader.Read(files[index]);
                         var declarations = root.DescendantNodes().OfType<ClassDeclarationSyntax>()
                             .Where(node => FullName(node) == name && node.AttributeLists.SelectMany(list => list.Attributes)
                                 .Any(IsCollection)).ToArray();
