@@ -15,9 +15,12 @@ internal sealed class AcceptanceSelectedExecutionSession(
     IReadOnlyList<string>? obligationSelectors = null,
     string? integrationBranch = null)
 {
+    internal const string SelectionReadPart = "selected-execution-selection";
+
     private readonly AcceptanceSelectedExecutionMode _effectiveMode = mode == AcceptanceSelectedExecutionMode.Enforce && suspension is not null
         ? AcceptanceSelectedExecutionMode.Shadow : mode;
     private readonly Stopwatch _inputTimer = new();
+    private readonly SelectionSourceTexts _sourceTexts = new();
     private AcceptanceSelectedExecutionInput? _input;
     private AcceptanceSelectedExecutionPlan? _plan;
     private IReadOnlyList<AcceptanceTestClassDescriptor> _classes = [];
@@ -87,7 +90,8 @@ internal sealed class AcceptanceSelectedExecutionSession(
         _inputTimer.Start();
         try
         {
-            return _input = read is null ? AcceptanceImpactSelectionReader.ReadLive(worktreePath, changes, engineSettings, integrationBranch)
+            return _input = read is null ? SelectionFileReadProbe.InPart(SelectionReadPart, () =>
+                AcceptanceImpactSelectionReader.ReadLive(worktreePath, changes, engineSettings, integrationBranch, _sourceTexts))
                 : read(worktreePath, changes);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -148,9 +152,11 @@ internal sealed class AcceptanceSelectedExecutionSession(
                         !routing.IsTestSource(path)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                     if (productionSources.Length > 0)
                     {
-                        var reach = ReverseDependencyTestImpactReader.Read(worktreePath, productionSources,
-                            propagateShippingSourceReach: true, additionalTargetTestProjects: targets.Select(check => check.Project)
-                                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+                        var reach = SelectionFileReadProbe.InPart(SelectionReadPart, () =>
+                            ReverseDependencyTestImpactReader.Read(worktreePath, productionSources,
+                                propagateShippingSourceReach: true, sourceTexts: _sourceTexts,
+                                additionalTargetTestProjects: targets.Select(check => check.Project)
+                                    .Distinct(StringComparer.OrdinalIgnoreCase).ToArray()));
                         projectReachAvailable = reach.Outcome == ReverseDependencySelectionOutcome.Resolved;
                         if (projectReachAvailable)
                         {
@@ -166,9 +172,11 @@ internal sealed class AcceptanceSelectedExecutionSession(
                         ReverseDependencyTestSelection? testReach = null;
                         try
                         {
-                            testReach = ReverseDependencyTestImpactReader.Read(worktreePath, seeds.MappedSources.ToArray(),
-                                propagateShippingSourceReach: true, additionalTargetTestProjects: targets.Select(check => check.Project)
-                                    .Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+                            testReach = SelectionFileReadProbe.InPart(SelectionReadPart, () =>
+                                ReverseDependencyTestImpactReader.Read(worktreePath, seeds.MappedSources.ToArray(),
+                                    propagateShippingSourceReach: true, sourceTexts: _sourceTexts,
+                                    additionalTargetTestProjects: targets.Select(check => check.Project)
+                                        .Distinct(StringComparer.OrdinalIgnoreCase).ToArray()));
                         }
                         catch (Exception ex) when (ex is not OperationCanceledException)
                         {

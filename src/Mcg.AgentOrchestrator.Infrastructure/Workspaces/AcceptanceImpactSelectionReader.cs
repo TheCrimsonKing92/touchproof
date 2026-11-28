@@ -6,12 +6,17 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class AcceptanceImpactSelectionReader
 {
     internal static AcceptanceSelectedExecutionInput ReadLive(string checkout, IReadOnlyList<string> changedFiles,
-        AcceptanceGateEngineSettings? engineSettings = null, string? integrationBranch = null)
+        AcceptanceGateEngineSettings? engineSettings = null, string? integrationBranch = null,
+        SelectionSourceTexts? sourceTexts = null)
     {
         var settings = engineSettings ?? AcceptanceGateEngineSettings.Load(checkout);
         var routing = new ImpactReplayChangedSourceRouting(checkout);
         IReadOnlyList<AcceptanceTestClassDescriptor> classes;
-        try { classes = AcceptanceTestClassSourceScanner.Scan(checkout); }
+        try
+        {
+            classes = sourceTexts is null ? AcceptanceTestClassSourceScanner.Scan(checkout)
+                : AcceptanceTestClassSourceScanner.Scan(checkout, sourceTexts);
+        }
         catch (Exception error) when (error is InvalidDataException or IOException or UnauthorizedAccessException)
         {
             string Relative(string path) => Path.GetRelativePath(checkout, Path.GetFullPath(path, checkout)).Replace('\\', '/');
@@ -30,7 +35,8 @@ internal static class AcceptanceImpactSelectionReader
         var impact = Read(checkout, changedFiles, routing, sources, classes, guards,
             ChangedFileTestClassPathMapper.TestProjectDirectories(settings), bypassCache: false,
             changedLineRanges: changedLineRanges, scanFiles: scanFiles, scanChanges: scanChanges,
-            supportClosureThreshold: settings.SupportClosureClassThreshold, scopeChangedTestsByProject: true);
+            supportClosureThreshold: settings.SupportClosureClassThreshold, scopeChangedTestsByProject: true,
+            sourceTexts: sourceTexts);
         var selection = impact.Selection.Outcome == ReverseDependencySelectionOutcome.Resolved &&
             impact.ChangedTests.AbandonReason is { } reason
             ? ReverseDependencyTestSelection.Abandoned(ReverseDependencyDegradationKind.ChangedFileUnmapped, reason)
@@ -56,7 +62,7 @@ internal static class AcceptanceImpactSelectionReader
         IReadOnlyList<AssemblyScanningGuardTestClasses.ScanFile>? scanFiles = null,
         IReadOnlyList<string>? scanChanges = null,
         int supportClosureThreshold = ImpactReplayChangedSupportReferenceScan.DefaultClosureThreshold,
-        bool scopeChangedTestsByProject = false)
+        bool scopeChangedTestsByProject = false, SelectionSourceTexts? sourceTexts = null)
     {
         var changedSources = changedFiles.Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -65,7 +71,7 @@ internal static class AcceptanceImpactSelectionReader
         var selection = productionSources.Length == 0 && changedTests.Length > 0
             ? ReverseDependencyTestSelection.Resolved([])
             : ReverseDependencyTestImpactReader.Read(checkout, productionSources, bypassCache: bypassCache,
-                propagateShippingSourceReach: true, changedLineRanges: changedLineRanges);
+                propagateShippingSourceReach: true, changedLineRanges: changedLineRanges, sourceTexts: sourceTexts);
         var augmented = ImpactReplayChangedTestClassSelection.Read(checkout, changedTests, selection.TestClassNames, routing,
             supportClosureThreshold, sources: sources);
         selection = ImpactReplaySelectionAugmentation.Apply(selection, changedFiles, sources, classes, guards,
