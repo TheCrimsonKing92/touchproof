@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Parallel-safe: kernels, evidence files and git fixtures are isolated per case.
+// Parallel-safe: each case owns its kernel, evidence files and Git fixtures.
 public sealed class GateObligationSelectorPreAdmissionTests
 {
     internal const string Candidate = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -216,6 +216,84 @@ public sealed class GateObligationSelectorPreAdmissionTests
     }
 
     [Fact]
+    public void Admission_SharedRevisionReusesInventoryAcrossWorktreesAndCalls()
+    {
+        using var fixture = new Case("CandidateIdentityTests");
+        var kernel = fixture.Kernel;
+        var goals = new List<Goal> { fixture.Goal };
+        foreach (var selector in new[] { "MissingTests", "AcceptanceCriteriaParserTests" })
+        {
+            var goal = kernel.CreateGoal($"Verify {selector}", [new(TaskId.New(), "Implement", AgentRole.Developer)]);
+            kernel.RecordGoalRefinement(goal.Id,
+                new RefinedSpec(goal.Objective, ["Worker checks output"], VerificationClass.TestVerifiable, [], []));
+            kernel = GateTestObligationIntakeTests.Seed(kernel, goal, [selector]);
+            goals.Add(goal);
+        }
+
+        var repo = Path.Combine(fixture.Evidence.Root, "repo");
+        WriteInventoryProjects(repo);
+        AdditiveConflictGitFixture.Git(repo, "init");
+        AdditiveConflictGitFixture.Git(repo, "add", "-A");
+        AdditiveConflictGitFixture.Git(repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+            "commit", "--no-gpg-sign", "-m", "Declare test inventory");
+        var revision = AdditiveConflictGitFixture.Git(repo, "rev-parse", "--verify", "HEAD").Trim();
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.Evidence.Root, executionDirectory: repo);
+        foreach (var goal in goals)
+        {
+            var checkout = GoalWorktrees.WorktreePath(repo, goal.Id);
+            AdditiveConflictGitFixture.Git(repo, "worktree", "add", "--detach", checkout, revision);
+            Assert.Equal(checkout, workspace.ResolveExecutionDirectory(goal.Id));
+            Assert.Equal(revision, AdditiveConflictGitFixture.Git(checkout, "rev-parse", "--verify", "HEAD").Trim());
+            Assert.Empty(AdditiveConflictGitFixture.Git(checkout, "status", "--porcelain", "--untracked-files=normal"));
+        }
+
+        var snapshot = kernel.ExportSnapshot();
+        IReadOnlySet<string> Evaluate(IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> candidates,
+            DeclaredTestInventoryRevisionStore store, List<string> lines)
+        {
+            var run = AgentOrchestratorKernel.FromSnapshot(snapshot);
+            var eligibleGoals = candidates.Select(candidate => run.GetGoal(candidate.GoalId)).ToArray();
+            return GateObligationSelectorPreAdmissionClassifier.HeldGoalIds(run, eligibleGoals, candidates,
+                workspace, lines.Add, store);
+        }
+
+        var candidates = goals.Select(goal => Ready(goal, revision)).ToArray();
+        var sharedStore = new DeclaredTestInventoryRevisionStore();
+        var batchLines = new List<string>();
+        var held = Evaluate(candidates, sharedStore, batchLines);
+        Assert.Equal(1, sharedStore.Reads);
+        Assert.Equal(goals[1].Id.Value, Assert.Single(held));
+        Assert.Single(batchLines, line => line.Contains("selector-not-found: MissingTests", StringComparison.Ordinal));
+
+        var isolatedHeld = new HashSet<string>(StringComparer.Ordinal);
+        var isolatedLines = new List<string>();
+        foreach (var candidate in candidates)
+        {
+            var isolatedStore = new DeclaredTestInventoryRevisionStore();
+            isolatedHeld.UnionWith(Evaluate([candidate], isolatedStore, isolatedLines));
+            Assert.Equal(1, isolatedStore.Reads);
+        }
+        Assert.True(held.SetEquals(isolatedHeld));
+        Assert.Equal(isolatedLines, batchLines);
+
+        var movedCheckout = workspace.ResolveExecutionDirectory(goals[0].Id);
+        AdditiveConflictGitFixture.Git(movedCheckout, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+            "commit", "--no-gpg-sign", "--allow-empty", "-m", "Advance one worktree");
+        var movedRevision = AdditiveConflictGitFixture.Git(movedCheckout, "rev-parse", "--verify", "HEAD").Trim();
+        Assert.NotEqual(revision, movedRevision);
+        var coldLines = new List<string>();
+        var coldHeld = Evaluate([candidates[0]], new DeclaredTestInventoryRevisionStore(), coldLines);
+        Assert.Equal(goals[0].Id.Value, Assert.Single(coldHeld));
+        Assert.Contains($"inventory unavailable at candidate {revision}: candidate revision mismatch (worktree HEAD {movedRevision})",
+            Assert.Single(coldLines));
+
+        var repeatedLines = new List<string>();
+        Assert.True(held.SetEquals(Evaluate(candidates, sharedStore, repeatedLines)));
+        Assert.Equal(batchLines, repeatedLines);
+        Assert.Equal(1, sharedStore.Reads);
+    }
+
+    [Fact]
     public void MixedSelectors_RecordUniqueAnswerEvenWhenSiblingHolds()
     {
         using var fixture = new Case("PlannedTests", "MissingTests");
@@ -363,6 +441,35 @@ public sealed class GateObligationSelectorPreAdmissionTests
                 () => throw new InvalidOperationException("Dirty worktree reached the scan")), _ => Assert.Fail("Do not record a rebind"));
         Assert.Contains($"inventory unavailable at candidate {Candidate}: worktree is not clean at the candidate",
             Assert.Single(result.HoldLines));
+    }
+
+    [Fact]
+    public void InventoryStore_ReusesSuccessfulReadsByRevisionAndProjectHome()
+    {
+        var store = new DeclaredTestInventoryRevisionStore();
+        var inventory = Inventory("Fixture.CandidateIdentityTests");
+        var calls = 0;
+        IReadOnlyList<AcceptanceTestClassDescriptor> Scan()
+        {
+            calls++;
+            return inventory;
+        }
+
+        Assert.Same(inventory, store.Read(Candidate, "home", Scan));
+        Assert.Same(inventory, store.Read(Candidate, "home", Scan));
+        Assert.Equal(1, calls);
+
+        Assert.Same(inventory, store.Read(NextCandidate, "home", Scan));
+        Assert.Same(inventory, store.Read(Candidate, "other-home", Scan));
+        Assert.Same(inventory, store.Read(Candidate, null, Scan));
+        Assert.Equal(4, calls);
+
+        Assert.Null(store.Read(NextCandidate, "other-home", () => null));
+        Assert.Same(inventory, store.Read(NextCandidate, "other-home", Scan));
+        Assert.Throws<IOException>(() => store.Read(NextCandidate, null, () => throw new IOException("scan failed")));
+        Assert.Same(inventory, store.Read(NextCandidate, null, Scan));
+        Assert.Equal(6, calls);
+        Assert.Equal(8, store.Reads);
     }
 
     [Theory]
@@ -518,12 +625,14 @@ public sealed class GateObligationSelectorPreAdmissionTests
     internal static AcceptanceTestClassDescriptor[] Inventory(params string[] names) =>
         names.Select(name => new AcceptanceTestClassDescriptor(name, null)).ToArray();
 
-    private static ConductorSpeculativeAcceptanceCandidate Ready(Goal goal)
+    private static ConductorSpeculativeAcceptanceCandidate Ready(Goal goal) => Ready(goal, Candidate);
+
+    private static ConductorSpeculativeAcceptanceCandidate Ready(Goal goal, string revision)
     {
         return new(goal.Id, new GateReadyCandidateProjectionResult.Ready(new GateReadyCandidateProjection(
             goal.Id, GoalLifecycleState.Verified, GateReadyVerificationState.Satisfied, ChangeRiskTier.Behavior,
             ConductorTransitionDecision.Auto, [$"src/{goal.Id.Value}.cs"], [$"resource:{goal.Id.Value}"],
-            new(Candidate, Candidate, GateReadyMergeStatus.Clean, GateReadyMergeReason.NoConflictsDetected))));
+            new(revision, revision, GateReadyMergeStatus.Clean, GateReadyMergeReason.NoConflictsDetected))));
     }
 
     internal sealed class Case : IDisposable
@@ -547,6 +656,6 @@ public sealed class GateObligationSelectorPreAdmissionTests
             GateObligationSelectorPreAdmissionClassifier.Apply(Kernel, Goal, Evidence.OrchestratorDirectory,
                 candidateRevision, () => inventory, emit ?? (_ => { }));
 
-        public void Dispose() => Evidence.Dispose();
+        public void Dispose() => SharedTestSupport.RemoveTempDirectory(Evidence.Root);
     }
 }

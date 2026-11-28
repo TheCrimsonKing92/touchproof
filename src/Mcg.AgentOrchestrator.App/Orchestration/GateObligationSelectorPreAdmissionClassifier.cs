@@ -167,10 +167,11 @@ internal static class GateObligationSelectorPreAdmissionClassifier
 
     internal static IReadOnlySet<string> HeldGoalIds(AgentOrchestratorKernel kernel,
         IReadOnlyList<Goal> eligibleGoals, IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> candidates,
-        OrchestratorWorkspace? workspace, Action<string> emit)
+        OrchestratorWorkspace? workspace, Action<string> emit, DeclaredTestInventoryRevisionStore? inventoryStore = null)
     {
         var held = new HashSet<string>(StringComparer.Ordinal);
         var goals = eligibleGoals.ToDictionary(goal => goal.Id);
+        var store = inventoryStore ?? new DeclaredTestInventoryRevisionStore();
         foreach (var candidate in candidates)
         {
             if (!goals.TryGetValue(candidate.GoalId, out var goal) ||
@@ -181,9 +182,17 @@ internal static class GateObligationSelectorPreAdmissionClassifier
                 var result = ApplyWithCandidateInventory(kernel, goal, workspace?.OrchestratorDirectory, revision, () =>
                 {
                     if (workspace is null) return new(null, "goal workspace is unavailable");
-                    var root = workspace.ResolveExecutionDirectory(goal.Id);
-                    return ReadCandidateInventory(revision, () => ReadWorktreeRevision(root),
-                        () => ReadDeclaredInventory(root, workspace.ProjectHomeDirectoryOrNull));
+                    var projectHome = workspace.ProjectHomeDirectoryOrNull;
+                    string? unavailableCause = null;
+                    var classes = store.Read(revision, projectHome, () =>
+                    {
+                        var root = workspace.ResolveExecutionDirectory(goal.Id);
+                        var inventory = ReadCandidateInventory(revision, () => ReadWorktreeRevision(root),
+                            () => ReadDeclaredInventory(root, projectHome));
+                        unavailableCause = inventory.UnavailableCause;
+                        return inventory.Classes;
+                    });
+                    return new(classes, unavailableCause);
                 }, emit);
                 if (!result.Hold) continue;
                 held.Add(goal.Id.Value);

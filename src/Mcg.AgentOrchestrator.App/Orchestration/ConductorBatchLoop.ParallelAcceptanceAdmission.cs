@@ -7,6 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorBatchLoop
 {
     private readonly PreLandingMergeConflictEscalationLedger _preLandingMergeConflictLedger = new();
+    private readonly DeclaredTestInventoryRevisionStore _declaredInventoryStore = new();
 
     private ParallelAcceptanceBatchState BeginParallelAcceptanceBatch(
         IReadOnlyList<Goal> eligible,
@@ -341,18 +342,18 @@ internal sealed partial class ConductorBatchLoop
                 goal.Status, _acceptanceEngineCircuit?.Read()));
     }
 
-    private void AdmitMergeTrain(
-        ParallelAcceptanceBatchState state,
+    private void AdmitMergeTrain(ParallelAcceptanceBatchState state,
         ConductorDriver driver, AgentOrchestratorKernel kernel,
         ConductorAutonomyPolicy policy, int tick, List<string> changedGoalLines)
     {
         var bound = MergeTrainOldestWaiterPassBound.For(this);
-        if (state.GroupedAdmissionOpen &&
-            state.CohortEligible.Length >= ConductorMergeTrainSelector.MinimumMembers &&
+        if (state.GroupedAdmissionOpen && state.CohortEligible.Length >= ConductorMergeTrainSelector.MinimumMembers &&
             bound.Select(
-                state.ProductionCandidates,
-                driver.ReadSuppressedGroupedPairs(),
-                TrainIneligibleCriterionEvidenceGoalIds(state.CohortEligible, GateObligationSelectorPreAdmissionClassifier.HeldGoalIds(kernel, state.CohortEligible, state.ProductionCandidates, _workspace, line => RecordParallelAcceptanceProgress(line, changedGoalLines))), driver.ReadCohortAttributedMemberKeys(),
+                state.ProductionCandidates, driver.ReadSuppressedGroupedPairs(),
+                TrainIneligibleCriterionEvidenceGoalIds(state.CohortEligible,
+                    GateObligationSelectorPreAdmissionClassifier.HeldGoalIds(kernel, state.CohortEligible, state.ProductionCandidates,
+                        _workspace, line => RecordParallelAcceptanceProgress(line, changedGoalLines), _declaredInventoryStore)),
+                driver.ReadCohortAttributedMemberKeys(),
                 driver.ReadTrainImplicatedMemberKeys(), tick, line => RecordParallelAcceptanceProgress(line, changedGoalLines)) is { } trainSelection &&
             GoalSchedulingOrder.GroupKeepsHead(trainSelection.Members.Select(member => member.GoalId.Value), state.CohortEligible, state.LiveAttemptGoalIds) &&
             bound.AllowsTrain(state.OldestWaiterObservation.Waiter, trainSelection.Members.Select(member => member.GoalId).ToArray(),
@@ -362,8 +363,7 @@ internal sealed partial class ConductorBatchLoop
                     state.ActiveAttemptSlotIndexes, state.ActiveCandidates, state.LiveAttemptGoalIds, state.OldestWaiterObservation, false, tick),
                 tick, line => RecordParallelAcceptanceProgress(line, changedGoalLines)))
         {
-            var trainRun = driver.RunMergeTrain(
-                trainSelection, state.CohortEligible, policy,
+            var trainRun = driver.RunMergeTrain(trainSelection, state.CohortEligible, policy,
                 onGateAdmitted: () => driver.RecordMergeTrainAdmissionFairness(trainSelection),
                 runGateInBackground: true);
             state.GroupedAdmissionOpen = trainRun.MemberResults.Count > 0;
