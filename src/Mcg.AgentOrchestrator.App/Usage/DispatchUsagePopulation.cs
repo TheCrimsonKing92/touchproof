@@ -12,11 +12,12 @@ internal sealed record DispatchUsagePopulation(
     IReadOnlyList<DispatchUsageIdentity> Conflicts)
 {
     internal static DispatchUsagePopulation Read(
-        SqliteOrchestratorStateRepository repository, DateTimeOffset? since = null, string? role = null)
+        SqliteOrchestratorStateRepository repository, DateTimeOffset? since = null, string? role = null,
+        DateTimeOffset? until = null)
     {
         // Archival publishes the archive row and hot stub in one transaction. Reading live
         // first can observe both copies during the handoff, but cannot miss both.
-        var eligible = Eligibility(since, role);
+        var eligible = Eligibility(since, role, until);
         var live = ReadLive(repository.LoadAsync().GetAwaiter().GetResult().Goals, eligible);
         var archived = repository.ReadArchivedDispatchUsageAsync(eligible).GetAwaiter().GetResult();
         return MergeArchived(live, archived);
@@ -24,15 +25,17 @@ internal sealed record DispatchUsagePopulation(
 
     internal static DispatchUsagePopulation Build(
         IEnumerable<Goal> goals, DateTimeOffset? since = null, string? role = null,
-        IEnumerable<ArchivedDispatchUsage>? archived = null)
+        IEnumerable<ArchivedDispatchUsage>? archived = null, DateTimeOffset? until = null)
     {
-        var eligible = Eligibility(since, role);
+        var eligible = Eligibility(since, role, until);
         return MergeArchived(ReadLive(goals, eligible),
             (archived ?? []).Where(row => eligible(row.Role, row.Dispatch.DispatchedAt)));
     }
 
-    private static Func<AgentRole, DateTimeOffset, bool> Eligibility(DateTimeOffset? since, string? role) =>
+    private static Func<AgentRole, DateTimeOffset, bool> Eligibility(
+        DateTimeOffset? since, string? role, DateTimeOffset? until) =>
         (requiredRole, dispatchedAt) => (since is null || dispatchedAt >= since.Value) &&
+            (until is null || dispatchedAt < until.Value) &&
             (role is null || requiredRole.ToString().Equals(role, StringComparison.OrdinalIgnoreCase));
 
     private static Dictionary<DispatchUsageIdentity, Selection> ReadLive(

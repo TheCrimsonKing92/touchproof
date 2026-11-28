@@ -223,6 +223,8 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
             getLandingFileScopes: _ =>
                 ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidenceReuse.cs"],
             executionDirectory: InfrastructureTestSupport.FindRepositoryRoot());
+        driver.FindingEvidenceRequestReceiptRecorder = (goalId, taskId, receipt, message) =>
+            kernel.RecordFindingEvidenceRequest(goalId, taskId, receipt, message);
 
         RecordTesterEvidenceOnlyFinding(kernel, goal, tester, finding);
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
@@ -233,8 +235,8 @@ public sealed class ConductorDriverTestsFindingEvidenceReuse : IDisposable
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.Equal(1, focusedRuns);
-        Assert.Contains(goal.Timeline, item =>
-            item.Message.Contains("disposition=reused-red", StringComparison.Ordinal));
+        Assert.NotNull(ReusedFindingEvidenceRequestReceiptTests.FindReuseRecord(
+            goal.Timeline, tester.Id, FindingEvidenceRequestReceiptDecision.ReusedRed));
     }
 
     [Xunit.Fact]

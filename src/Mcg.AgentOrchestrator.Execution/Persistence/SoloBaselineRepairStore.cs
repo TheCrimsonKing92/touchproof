@@ -10,12 +10,13 @@ internal sealed record SoloRepairFinding(string Candidate, string Main, string B
     string Attempt, SoloAcceptanceArtifact? Proof, IReadOnlyList<SoloAcceptanceArtifact> CandidateArtifacts,
     IReadOnlyList<SoloAcceptanceArtifact> BaselineArtifacts, string? Reason, string? Feedback = null)
 {
-    // Keep existing group and attribution keys when the executable selection is qualified by path.
+    // Preserve legacy group and attribution keys when the executable selection is qualified by path.
     public string? LegacyRequest { get; init; }
     public string? ProofBaselineCheck { get; init; }
     public bool LaneEnvironmentVerified { get; init; }
     internal string? RequestIdentity => LegacyRequest ?? Request;
-    internal string GroupKey => SoloBaselineRepairStore.Key(Baseline.ToLowerInvariant(), Check, Project,
+    internal string GroupKey => SoloBaselineRepairStore.Key(Project, Identity);
+    internal string LegacyGroupKey => SoloBaselineRepairStore.Key(Baseline.ToLowerInvariant(), Check, Project,
         RequestIdentity, BaselineCheck, Identity);
     internal string Key => SoloBaselineRepairStore.Key(Candidate, Main, Check, Identity);
     internal bool HasSameSelection(SoloRepairFinding other) =>
@@ -49,6 +50,8 @@ internal sealed class SoloBaselineRepairStore
             CREATE TABLE IF NOT EXISTS solo_repair_finding (
                 goal TEXT NOT NULL, identity_key TEXT NOT NULL, rank INTEGER NOT NULL, finding TEXT NOT NULL,
                 PRIMARY KEY (goal, identity_key));
+            CREATE INDEX IF NOT EXISTS solo_repair_finding_test ON solo_repair_finding (
+                json_extract(finding, '$.Project'), json_extract(finding, '$.Identity')) WHERE rank = 3;
             CREATE TABLE IF NOT EXISTS solo_repair_group (
                 group_key TEXT PRIMARY KEY, intake_payload TEXT NOT NULL, repair_goal TEXT);
             CREATE TABLE IF NOT EXISTS solo_repair_dependency (
@@ -77,15 +80,15 @@ internal sealed class SoloBaselineRepairStore
             // Independently proven rows supersede missing evidence for the same revision pair.
             var finding = incoming;
             var rank = finding.Inherited ? 3 : finding.Reason is null ? 2 : finding.Request is not null ? 1 : 0;
-            string? disputedGroup = null;
+            SoloRepairFinding? disputed = null;
             var (storageKey, stored) = ReadSelectionFinding(db, transaction, goal, finding);
             var replacesUnverified = finding is { LaneEnvironmentVerified: true, Reason: null } &&
                 stored is { LaneEnvironmentVerified: false };
-            if (replacesUnverified && stored is { Inherited: true }) disputedGroup = stored.GroupKey;
+            if (replacesUnverified && stored is { Inherited: true }) disputed = stored;
             var prior = rank is 2 or 3 && !replacesUnverified ? stored : null;
             var replaceUnavailableProof = prior is { Reason: null } && prior.Proof != finding.Proof &&
                 isProofAvailable?.Invoke(prior) == false;
-            if (replaceUnavailableProof && prior!.Inherited) disputedGroup = prior.GroupKey;
+            if (replaceUnavailableProof && prior!.Inherited) disputed = prior;
             if (!replaceUnavailableProof && prior is not null && prior.Baseline == finding.Baseline)
             {
                 if (prior.HasConflictingProofs)
@@ -97,7 +100,7 @@ internal sealed class SoloBaselineRepairStore
                 {
                     RecordConflictingProof(db, transaction, goal, storageKey, prior);
                     RecordConflictingProof(db, transaction, goal, storageKey, finding);
-                    if (prior.Inherited) disputedGroup = prior.GroupKey;
+                    if (prior.Inherited) disputed = prior;
                     finding = prior with { Inherited = false, Reason = ConflictingProofs, Feedback = null };
                     rank = 4;
                 }
@@ -113,17 +116,18 @@ internal sealed class SoloBaselineRepairStore
                 ("$replaceUnavailableProof", replaceUnavailableProof), ("$replacesUnverified", replacesUnverified));
             command.Transaction = transaction;
             var changed = command.ExecuteNonQuery() != 0;
-            if (disputedGroup is not null) RemoveConflictingDependency(db, transaction, goal, disputedGroup);
-            if (!finding.Inherited) continue;
+            if (disputed is not null) RemoveConflictingDependency(db, transaction, goal, disputed);
+            if (!changed || !finding.Inherited) continue;
             // The link is an acceptance obligation. Goal-wide dependencies would
             // also block Developer dispatch for introduced failures in this partition.
+            var group = ReadTestGroups(db, transaction, finding).FirstOrDefault();
             using var link = Command(db, """
                 INSERT OR IGNORE INTO solo_repair_dependency SELECT $goal, $group
                 WHERE $goal <> COALESCE((SELECT repair_goal FROM solo_repair_group WHERE group_key = $group), '')
                 """,
-                ("$goal", goal), ("$group", finding.GroupKey));
+                ("$goal", goal), ("$group", group?.Key ?? finding.GroupKey));
             link.Transaction = transaction;
-            if (changed) link.ExecuteNonQuery();
+            link.ExecuteNonQuery();
         }
         transaction.Commit();
     }
@@ -166,7 +170,7 @@ internal sealed class SoloBaselineRepairStore
     }
 
     private static void RemoveConflictingDependency(SqliteConnection db, SqliteTransaction transaction, string goal,
-        string group)
+        SoloRepairFinding finding)
     {
         using (var remaining = Command(db, "SELECT finding FROM solo_repair_finding WHERE goal = $goal AND rank = 3",
                    ("$goal", goal)))
@@ -174,12 +178,18 @@ internal sealed class SoloBaselineRepairStore
             remaining.Transaction = transaction;
             using var rows = remaining.ExecuteReader();
             while (rows.Read())
-                if (JsonSerializer.Deserialize<SoloRepairFinding>(rows.GetString(0))?.GroupKey == group) return;
+                if (JsonSerializer.Deserialize<SoloRepairFinding>(rows.GetString(0)) is { } other &&
+                    other.Project == finding.Project && other.Identity == finding.Identity) return;
         }
-        using var delete = Command(db, "DELETE FROM solo_repair_dependency WHERE goal = $goal AND group_key = $group",
-            ("$goal", goal), ("$group", group));
-        delete.Transaction = transaction;
-        delete.ExecuteNonQuery();
+        var keys = ReadTestGroups(db, transaction, finding).Select(group => group.Key)
+            .Concat([finding.GroupKey, finding.LegacyGroupKey]).Distinct(StringComparer.Ordinal);
+        foreach (var key in keys)
+        {
+            using var delete = Command(db, "DELETE FROM solo_repair_dependency WHERE goal = $goal AND group_key = $group",
+                ("$goal", goal), ("$group", key));
+            delete.Transaction = transaction;
+            delete.ExecuteNonQuery();
+        }
     }
 
     internal IReadOnlyList<SoloRepairFinding> ReadFindings(string goal, bool introduced = false)
@@ -197,11 +207,56 @@ internal sealed class SoloBaselineRepairStore
     internal SoloRepairGroup? ReadGroup(string key)
     {
         using var db = Open();
+        return ReadGroup(db, null, key);
+    }
+
+    private static SoloRepairGroup? ReadGroup(SqliteConnection db, SqliteTransaction? transaction, string key)
+    {
         using var command = Command(db, """
             SELECT intake_payload, repair_goal FROM solo_repair_group WHERE group_key = $key
             """, ("$key", key));
+        command.Transaction = transaction;
         using var row = command.ExecuteReader();
         return row.Read() ? new(key, row.GetString(0), row.IsDBNull(1) ? null : row.GetString(1)) : null;
+    }
+
+    internal IReadOnlyList<SoloRepairGroup> ReadTestGroups(SoloRepairFinding finding)
+    {
+        using var db = Open();
+        return ReadTestGroups(db, null, finding).ToArray();
+    }
+
+    private static IEnumerable<SoloRepairGroup> ReadTestGroups(
+        SqliteConnection db, SqliteTransaction? transaction, SoloRepairFinding finding)
+    {
+        var legacyKey = finding.LegacyGroupKey;
+        var legacy = ReadGroup(db, transaction, legacyKey);
+        if (legacy is { RepairGoal: not null }) yield return legacy;
+        if (ReadGroup(db, transaction, finding.GroupKey) is { } current) yield return current;
+
+        // Legacy rows keep their original keys. Retained findings identify sibling keys for this test.
+        var siblingKeys = new SortedSet<string>(StringComparer.Ordinal);
+        using (var command = Command(db, """
+            SELECT finding FROM solo_repair_finding WHERE rank = 3
+                AND json_extract(finding, '$.Project') IS $project
+                AND json_extract(finding, '$.Identity') = $identity
+            """, ("$project", (object?)finding.Project ?? DBNull.Value), ("$identity", finding.Identity)))
+        {
+            command.Transaction = transaction;
+            using var rows = command.ExecuteReader();
+            while (rows.Read())
+                siblingKeys.Add(JsonSerializer.Deserialize<SoloRepairFinding>(rows.GetString(0))!.LegacyGroupKey);
+        }
+        siblingKeys.Remove(legacyKey);
+        var reserved = new List<SoloRepairGroup>();
+        if (legacy is { RepairGoal: null }) reserved.Add(legacy);
+        foreach (var key in siblingKeys)
+        {
+            if (ReadGroup(db, transaction, key) is not { } sibling) continue;
+            if (sibling.RepairGoal is not null) yield return sibling;
+            else reserved.Add(sibling);
+        }
+        foreach (var group in reserved) yield return group;
     }
 
     internal bool IsCanonicalRepair(string goal)
@@ -388,6 +443,16 @@ internal sealed class SoloBaselineRepairStore
     }
     internal static string ValidationKey(SoloRepairFinding finding, string main) => Key("validation", finding.GroupKey, main);
 
+    internal SoloRepairCheckReceipt? ReadRepairValidation(SoloRepairFinding finding, string main)
+    {
+        var key = ValidationKey(finding, main);
+        if (ReadVerifiedCheck(key, FocusedProofIdentity(key, finding, main, main, false, false)) is { } current)
+            return current;
+        var legacyKey = Key("validation", finding.LegacyGroupKey, main);
+        return ReadVerifiedCheck(legacyKey, FocusedProofIdentity(legacyKey, finding, main, main, false, false))
+            is { Outcome: "passed" } legacy ? legacy : null;
+    }
+
     internal static bool HasExactReplacement(SoloRepairFinding finding, IReadOnlyList<SoloRepairFinding> findings,
         string candidate, string main) =>
         findings.Any(other => other.Check == finding.Check &&
@@ -402,11 +467,16 @@ internal sealed class SoloBaselineRepairStore
         if (findings.Count == 0) return true;
         if (candidate is null || main is null) return false;
         return findings.All(finding => finding.Inherited
-            ? ReadGroup(finding.GroupKey)?.RepairGoal is { } repair && repair != goal &&
-                IsVerifiedPass(ValidationKey(finding, main), finding, main, main, attribution: false)
+            ? ReadRepairValidation(finding, main)?.Outcome == "passed" && HasOtherRepair(finding, goal)
             : HasExactReplacement(finding, findings, candidate, main) ||
                 ((finding.Candidate != candidate || finding.Main != main) &&
                  IsVerifiedAttributionPass(goal, finding, candidate, main)));
+    }
+
+    private bool HasOtherRepair(SoloRepairFinding finding, string goal)
+    {
+        var groups = ReadTestGroups(finding);
+        return groups.Any(group => group.RepairGoal is not null) && groups.All(group => group.RepairGoal != goal);
     }
 
     private bool IsVerifiedAttributionPass(string goal, SoloRepairFinding finding, string candidate, string main)
@@ -421,7 +491,9 @@ internal sealed class SoloBaselineRepairStore
     internal string ResultDirectory(string key) => Path.Combine(Path.GetDirectoryName(_path)!, "solo-repair-results", key);
 
     internal static string FocusedProofIdentity(string key, SoloRepairFinding finding, string checkout, string main,
-        bool runBaseline, bool allowCandidatePass) => Key("focused-repair-result-v1", key, checkout, main,
+        bool runBaseline, bool allowCandidatePass) => !runBaseline && key == ValidationKey(finding, main)
+        ? Key("focused-repair-validation-v1", key, checkout, main, finding.Project, finding.Identity)
+        : Key("focused-repair-result-v1", key, checkout, main,
             runBaseline.ToString(), allowCandidatePass.ToString(), finding.RequestIdentity, finding.Check, finding.Identity,
             finding.Project, finding.BaselineCheck);
 

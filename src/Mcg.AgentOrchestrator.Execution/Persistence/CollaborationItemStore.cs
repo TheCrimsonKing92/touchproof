@@ -55,14 +55,15 @@ public sealed partial class CollaborationItemStore : ICollaborationItemStore
         return File.Exists(path) ? new(path, readOnly: true, offlineCopy: true) : null;
     }
 
-    public static CollaborationItemStore OpenReadOnly(string dbPath)
+    public static CollaborationItemStore OpenReadOnly(string dbPath,
+        int busyTimeoutMilliseconds = StateDbConnectionFactory.DefaultBusyTimeoutMilliseconds)
     {
         if (!File.Exists(dbPath))
             throw SchemaSetupRequired(dbPath, StoreSchemaState.Missing);
 
         var store = new CollaborationItemStore(dbPath, readOnly: true);
         // Schema refusal must not create WAL sidecars in the source store.
-        using var snapshot = new StoreInspectionSnapshot(dbPath);
+        using var snapshot = new StoreInspectionSnapshot(dbPath, busyTimeoutMilliseconds: busyTimeoutMilliseconds);
         var conn = snapshot.Connection;
         var state = StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.CollaborationItems);
         if (state != StoreSchemaState.Current)

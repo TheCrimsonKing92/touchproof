@@ -200,32 +200,39 @@ internal sealed class SoloBaselineRepairCoordinator(
                 if (!finding.Inherited) continue;
             }
 
-            var repair = EnsureSoloRepair(goal, finding);
-            if (repair.Goal is null)
-            {
-                if (repair.Pending) waiting ??= repair.Detail;
-                else missing ??= repair.Detail;
-                continue;
-            }
-            if (repair.Goal.Id == goal.Id)
+            var groups = _store.ReadTestGroups(finding);
+            var group = groups.FirstOrDefault(group => group.RepairGoal == goal.Id.Value) ?? groups.FirstOrDefault();
+            var repair = EnsureSoloRepair(goal, finding, group);
+            if (repair.Goal?.Id == goal.Id)
             {
                 repairOwnerAction ??= repair.Detail;
                 continue;
             }
-            if (ResolveSoloRepairLanding(workspace, repair.Goal, main) is null)
+            var repairs = groups.Select(group => group.RepairGoal).OfType<string>();
+            if (repair.Goal is { } resolved)
+                repairs = repairs.Prepend(resolved.Id.Value);
+            var landed = repairs.Distinct(StringComparer.Ordinal)
+                .FirstOrDefault(id => ResolveSoloRepairLanding(workspace, new GoalId(id), main) is not null);
+            if (landed is null)
             {
-                if (repair.Goal.IsTerminal)
+                if (repair.Goal is null)
+                {
+                    if (repair.Pending) waiting ??= repair.Detail;
+                    else missing ??= repair.Detail;
+                }
+                else if (repair.Goal.IsTerminal)
                     missing ??= $"Confirm reachable landing evidence for repair {repair.Goal.Id.Value}, or designate a replacement.";
                 else
                     waiting ??= $"Waiting for repair {repair.Goal.Id.Value} to land for {finding.Identity}.";
                 continue;
             }
 
-            var validation = RunSoloRepairCheck(SoloBaselineRepairStore.ValidationKey(finding, main), finding, main, main, false);
+            var validation = _store.ReadRepairValidation(finding, main) ??
+                RunSoloRepairCheck(SoloBaselineRepairStore.ValidationKey(finding, main), finding, main, main, false);
             if (validation.Outcome == "pending") waiting ??= finding.Request;
             else if (validation.Outcome == "failed")
                 missing ??= $"The original test {finding.Identity} executed and still fails on refreshed baseline {main} " +
-                    $"in {validation.Detail}. Decide whether to reopen repair {repair.Goal.Id.Value} or designate a follow-up repair.";
+                    $"in {validation.Detail}. Decide whether to reopen repair {landed} or designate a follow-up repair.";
             else if (validation.Outcome != "passed")
                 missing ??= $"Refreshed baseline {main}, check {finding.Check}, test {finding.Identity}: {validation.Detail}";
         }
@@ -241,10 +248,9 @@ internal sealed class SoloBaselineRepairCoordinator(
             ?? SoloRepairHold(goal, prefix, policy, SoloHoldReasons.RepairPending, "Waiting for readiness to run normal acceptance.");
     }
 
-    private (Goal? Goal, bool Pending, string Detail) EnsureSoloRepair(Goal dependent, SoloRepairFinding finding)
+    private (Goal? Goal, bool Pending, string Detail) EnsureSoloRepair(Goal dependent, SoloRepairFinding finding, SoloRepairGroup? group)
     {
-        var requestKey = "solo-baseline-repair-" + finding.GroupKey;
-        var group = _store.ReadGroup(finding.GroupKey);
+        const string requestPrefix = "solo-baseline-repair-";
         if (group is null)
         {
             var owners = new PortfolioStore(workspace.PortfolioStorePath).ListEpicsAsync().GetAwaiter().GetResult()
@@ -254,10 +260,11 @@ internal sealed class SoloBaselineRepairCoordinator(
                 return (null, false, $"Designate one baseline-maintenance epic for {finding.Check}, {finding.Identity} on {finding.Baseline}.");
             var objective = $"Repair baseline test failure {finding.Identity} in {finding.Check} on revision {finding.Baseline}. " +
                 $"Reproduce using {finding.Request} and make the original exact case pass on the integration branch.";
-            var payload = RepairIntake.PrepareRepair(requestKey, objective, owners[0].Id);
+            var payload = RepairIntake.PrepareRepair(requestPrefix + finding.GroupKey, objective, owners[0].Id);
             group = _store.ReserveGroup(finding.GroupKey, JsonSerializer.Serialize(payload, OperatorIntentJson.Options));
         }
 
+        var requestKey = requestPrefix + group.Key;
         var intake = new GoalIntakeRequestStore(workspace.SqliteStatePath);
         try
         {
@@ -302,26 +309,26 @@ internal sealed class SoloBaselineRepairCoordinator(
         }
     }
 
-    internal static string? ResolveSoloRepairLanding(OrchestratorWorkspace workspace, Goal repair, string main)
+    internal static string? ResolveSoloRepairLanding(OrchestratorWorkspace workspace, GoalId repair, string main)
     {
         var root = workspace.ExecutionDirectory;
         bool IsReachable(string revision) =>
             GitCli.Run(root, "merge-base", "--is-ancestor", revision, main) is { Succeeded: true, DrainTimedOut: false };
 
         var repository = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
-        var promotion = repository.ReadPromotionFactAsync(repair.Id).GetAwaiter().GetResult();
+        var promotion = repository.ReadPromotionFactAsync(repair).GetAwaiter().GetResult();
         if (promotion is not null && IsReachable(promotion.PromotedMainRevision))
             return promotion.PromotedMainRevision;
 
-        var journal = GoalOperationJournal.Read(root, repair.Id);
-        foreach (var intent in GoalOperationJournal.ReadLandingIntents(journal, repair.Id, GoalWorktreeLayout.BranchName(repair.Id)))
+        var journal = GoalOperationJournal.Read(root, repair);
+        foreach (var intent in GoalOperationJournal.ReadLandingIntents(journal, repair, GoalWorktreeLayout.BranchName(repair)))
         {
-            if (LandingExecutor.HasAdmittedGoalLandedEvent(workspace, repair.Id, intent.MergeCommitSha) && IsReachable(intent.MergeCommitSha))
+            if (LandingExecutor.HasAdmittedGoalLandedEvent(workspace, repair, intent.MergeCommitSha) && IsReachable(intent.MergeCommitSha))
                 return intent.MergeCommitSha;
         }
 
         var resolver = GoalIntegrationEvidenceResolver.Build(root, workspace.IntegrationBranch, main);
-        return resolver.TryResolve(repair.Id, out var evidence) ? evidence!.IntegrateSha : null;
+        return resolver.TryResolve(repair, out var evidence) ? evidence!.IntegrateSha : null;
     }
 
     private SoloRepairCheckReceipt RunSoloRepairCheck(string key, SoloRepairFinding finding, string checkoutSha,

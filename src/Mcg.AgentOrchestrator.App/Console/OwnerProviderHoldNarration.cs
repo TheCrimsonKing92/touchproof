@@ -99,7 +99,7 @@ internal static class OwnerProviderHoldNarration
         var provider = baseKey[..separator];
         var credential = baseKey[(separator + 2)..].Trim();
         if (credential == "<provider-default>") return provider + model;
-        if (credential.StartsWith("api-", StringComparison.Ordinal)) return $"{provider} (API key){model}";
+        if (credential.StartsWith("api-", StringComparison.OrdinalIgnoreCase)) return $"{provider} (API key){model}";
         var leaf = credential[(credential.LastIndexOfAny(['\\', '/']) + 1)..];
         return $"{provider} ({(leaf.Length == 0 ? credential : leaf)}){model}";
     }

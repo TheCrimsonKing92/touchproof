@@ -17,7 +17,7 @@ internal static class CliContextUsageCommand
 
     internal static int Run(IReadOnlyList<string> args, OrchestratorWorkspace workspace, TextWriter output, TextWriter error) =>
         Run(args, () => ReadGoals(workspace), output, error,
-            (since, role) => DispatchUsagePopulation.Read(OpenState(workspace), since, role),
+            (since, until, role) => DispatchUsagePopulation.Read(OpenState(workspace), since, role, until),
             since => ReadReworkGoals(workspace, since));
 
     internal static int Run(IReadOnlyList<string> args,
@@ -27,7 +27,17 @@ internal static class CliContextUsageCommand
 
     internal static int Run(IReadOnlyList<string> args,
         Func<IReadOnlyCollection<Goal>> loadGoals, TextWriter output, TextWriter error,
-        Func<DateTimeOffset?, string?, DispatchUsagePopulation>? loadUsage = null,
+        Func<DateTimeOffset?, string?, DispatchUsagePopulation> loadUsage,
+        Func<DateTimeOffset?, (IReadOnlyCollection<Goal> Goals, ContextReworkCoverage Coverage)>? loadReworkGoals = null) =>
+        Run(args, loadGoals, output, error,
+            (since, until, role) => until is null
+                ? loadUsage(since, role)
+                : throw new InvalidOperationException("The context usage loader does not support an upper bound."),
+            loadReworkGoals);
+
+    internal static int Run(IReadOnlyList<string> args,
+        Func<IReadOnlyCollection<Goal>> loadGoals, TextWriter output, TextWriter error,
+        Func<DateTimeOffset?, DateTimeOffset?, string?, DispatchUsagePopulation>? loadUsage = null,
         Func<DateTimeOffset?, (IReadOnlyCollection<Goal> Goals, ContextReworkCoverage Coverage)>? loadReworkGoals = null)
     {
         try
@@ -45,8 +55,8 @@ internal static class CliContextUsageCommand
                 return 0;
             }
             var report = loadUsage is null
-                ? ContextUsageReport.Build(loadGoals(), since, role)
-                : ContextUsageReport.Build(loadUsage(since, role), since, role);
+                ? ContextUsageReport.Build(loadGoals(), since, role, until)
+                : ContextUsageReport.Build(loadUsage(since, until, role), since, role, until);
             if (json)
             {
                 output.WriteLine(JsonSerializer.Serialize(report, new JsonSerializerOptions
@@ -56,7 +66,13 @@ internal static class CliContextUsageCommand
             }
             else
             {
-                output.WriteLine($"Context usage: dispatches={report.Rows.Sum(row => row.DispatchCount)} rows={report.Rows.Count}");
+                var window = string.Empty;
+                if (report.Until is { } end)
+                {
+                    var start = report.Since?.ToString("O", CultureInfo.InvariantCulture) ?? "unbounded";
+                    window = $" [{start}, {end.ToString("O", CultureInfo.InvariantCulture)})";
+                }
+                output.WriteLine($"Context usage{window}: dispatches={report.Rows.Sum(row => row.DispatchCount)} rows={report.Rows.Count}");
                 foreach (var row in report.Rows)
                 {
                     output.WriteLine($"{row.Role} | {row.Model} | dispatches={row.DispatchCount} reported-input={row.ReportedInputCount} | " +
@@ -245,7 +261,7 @@ internal static class CliContextUsageCommand
             }
             throw new ArgumentException(CliCommandHelp.ContextUsageUsage);
         }
-        if (rework ? sections : until is not null || top is not null)
+        if ((sections && (rework || until is not null)) || (!rework && top is not null))
             throw new ArgumentException(CliCommandHelp.ContextUsageUsage);
         if (since.HasValue && until.HasValue && since >= until)
             throw new ArgumentException("--since must precede --until.");

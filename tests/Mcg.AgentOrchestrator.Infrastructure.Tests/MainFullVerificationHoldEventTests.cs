@@ -77,6 +77,59 @@ public sealed class MainFullVerificationHoldEventTests
         Assert.Contains(FailingTest, item.Body);
     }
 
+    [Theory]
+    [InlineData(true, "IOException: decision read failed", 3)]
+    [InlineData(false, "checkout-unavailable", 1)]
+    public async Task IncompleteRaisesOneVerifyItemPerCommitAcrossPollsAndRetries(
+        bool throws, string reason, int attempts)
+    {
+        using var fixture = new ConductorVerbStartTests.Fixture();
+        var path = fixture.Workspace.RunEventStorePath;
+        _ = new SqliteRunEventStore(path);
+        var items = CollaborationItemStore.ForDirectory(fixture.Workspace.OrchestratorDirectory);
+        const string failedCommit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        var tip = Commit;
+        var now = Now;
+        var lines = new List<string>();
+        MainFullVerificationCoordinator Create() => new(new MainFullVerificationStore(path), items, 21600, () => tip,
+            (commit, _) => new((_, _) =>
+            {
+                if (commit == failedCommit) return new("failed", Failures: [new(FailingTest)], Unconfirmed: []);
+                if (throws) throw new IOException("decision read failed");
+                return new("incomplete", reason);
+            }), () => now, lines.Add);
+
+        string? itemId = null;
+        for (var attempt = 1; attempt <= attempts; attempt++)
+        {
+            using var coordinator = Create();
+            Assert.Equal(MainFullVerificationScheduler.Decision.Admit, coordinator.Service(0, () => true));
+            await Assert.IsAssignableFrom<Task>(coordinator.ActiveExecution).WaitAsync(TimeSpan.FromSeconds(30));
+            coordinator.Poll();
+            coordinator.Poll();
+            var item = Assert.Single(await items.ListAsync());
+            Assert.Equal(CollaborationItemType.Verify, item.Type);
+            Assert.Equal($"main-full-verification-incomplete:{Commit}", item.CorrelationKey);
+            Assert.Contains(reason, item.Body);
+            Assert.Contains("attempt=1/3", item.Body);
+            itemId ??= item.Id;
+            Assert.Equal(itemId, item.Id);
+            now = now.AddMinutes(3);
+        }
+        Assert.DoesNotContain(lines, line => line.StartsWith("MAIN_FULL_VERIFICATION_HOLD ", StringComparison.Ordinal));
+
+        tip = failedCommit;
+        now = now.AddHours(6);
+        using var next = Create();
+        Assert.Equal(MainFullVerificationScheduler.Decision.Admit, next.Service(0, () => true));
+        await Assert.IsAssignableFrom<Task>(next.ActiveExecution).WaitAsync(TimeSpan.FromSeconds(30));
+        next.Poll();
+        var attention = await items.ListAsync();
+        Assert.Equal(2, attention.Count);
+        Assert.Single(attention, item => item.CorrelationKey == $"main-full-verification-failure:{failedCommit}");
+        Assert.Single(attention, item => item.CorrelationKey == $"main-full-verification-incomplete:{Commit}");
+    }
+
     [Fact]
     public void InfrastructureFailureWithoutReadableTestIdentityIsIncomplete()
     {

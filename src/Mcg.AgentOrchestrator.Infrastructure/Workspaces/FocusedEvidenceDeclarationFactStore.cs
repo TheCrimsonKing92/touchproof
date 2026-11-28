@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
@@ -8,9 +9,9 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal sealed class FocusedEvidenceDeclarationFactStore(FocusedEvidenceParsedRootCache.Store? rootStore = null)
 {
     internal const string DirectoryName = "focused-evidence-declaration-facts";
-    // Bump if the serialized envelope or facts change incompatibly, or if extraction changes
-    // names, type classification, test recognition or ownership, diagnostics, directives, bases, or method attributes.
-    internal const int ExtractorVersion = 2;
+    // Bump when the envelope or extracted facts change incompatibly, including usings,
+    // declaration shape, attributes, trait arguments, diagnostics, and directives.
+    internal const int ExtractorVersion = 3;
 
     private static readonly FocusedEvidenceDeclarationFactStore Shared = new();
     private static readonly AsyncLocal<FocusedEvidenceDeclarationFactStore?> Override = new();
@@ -108,14 +109,25 @@ internal sealed class FocusedEvidenceDeclarationFactStore(FocusedEvidenceParsedR
             var entry = JsonSerializer.Deserialize<Envelope>(SelectionFileReadProbe.ReadAllText(path));
             if (entry is null || entry.ExtractorVersion != ExtractorVersion || entry.ContentHash != hash ||
                 entry.Facts is not { } facts || facts.Types.IsDefault ||
+                facts.Usings.IsDefault || facts.Usings.Any(item => item is null) ||
                 facts.Types.Any(type => type is null || type.SimpleName is null || type.QualifiedName is null ||
                     type.TestMethodNames.IsDefault || type.TestMethodNames.Any(name => name is null) ||
-                    type.MethodAttributeNames.IsDefault || type.MethodAttributeNames.Any(name => name is null)))
+                    type.MethodAttributeNames.IsDefault || type.MethodAttributeNames.Any(name => name is null) ||
+                    !HasValidShape(type.Shape)))
                 return null;
             return facts;
         }
         catch (Exception error) when (error is not OutOfMemoryException) { return null; }
     }
+
+    private static bool HasValidShape(FocusedEvidenceTypeShapeFact? shape) =>
+        shape is not null && !shape.BaseTypeNames.IsDefault && shape.BaseTypeNames.All(name => name is not null) &&
+        HasValidAttributes(shape.Attributes) && !shape.Methods.IsDefault &&
+        shape.Methods.All(method => method is not null && method.Name is not null && HasValidAttributes(method.Attributes));
+
+    private static bool HasValidAttributes(ImmutableArray<FocusedEvidenceAttributeUsageFact> attributes) =>
+        !attributes.IsDefault && attributes.All(attribute => attribute is not null && attribute.Name is not null &&
+            (!attribute.HasTwoStringLiteralArguments || attribute.FirstArgument is not null && attribute.SecondArgument is not null));
 
     private static void Write(string destination, string hash, FocusedEvidenceDeclarationFacts facts)
     {

@@ -26,6 +26,7 @@ internal sealed record ContextUsageRow(
 
 internal sealed record ContextUsageResult(
     DateTimeOffset? Since,
+    DateTimeOffset? Until,
     string? Role,
     IReadOnlyList<ContextUsageRow> Rows,
     ContextUsageCoverage Coverage);
@@ -40,10 +41,11 @@ internal sealed record ContextUsageCoverage(
 internal static class ContextUsageReport
 {
     internal static ContextUsageResult Build(
-        IEnumerable<Goal> goals, DateTimeOffset? since = null, string? role = null) =>
-        Build(DispatchUsagePopulation.Build(goals, since, role), since, role);
+        IEnumerable<Goal> goals, DateTimeOffset? since = null, string? role = null, DateTimeOffset? until = null) =>
+        Build(DispatchUsagePopulation.Build(goals, since, role, until: until), since, role, until);
 
-    internal static ContextUsageResult Build(DispatchUsagePopulation population, DateTimeOffset? since, string? role)
+    internal static ContextUsageResult Build(
+        DispatchUsagePopulation population, DateTimeOffset? since, string? role, DateTimeOffset? until = null)
     {
         var groups = population.Dispatches
             .GroupBy(item => (item.Role,
@@ -76,7 +78,7 @@ internal static class ContextUsageReport
         .ThenBy(row => row.Model == "unknown" ? 1 : 0)
         .ThenBy(row => row.Model, StringComparer.Ordinal)
         .ToArray();
-        return new(since, role, rows, new(population.Live, population.Archived,
+        return new(since, until, role, rows, new(population.Live, population.Archived,
             rows.Sum(row => row.MissingUsageCount), population.Conflicts.Count, population.Conflicts));
     }
 

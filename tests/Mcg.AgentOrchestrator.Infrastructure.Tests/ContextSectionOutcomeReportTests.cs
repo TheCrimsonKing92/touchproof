@@ -265,7 +265,7 @@ public sealed class ContextSectionOutcomeReportTests
             output.ToString());
         output.GetStringBuilder().Clear();
         Assert.Equal(0, CliContextUsageCommand.Run(["context-usage", "--json"], () => [goal], output, error));
-        Assert.Equal("{\"since\":null,\"role\":null,\"rows\":[{\"role\":\"Developer\",\"model\":\"test-model\"," +
+        Assert.Equal("{\"since\":null,\"until\":null,\"role\":null,\"rows\":[{\"role\":\"Developer\",\"model\":\"test-model\"," +
             "\"dispatchCount\":1,\"reportedInputCount\":1,\"input\":{\"median\":20000,\"p90\":20000}," +
             "\"cached\":{\"median\":0,\"p90\":0},\"uncached\":{\"median\":20000,\"p90\":20000}," +
             "\"output\":{\"median\":0,\"p90\":0},\"turns\":{\"median\":null,\"p90\":null}," +

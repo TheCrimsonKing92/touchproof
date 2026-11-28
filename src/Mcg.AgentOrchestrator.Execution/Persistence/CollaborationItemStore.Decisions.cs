@@ -40,13 +40,20 @@ public sealed partial class CollaborationItemStore
         CancellationToken cancellationToken = default)
     {
         await using var conn = OpenConnection();
-        var request = await TryReadDecisionRequestAsync(conn, requestId, cancellationToken);
-        if (request is null)
-            return null;
+        try
+        {
+            var request = await TryReadDecisionRequestAsync(conn, requestId, cancellationToken);
+            if (request is null)
+                return null;
 
-        var effect = await TryReadEffectReceiptForRequestAsync(conn, requestId, cancellationToken);
-        var receipt = await TryReadDecisionReceiptForRequestAsync(conn, requestId, effect, cancellationToken);
-        return DecisionState.Create(request, receipt, effect);
+            var effect = await TryReadEffectReceiptForRequestAsync(conn, requestId, cancellationToken);
+            var receipt = await TryReadDecisionReceiptForRequestAsync(conn, requestId, effect, cancellationToken);
+            return DecisionState.Create(request, receipt, effect);
+        }
+        catch (SqliteException ex) when (SqliteFaultContext.Attach(ex, conn, "CollaborationItemStore.GetDecisionState"))
+        {
+            throw;
+        }
     }
 
     public async Task<IReadOnlyList<DecisionRequest>> ListDecisionRequestsAsync(

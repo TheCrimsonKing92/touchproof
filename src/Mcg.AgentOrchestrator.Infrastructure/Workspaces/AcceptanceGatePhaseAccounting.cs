@@ -50,12 +50,15 @@ public sealed class AcceptanceGateEngineException : Exception
     {
         ArgumentNullException.ThrowIfNull(exception);
         ArgumentNullException.ThrowIfNull(snapshot);
+        var sqlite = SqliteFaultContext.Find(exception);
         var context = string.Join(
             "; ",
             new[]
             {
                 string.IsNullOrWhiteSpace(snapshot.Phase) ? null : $"phase={snapshot.Phase}",
-                string.IsNullOrWhiteSpace(snapshot.Target) ? null : $"target={snapshot.Target}"
+                string.IsNullOrWhiteSpace(snapshot.Target) ? null : $"target={snapshot.Target}",
+                sqlite is null ? null : $"database={sqlite.Database}",
+                sqlite is null ? null : $"operation={sqlite.Operation}"
             }.Where(value => value is not null));
         var message = $"Acceptance gate engine fault{(context.Length == 0 ? string.Empty : $" ({context})")}: " +
             $"{exception.GetType().Name}: {exception.Message}";

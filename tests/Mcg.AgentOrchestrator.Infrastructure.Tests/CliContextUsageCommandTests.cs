@@ -35,6 +35,7 @@ public sealed class CliContextUsageCommandTests
             () => [goal], output, error);
         Assert.Equal(0, code);
         using var document = JsonDocument.Parse(output.ToString());
+        Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("until").ValueKind);
         var rows = document.RootElement.GetProperty("rows");
         Assert.Equal(2, rows.GetArrayLength());
         var developer = rows.EnumerateArray().Single(row => row.GetProperty("role").GetString() == "Developer");
@@ -44,6 +45,12 @@ public sealed class CliContextUsageCommandTests
         Assert.Equal(40000, developer.GetProperty("input").GetProperty("p90").GetInt64());
         Assert.Equal(15000, developer.GetProperty("uncached").GetProperty("median").GetDouble());
         Assert.Equal(20000, developer.GetProperty("harnessOverhead").GetProperty("median").GetDouble());
+        var tester = rows.EnumerateArray().Single(row => row.GetProperty("role").GetString() == "Tester");
+        Assert.Equal(3, tester.GetProperty("dispatchCount").GetInt32());
+        var coverage = document.RootElement.GetProperty("coverage");
+        Assert.Equal(9, coverage.GetProperty("live").GetInt32());
+        Assert.Equal(0, coverage.GetProperty("archived").GetInt32());
+        Assert.Equal(2, coverage.GetProperty("unknownUsage").GetInt32());
 
         output.GetStringBuilder().Clear();
         code = CliContextUsageCommand.Run(

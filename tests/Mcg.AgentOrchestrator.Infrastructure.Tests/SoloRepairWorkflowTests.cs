@@ -89,9 +89,9 @@ public sealed class SoloRepairWorkflowTests
         Assert.Contains(fixture.Goal.Id, fixture.Tick());
         Assert.Equal(squash, fixture.Fact()?.PromotedMainRevision);
         Assert.Equal(fixture.Delivery.Candidate, fixture.Fact()?.CandidateRevision);
-        Assert.Equal(squash, SoloBaselineRepairCoordinator.ResolveSoloRepairLanding(fixture.Workspace, fixture.Goal,
+        Assert.Equal(squash, SoloBaselineRepairCoordinator.ResolveSoloRepairLanding(fixture.Workspace, fixture.Goal.Id,
             fixture.Git("rev-parse", "main")));
-        Assert.Null(SoloBaselineRepairCoordinator.ResolveSoloRepairLanding(fixture.Workspace, fixture.Goal, fixture.Delivery.Main));
+        Assert.Null(SoloBaselineRepairCoordinator.ResolveSoloRepairLanding(fixture.Workspace, fixture.Goal.Id, fixture.Delivery.Main));
     }
 
     [Theory]
@@ -1175,6 +1175,148 @@ public sealed class SoloRepairWorkflowTests
     }
 
     [Fact]
+    public async Task SharedRepair_DifferentLanesAndRevisions_JoinsOneRepairAndReleasesBothOnLanding()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        fixture.Git("checkout", "main");
+        var workspace = Workspace(fixture);
+        var kernel = fixture.Kernel;
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var portfolio = new PortfolioStore(workspace.PortfolioStorePath);
+        var maintenance = await portfolio.AddEpicAsync("baseline-maintenance");
+        var first = NewCandidate(fixture, kernel);
+        await repository.SaveAsync(kernel);
+        var verifier = new ControlledVerifier(fixture.Root);
+        var driver = Driver(kernel, workspace, verifier);
+        var path = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var store = new SoloBaselineRepairStore(path);
+        var intake = new GoalIntakeRequestStore(workspace.SqliteStatePath);
+
+        AssertHold(Complete(driver, first, await ProduceFailure(fixture, first)), SoloHoldReasons.RepairPending);
+        var firstFinding = Assert.Single(store.ReadFindings(first.Id.Value));
+        Assert.True(firstFinding.Inherited, firstFinding.Reason);
+        var group = Assert.IsType<SoloRepairGroup>(store.ReadGroup(firstFinding.GroupKey));
+        var repair = kernel.GetGoal(new GoalId(Assert.IsType<string>(group.RepairGoal)));
+        var requestKey = "solo-baseline-repair-" + group.Key;
+        var request = Assert.IsType<GoalIntakeRequestRecord>(intake.Get(requestKey));
+        Assert.Equal(repair.Id.Value, request.GoalId);
+        Assert.Equal(maintenance.Id, (await portfolio.GetGoalMembershipAsync(repair.Id.Value))?.EpicId);
+
+        RenameLaneOnMain(fixture);
+        var second = NewCandidate(fixture, kernel);
+        var differentTest = NewCandidate(fixture, kernel);
+        await repository.SaveAsync(kernel);
+        driver = Driver(kernel, workspace, verifier);
+        AssertHold(Complete(driver, second, await ProduceFailure(fixture, second)), SoloHoldReasons.RepairPending);
+        var secondFinding = Assert.Single(store.ReadFindings(second.Id.Value));
+        Assert.True(secondFinding.Inherited, secondFinding.Reason);
+        Assert.NotEqual(firstFinding.Check, secondFinding.Check);
+        Assert.NotEqual(firstFinding.Baseline, secondFinding.Baseline);
+        Assert.Equal((firstFinding.Project, firstFinding.Identity), (secondFinding.Project, secondFinding.Identity));
+        Assert.Equal(group, store.ReadGroup(secondFinding.GroupKey));
+        Assert.Equal(request, intake.Get(requestKey));
+        Assert.Equal(1, SoloRepairReplayTests.Count(workspace.SqliteStatePath, "goal_intake_requests"));
+        Assert.Equal(1, SoloRepairReplayTests.Count(path, "solo_repair_group"));
+        Assert.Equal(2, SoloRepairReplayTests.Count(path, "solo_repair_dependency"));
+        Assert.Equal(group.Key, ReadDependency(path, first));
+        Assert.Equal(group.Key, ReadDependency(path, second));
+
+        await fixture.Produce(baselineFails: true, attemptId: differentTest.Id.Value,
+            candidateWorktree: Worktree(fixture, differentTest), goal: differentTest, singleRow: true, firstCase: "(value: 2)");
+        AssertHold(Complete(driver, differentTest, fixture.Summary), SoloHoldReasons.RepairPending);
+        var otherFinding = Assert.Single(store.ReadFindings(differentTest.Id.Value));
+        Assert.True(otherFinding.Inherited, otherFinding.Reason);
+        Assert.NotEqual(firstFinding.Identity, otherFinding.Identity);
+        Assert.NotEqual(repair.Id.Value, Assert.IsType<SoloRepairGroup>(store.ReadGroup(otherFinding.GroupKey)).RepairGoal);
+        Assert.Empty(verifier.FocusedRuns);
+
+        var main = LandRepair(fixture, workspace, repair);
+        verifier.Finding = firstFinding;
+        foreach (var waiter in new[] { first, second })
+        {
+            RunGit(Worktree(fixture, waiter), "rebase", "main");
+            AssertFreshRepairGate(driver.AdvanceOnce(waiter, Policy), waiter, main);
+        }
+        RunGit(Worktree(fixture, differentTest), "rebase", "main");
+        AssertHold(driver.AdvanceOnce(differentTest, Policy), SoloHoldReasons.RepairPending);
+        Assert.Equal((firstFinding.Request!, main), Assert.Single(verifier.FocusedRuns));
+        Assert.Equal("passed", store.ReadRepairValidation(secondFinding, main)?.Outcome);
+    }
+
+    [Fact]
+    public async Task LegacyGroupKey_ResolvesRecordedRepairAndReleasesWaitersOnLanding()
+    {
+        using var fixture = new SoloAttributedFailureRouteFixture();
+        fixture.Git("checkout", "main");
+        var workspace = Workspace(fixture);
+        var kernel = fixture.Kernel;
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var maintenance = await new PortfolioStore(workspace.PortfolioStorePath).AddEpicAsync("baseline-maintenance");
+        var path = Path.Combine(workspace.OrchestratorDirectory, SoloBaselineRepairStore.FileName);
+        var store = new SoloBaselineRepairStore(path);
+        var intake = new GoalIntakeRequestStore(workspace.SqliteStatePath);
+        var repairIntake = new CliSoloBaselineRepairIntake(workspace);
+
+        async Task<(Goal Waiter, Goal Repair, SoloRepairFinding Finding, SoloRepairGroup Group)> SeedLegacyRepair()
+        {
+            var waiter = NewCandidate(fixture, kernel);
+            var failure = await ProduceFailure(fixture, waiter);
+            var receipt = Assert.IsType<SoloAcceptanceFailureReceipt>(failure.SoloFailureReceipt);
+            kernel.RecordAcceptanceFailure(waiter.Id, failure.FailedChecks!, failure.BranchHeadSha, failure.MainHeadSha,
+                failure.CheckAttributions, failure.BaselineAttestation, failure.AttemptId, receipt);
+            kernel.RouteRecordedAcceptanceFailure(waiter.Id, "Fixture legacy repair hold.");
+            var context = new SoloAcceptanceConsumptionContext(receipt.CandidateSha, receipt.MainSha,
+                RunGit(Worktree(fixture, waiter), "rev-parse", "HEAD^{tree}"), receipt.BaselineSha);
+            var finding = Assert.Single(SoloAcceptanceFailureReceiptReader.ReadRepairPartition(waiter, context)!.Findings);
+            Assert.True(finding.Inherited, finding.Reason);
+            var legacyKey = SoloBaselineRepairStore.Key(finding.Baseline.ToLowerInvariant(), finding.Check,
+                finding.Project, finding.RequestIdentity, finding.BaselineCheck, finding.Identity);
+            var requestKey = "solo-baseline-repair-" + legacyKey;
+            var payload = repairIntake.PrepareRepair(requestKey, $"Repair {finding.Identity} in {finding.Check}", maintenance.Id);
+            await repository.SaveAsync(kernel);
+            store.ReserveGroup(legacyKey, JsonSerializer.Serialize(payload, OperatorIntentJson.Options));
+            intake.Reserve(requestKey, payload.Fingerprint);
+            repairIntake.ApplyReservedRepair(kernel, payload);
+            var repair = kernel.GetGoal(new GoalId(Assert.IsType<string>(intake.Get(requestKey)?.GoalId)));
+            store.AcknowledgeRepair(legacyKey, repair.Id.Value);
+            store.Retain(waiter.Id.Value, [finding]);
+            return (waiter, repair, finding, Assert.IsType<SoloRepairGroup>(store.ReadGroup(legacyKey)));
+        }
+
+        var first = await SeedLegacyRepair();
+        RenameLaneOnMain(fixture);
+        var second = await SeedLegacyRepair();
+        Assert.Equal(first.Finding.GroupKey, second.Finding.GroupKey);
+        Assert.NotEqual(first.Group.Key, second.Group.Key);
+        Assert.NotEqual(first.Repair.Id, second.Repair.Id);
+        var verifier = new ControlledVerifier(fixture.Root) { Finding = first.Finding };
+        var driver = Driver(kernel, workspace, verifier);
+        foreach (var legacy in new[] { first, second })
+        {
+            var held = driver.AdvanceOnce(legacy.Waiter, Policy);
+            AssertHold(held, SoloHoldReasons.RepairPending);
+            Assert.Contains(legacy.Repair.Id.Value, Assert.IsType<ConductorAdvanceOutcome.Held>(held.Outcome).Reason);
+            Assert.Equal(legacy.Group.Key, ReadDependency(path, legacy.Waiter));
+        }
+        Assert.Empty(verifier.FocusedRuns);
+
+        var main = LandRepair(fixture, workspace, first.Repair);
+        foreach (var legacy in new[] { first, second })
+        {
+            RunGit(Worktree(fixture, legacy.Waiter), "rebase", "main");
+            AssertFreshRepairGate(driver.AdvanceOnce(legacy.Waiter, Policy), legacy.Waiter, main);
+            Assert.True(store.IsEvidenceCurrent(legacy.Waiter.Id.Value, [legacy.Finding],
+                RunGit(Worktree(fixture, legacy.Waiter), "rev-parse", "HEAD"), main));
+            Assert.Equal(legacy.Group, store.ReadGroup(legacy.Group.Key));
+            Assert.Equal(legacy.Group.Key, ReadDependency(path, legacy.Waiter));
+        }
+        Assert.Equal((first.Finding.Request!, main), Assert.Single(verifier.FocusedRuns));
+        Assert.Null(store.ReadGroup(first.Finding.GroupKey));
+        Assert.Equal(2, SoloRepairReplayTests.Count(path, "solo_repair_group"));
+        Assert.Equal(2, SoloRepairReplayTests.Count(workspace.SqliteStatePath, "goal_intake_requests"));
+    }
+
+    [Fact]
     public async Task RepairFlow_AfterLostAcknowledgement_ReusesRepairAndRegatesEachCandidate()
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
@@ -1334,13 +1476,15 @@ public sealed class SoloRepairWorkflowTests
         Assert.Single(verifier.FocusedRuns);
 
         var otherBase = NewCandidate(fixture, kernel);
-        AssertHold(Complete(driver, otherBase, await ProduceFailure(fixture, otherBase)), SoloHoldReasons.RepairPending);
+        var currentMain = fixture.Git("rev-parse", "HEAD");
+        AssertFreshRepairGate(Complete(driver, otherBase, await ProduceFailure(fixture, otherBase)), otherBase, currentMain);
         var otherFinding = Assert.Single(store.ReadFindings(otherBase.Id.Value));
-        Assert.NotEqual(finding.GroupKey, otherFinding.GroupKey);
-        Assert.Equal(fixture.Git("rev-parse", "HEAD"), otherFinding.Baseline);
-        Assert.NotEqual(repair.Id.Value, store.ReadGroup(otherFinding.GroupKey)?.RepairGoal);
-        Assert.Equal(2, SoloRepairReplayTests.Count(storePath, "solo_repair_group"));
+        Assert.Equal(finding.GroupKey, otherFinding.GroupKey);
+        Assert.Equal(currentMain, otherFinding.Baseline);
+        Assert.Equal(repair.Id.Value, store.ReadGroup(otherFinding.GroupKey)?.RepairGoal);
+        Assert.Equal(1, SoloRepairReplayTests.Count(storePath, "solo_repair_group"));
         Assert.Equal(5, SoloRepairReplayTests.Count(storePath, "solo_repair_dependency"));
+        Assert.Equal((otherFinding.Request!, currentMain), verifier.FocusedRuns[1]);
     }
 
     [Theory]
@@ -1805,6 +1949,52 @@ public sealed class SoloRepairWorkflowTests
         await fixture.Produce(baselineFails: true, attemptId: goal.Id.Value, candidateWorktree: Worktree(fixture, goal),
             goal: goal, singleRow: true);
         return fixture.Summary;
+    }
+
+    private static void RenameLaneOnMain(SoloAttributedFailureRouteFixture fixture)
+    {
+        const string relative = "config/acceptance-manifest.json";
+        var path = Path.Combine(fixture.Repo, relative);
+        File.WriteAllText(path, File.ReadAllText(path).Replace(ManifestCheckName, "alternate solo lane", StringComparison.Ordinal));
+        fixture.Git("add", relative);
+        fixture.Git("commit", "-m", "Rename the acceptance lane");
+    }
+
+    private static string LandRepair(SoloAttributedFailureRouteFixture fixture, OrchestratorWorkspace workspace, Goal repair)
+    {
+        fixture.Git("commit", "--allow-empty", "-m", $"Integrate goal/{repair.Id.Value}: repair baseline");
+        var main = fixture.Git("rev-parse", "HEAD");
+        var branch = GoalWorktrees.BranchName(repair.Id);
+        GoalOperationJournal.RecordLandingIntent(fixture.Repo, repair, branch, "main", main, "fixture landing intent");
+        new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory).AppendGoalLanded(repair.Id, "main",
+            branch, LandingAdmissionReceipt.Recovered(main));
+        return main;
+    }
+
+    private static string ReadDependency(string path, Goal goal)
+    {
+        using var db = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false
+        }.ToString());
+        db.Open();
+        using var command = db.CreateCommand();
+        command.CommandText = "SELECT group_key FROM solo_repair_dependency WHERE goal = $goal";
+        command.Parameters.AddWithValue("$goal", goal.Id.Value);
+        using var rows = command.ExecuteReader();
+        Assert.True(rows.Read());
+        var key = rows.GetString(0);
+        Assert.False(rows.Read());
+        return key;
+    }
+
+    private static void AssertFreshRepairGate(ConductorAdvanceResult result, Goal goal, string main)
+    {
+        var resumed = Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        Assert.Equal("FreshGate", resumed.Decision?.Action);
+        Assert.Equal(SoloHoldReasons.RepairValidated, resumed.Decision?.DiscriminatingEvidence);
+        Assert.Contains(new PolicyDecisionFact("mainSha", main), resumed.Decision!.Facts);
+        Assert.Equal(GoalStatus.Verified, goal.Status);
     }
 
     private static ConductorAdvanceResult Complete(ConductorDriver driver, Goal goal, AcceptanceVerificationSummary summary,
