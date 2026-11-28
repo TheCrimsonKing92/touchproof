@@ -157,7 +157,7 @@ internal static class AcceptanceTestClassSourceScanner
         foreach (var path in sourceFiles)
         {
             var text = File.ReadAllText(path);
-            var syntax = ParseText(text).GetRoot();
+            var syntax = CSharpSourceFileRootReader.Read(path);
             if (syntax.ContainsDiagnostics && syntax.GetDiagnostics().Any(item => item.Severity == DiagnosticSeverity.Error))
                 throw new InvalidDataException($"Cannot parse test source '{path}'.");
             foreach (var node in syntax.DescendantNodes().OfType<ClassDeclarationSyntax>())
