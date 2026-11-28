@@ -57,7 +57,7 @@ public sealed class SoloRepairReplayTests
     }
 
     [Fact]
-    public void Grouping_UsesExactBaselineScopeAndDataCase()
+    public void Grouping_UsesProjectAndExactTestAcrossLanesAndRevisions()
     {
         using var fixture = new SoloAttributedFailureRouteFixture();
         var path = Path.Combine(fixture.Root, SoloBaselineRepairStore.FileName);
@@ -66,9 +66,16 @@ public sealed class SoloRepairReplayTests
         var same = first with { Candidate = "other-candidate", Attempt = "other-attempt", Baseline = first.Baseline.ToUpperInvariant() };
         var revised = first with { Baseline = new string('9', 40), Main = new string('9', 40) };
         var otherScope = first with { Check = "other acceptance check" };
+        var otherSelection = first with { LegacyRequest = "other request", BaselineCheck = "other focused check" };
         var sibling = first with { Identity = SoloAttributedFailureRouteFixture.First + "(value: 2)" };
+        var otherProject = first with { Project = "other/Tests.csproj" };
+        Assert.Equal(SoloBaselineRepairStore.Key(first.Project, first.Identity), first.GroupKey);
         Assert.Equal(first.GroupKey, same.GroupKey);
-        Assert.Equal(4, new[] { first, same, revised, otherScope, sibling }.Select(row => row.GroupKey).Distinct().Count());
+        Assert.Equal(first.GroupKey, revised.GroupKey);
+        Assert.Equal(first.GroupKey, otherScope.GroupKey);
+        Assert.Equal(first.GroupKey, otherSelection.GroupKey);
+        Assert.NotEqual(first.GroupKey, sibling.GroupKey);
+        Assert.NotEqual(first.GroupKey, otherProject.GroupKey);
 
         store.Retain("goal-1", [first, revised, otherScope, sibling]);
         store.Retain("goal-2", [same]);
@@ -76,8 +83,8 @@ public sealed class SoloRepairReplayTests
             store.ReserveGroup(row.GroupKey, "canonical intake");
 
         store = new SoloBaselineRepairStore(path);
-        Assert.Equal(4, Count(path, "solo_repair_group"));
-        Assert.Equal(5, Count(path, "solo_repair_dependency"));
+        Assert.Equal(2, Count(path, "solo_repair_group"));
+        Assert.Equal(3, Count(path, "solo_repair_dependency"));
         Assert.Equal(first.GroupKey, Assert.Single(store.ReadFindings("goal-2")).GroupKey);
     }
 
