@@ -390,9 +390,9 @@ public sealed class WorkerContextRendererDispatchPathTests(Xunit.ITestOutputHelp
                 CountOccurrences(prompt, $"identity={expectedIdentity};"));
         }
 
-        Assert.DoesNotContain(WorkerContextProjectionBoundary.StartPrefix, prompt, StringComparison.Ordinal);
-        Assert.DoesNotContain(WorkerContextProjectionBoundary.EndPrefix, prompt, StringComparison.Ordinal);
-        Assert.DoesNotContain(WorkerContextProjectionBoundary.LiteralPrefix, prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("WORKER_CONTEXT_TYPED_PROJECTION_START:", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("WORKER_CONTEXT_TYPED_PROJECTION_END:", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("WORKER_CONTEXT_TYPED_PROJECTION_LITERAL:", prompt, StringComparison.Ordinal);
         if (path != DispatchPath.Initial)
         {
             Assert.NotNull(receipt.RetryFeedbackPromptReceipt);
@@ -504,7 +504,24 @@ public sealed class WorkerContextRendererDispatchPathTests(Xunit.ITestOutputHelp
         var prompt = File.ReadAllText(prepared.PromptPath);
         var receipt = prepared.Task.LastDispatch!.ContextPackageReceipt!;
         Assert.NotNull(receipt.RetryFeedbackPromptReceipt);
-        Assert.Contains("identity=task/criterion-retry-feedback.json;", prompt, StringComparison.Ordinal);
+        var header = AssertBriefArtifact(prompt, receipt, "brief/header-residual.md", "Decision context:");
+        var current = AssertBriefArtifact(prompt, receipt, "brief/current.md", "## Instructions");
+        var feedback = RecoverInlineText(prompt, "task/criterion-retry-feedback.json");
+        Assert.Equal(new[] { "changed retry feedback" }, JsonSerializer.Deserialize<string[]>(feedback));
+        var timelineSection = Assert.Single(receipt.Sections, section => section.LogicalIdentity == "goal/timeline.json");
+        Assert.Equal(ContextDeliveryMode.OnDemandFile, timelineSection.DeliveryMode);
+        var timelineBytes = File.ReadAllBytes(Path.Combine(fixture.WorkingDirectory, timelineSection.MandatoryRelativePath!));
+        Assert.Equal(WorkerContextArtifact.Hash(timelineBytes), timelineSection.ContentHash);
+        var timeline = Encoding.UTF8.GetString(timelineBytes);
+        foreach (var message in new[] { "earlier retry feedback", "changed retry feedback" })
+        {
+            Assert.Contains(message, timeline, StringComparison.Ordinal);
+            Assert.DoesNotContain(message, header, StringComparison.Ordinal);
+            Assert.DoesNotContain(message, current, StringComparison.Ordinal);
+        }
+        var feedbackSection = Assert.Single(receipt.Sections,
+            section => section.LogicalIdentity == "task/criterion-retry-feedback.json");
+        Assert.Equal(WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(feedback)), feedbackSection.ContentHash);
         Assert.Equal(
             WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes("changed retry feedback")),
             receipt.RetryFeedbackPromptReceipt!.AcceptedFeedbackSha256);
@@ -516,8 +533,7 @@ public sealed class WorkerContextRendererDispatchPathTests(Xunit.ITestOutputHelp
     [Xunit.Fact]
     public void UserTextContainingLiteralProjectionMarkerSurvivesRenderingUnchanged()
     {
-        var literal = WorkerContextProjectionBoundary.Start(
-            new LogicalArtifactIdentity("user/literal.md"));
+        const string literal = "<!-- WORKER_CONTEXT_TYPED_PROJECTION_START:user/literal.md -->";
         var fixture = CreateDispatchFixture(DispatchPath.Initial, literal);
 
         var prepared = WorkerProfileDispatcher.PrepareTask(
@@ -533,111 +549,71 @@ public sealed class WorkerContextRendererDispatchPathTests(Xunit.ITestOutputHelp
 
         var prompt = File.ReadAllText(prepared.PromptPath);
         Assert.Contains(literal, RecoverInlineText(prompt, "goal/objective.md"), StringComparison.Ordinal);
-        Assert.DoesNotContain(WorkerContextProjectionBoundary.LiteralPrefix, prompt, StringComparison.Ordinal);
-        Assert.DoesNotContain(WorkerContextProjectionBoundary.EndPrefix, prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("WORKER_CONTEXT_TYPED_PROJECTION_LITERAL:", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("WORKER_CONTEXT_TYPED_PROJECTION_END:", prompt, StringComparison.Ordinal);
     }
 
     [Xunit.Theory]
     [Xunit.InlineData(AgentRole.Developer)]
-    [Xunit.InlineData(AgentRole.Tester)]
     [Xunit.InlineData(AgentRole.Reviewer)]
-    public void TypedAndLegacyPathsPreserveIdentityRoleAndBudgetSelections(AgentRole role)
+    [Xunit.InlineData(AgentRole.Planner)]
+    public void TypedDispatchPromptContainsNoProjectionMarkers(AgentRole role)
     {
         var fixture = CreateDispatchFixture(DispatchPath.Initial, role: role);
-        var contextDirectory = WorkerContextArtifacts.Write(
-            fixture.Goal,
-            fixture.Task,
-            fixture.WorkingDirectory,
-            providerName: "OpenAI",
-            modelName: AgentCatalog.OpenAiSolSubscriptionModelAlias);
-
-        var source = fixture.Kernel.BuildTaskBriefSource(
-            fixture.Goal.Id,
-            fixture.Task.Id,
-            workingDirectory: fixture.WorkingDirectory,
-            contextDirectory: contextDirectory,
-            reviewerScopeChangedFiles: role == AgentRole.Reviewer ? [] : null,
-            reviewerScopeMergeBase: role == AgentRole.Reviewer ? fixture.HeadCommit : null,
-            reviewerScopeTotalChangedFileCount: role == AgentRole.Reviewer ? 0 : null,
-            reviewerMergeTreeClean: role == AgentRole.Reviewer ? true : null,
-            reviewerMergeTreeConflictPaths: role == AgentRole.Reviewer ? [] : null,
-            reviewerMergeTreeTotalConflictPathCount: role == AgentRole.Reviewer ? 0 : null,
-            measureWithTypedSourceBoundaries: true);
-        var legacy = source.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: true);
-        var legacyPackage = WorkerProfileDispatcher.BuildContextPackage(
-            fixture.Goal,
-            fixture.Task,
-            fixture.WorkingDirectory,
-            contextDirectory,
-            legacy,
-            reviewerScopeChangedFiles: role == AgentRole.Reviewer ? [] : null,
-            reviewerScopeMergeBase: role == AgentRole.Reviewer ? fixture.HeadCommit : null,
-            reviewerScopeTotalChangedFileCount: role == AgentRole.Reviewer ? 0 : null,
-            reviewerMergeTreeClean: role == AgentRole.Reviewer ? true : null,
-            reviewerMergeTreeConflictPaths: role == AgentRole.Reviewer ? [] : null,
-            reviewerMergeTreeTotalConflictPathCount: role == AgentRole.Reviewer ? 0 : null,
-            workerProfile: FakeHarnessProfile());
-        var legacyPrompt = WorkerContextPackageBuilder.Render(legacyPackage);
-        var parsed = WorkerContextProjectionResidual.ParseLegacyMarkedTextV1(
-            legacy.Content,
-            role);
         var prepared = WorkerProfileDispatcher.PrepareTask(
-            fixture.Kernel,
-            fixture.Goal,
-            fixture.Task,
-            FakeHarnessProfile(),
-            Path.Combine(fixture.Root, "prompts"),
-            fixture.WorkingDirectory,
-            DateTimeOffset.UtcNow,
-            providerName: "OpenAI",
-            modelName: AgentCatalog.OpenAiSolSubscriptionModelAlias,
+            fixture.Kernel, fixture.Goal, fixture.Task, FakeHarnessProfile(),
+            Path.Combine(fixture.Root, "prompts"), fixture.WorkingDirectory, DateTimeOffset.UtcNow,
+            providerName: "OpenAI", modelName: AgentCatalog.OpenAiSolSubscriptionModelAlias,
             reviewerScopeChangedFiles: role == AgentRole.Reviewer ? [] : null,
             reviewerScopeMergeBase: role == AgentRole.Reviewer ? fixture.HeadCommit : null,
             reviewerScopeTotalChangedFileCount: role == AgentRole.Reviewer ? 0 : null,
             reviewerMergeTreeClean: role == AgentRole.Reviewer ? true : null,
             reviewerMergeTreeConflictPaths: role == AgentRole.Reviewer ? [] : null,
             reviewerMergeTreeTotalConflictPathCount: role == AgentRole.Reviewer ? 0 : null);
-        var typedPrompt = File.ReadAllText(prepared.PromptPath);
-        var typedReceipt = prepared.Task.LastDispatch!.ContextPackageReceipt!;
-        var typedIdentities = source.Segments
-            .Where(segment => segment.TypedProjectionIdentity is not null)
-            .Select(segment => segment.TypedProjectionIdentity.GetValueOrDefault())
-            .ToHashSet();
-        var legacyPackageIdentities = legacyPackage.Artifacts
-            .Select(artifact => artifact.Identity.Value)
-            .ToHashSet(StringComparer.Ordinal);
-        var typedPackageIdentities = typedReceipt.Sections
-            .Select(section => section.LogicalIdentity)
-            .ToHashSet(StringComparer.Ordinal);
 
-        Assert.Equal(typedIdentities, parsed.ProjectedIdentities.ToHashSet());
-        Assert.True(
-            legacyPackageIdentities.SetEquals(typedPackageIdentities),
-            $"Package identity mismatch for {role}: legacy-only=[{string.Join(", ", legacyPackageIdentities.Except(typedPackageIdentities).Order(StringComparer.Ordinal))}]; typed-only=[{string.Join(", ", typedPackageIdentities.Except(legacyPackageIdentities).Order(StringComparer.Ordinal))}]");
-        Assert.Equal(
-            DeliveredArtifactIdentities(legacyPrompt),
-            DeliveredArtifactIdentities(typedPrompt));
-        Assert.All(legacyPackage.Artifacts, artifact => Assert.Contains(role, artifact.RoleVisibility));
-        Assert.All(source.Segments, segment => Assert.Equal([role], segment.RoleVisibility));
-        Assert.Equal(
-            typedIdentities,
-            source.BudgetDecisions.Select(decision => decision.Identity).ToHashSet());
-        foreach (var decision in source.BudgetDecisions)
-        {
-            var selectedSegment = Assert.Single(source.Segments, segment =>
-                segment.TypedProjectionIdentity == decision.Identity);
-            var expectedLegacyBlock = string.Join(
-                Environment.NewLine,
-                new[] { WorkerContextProjectionBoundary.Start(decision.Identity) }
-                    .Concat(selectedSegment.Lines.Select(WorkerContextProjectionBoundary.EscapeReservedLiteral))
-                    .Append(WorkerContextProjectionBoundary.End(decision.Identity)));
+        var receipt = Assert.IsType<WorkerContextPackageReceipt>(prepared.Task.LastDispatch!.ContextPackageReceipt);
+        var prompt = File.ReadAllText(prepared.PromptPath);
+        Assert.StartsWith("ctxpkg-v1-sha256:", receipt.SemanticPackageId, StringComparison.Ordinal);
+        Assert.DoesNotContain("WORKER_CONTEXT_TYPED_PROJECTION_START:", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("WORKER_CONTEXT_TYPED_PROJECTION_END:", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("WORKER_CONTEXT_TYPED_PROJECTION_LITERAL:", prompt, StringComparison.Ordinal);
+        AssertBriefArtifact(prompt, receipt, "brief/header-residual.md", "Decision context:");
+        AssertBriefArtifact(prompt, receipt, "brief/current.md", "## Instructions");
+    }
 
-            Assert.Contains(expectedLegacyBlock, legacy.Content, StringComparison.Ordinal);
-            Assert.Equal(
-                decision.Disposition == TaskBriefBudgetDisposition.Collapsed,
-                selectedSegment.Lines.Any(line =>
-                    line.Contains("collapsed to stay under", StringComparison.Ordinal)));
-        }
+    [Xunit.Fact]
+    public void SourceContainsNoLegacyProjectionIngressOrBoundaryEmission()
+    {
+        var sourceRoot = Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(), "src");
+        var files = Directory.EnumerateFiles(sourceRoot, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !Path.GetRelativePath(sourceRoot, path).Split(Path.DirectorySeparatorChar)
+                .Any(component => component is "bin" or "obj"));
+        var forbidden = new System.Text.RegularExpressions.Regex(
+            @"\b(WorkerContextProjectionBoundary|ParseLegacyMarkedTextV1|LegacyMarkedTextProjection|emitTypedSourceBoundaries|measureWithTypedSourceBoundaries|includeTypedSourceBoundaries|legacyIngressProgressRecorder)\b|\bProjectLegacyMarkedTextV1\(\s*[^\s)]");
+        var matches = files.Where(path => forbidden.IsMatch(File.ReadAllText(path))).ToArray();
+        Assert.Empty(matches);
+    }
+
+    [Xunit.Fact]
+    public void BuildContextPackageRequiresTypedSourceBeforeReadingRegistry()
+    {
+        var task = new TaskSpec(TaskId.New(), "Render typed worker context.", AgentRole.Developer);
+        var goal = new AgentOrchestratorKernel().CreateGoal("Render worker context.", [task]);
+        var error = Assert.Throws<ArgumentNullException>(() => WorkerProfileDispatcher.BuildContextPackage(
+            goal, task, "unused", "unused", null!));
+        Assert.Equal("typedSource", error.ParamName);
+    }
+
+    private static string AssertBriefArtifact(
+        string prompt, WorkerContextPackageReceipt receipt, string identity, string expectedText)
+    {
+        var section = Assert.Single(receipt.Sections, item => item.LogicalIdentity == identity);
+        Assert.Equal(ContextContractVersion.V1.Value, section.ContractVersion);
+        var text = RecoverInlineText(prompt, identity);
+        Assert.Contains(expectedText, text, StringComparison.Ordinal);
+        Assert.Equal(WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(text)), section.ContentHash);
+        Assert.Equal(Encoding.UTF8.GetByteCount(text), section.ByteCount);
+        return text;
     }
 
     private static DispatchFixture CreateDispatchFixture(
@@ -655,6 +631,11 @@ public sealed class WorkerContextRendererDispatchPathTests(Xunit.ITestOutputHelp
                         (objectiveSuffix is null ? string.Empty : Environment.NewLine + objectiveSuffix);
         var goal = kernel.CreateGoal(objective, [task]);
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        if (path == DispatchPath.RetryFeedback)
+        {
+            kernel.RetryTaskWithAuthoritativeFeedback(
+                goal.Id, task.Id, "earlier retry feedback", RetryCause.ContractClarification);
+        }
         if (path != DispatchPath.Initial)
         {
             var location = new ReviewFindingLocation("src/Worker.cs", "Worker.Render");
@@ -798,33 +779,6 @@ public sealed class WorkerContextRendererDispatchPathTests(Xunit.ITestOutputHelp
         }
 
         return count;
-    }
-
-    private static HashSet<string> DeliveredArtifactIdentities(string prompt)
-    {
-        var identities = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var line in prompt.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
-        {
-            foreach (var prefix in new[]
-            {
-                "INLINE FULL: identity=",
-                "MANDATORY READ: identity=",
-                "ON-DEMAND ATTESTATION: identity="
-            })
-            {
-                if (!line.StartsWith(prefix, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                var separator = line.IndexOf(';', prefix.Length);
-                Assert.True(separator > prefix.Length, $"Rendered artifact header has no identity terminator: {line}");
-                identities.Add(line[prefix.Length..separator]);
-                break;
-            }
-        }
-
-        return identities;
     }
 
     private static string RecoverInlineText(string prompt, string identity)

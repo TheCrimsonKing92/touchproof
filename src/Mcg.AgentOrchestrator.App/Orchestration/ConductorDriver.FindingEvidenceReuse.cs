@@ -176,18 +176,22 @@ internal sealed partial class ConductorDriver
         return true;
     }
 
-    private void ReattachReusableGreenFindingEvidence(
+    internal void ReattachReusableGreenFindingEvidence(
         Goal goal,
         TaskSpec requestingTask,
         ReviewFinding finding,
         FindingEvidenceOutcome outcome,
         FindingEvidenceReceipt receipt)
     {
+        var requestReceipt = BuildReusedFindingEvidenceRequestReceipt(
+            requestingTask, BuildFindingEvidenceRequestIdentity([finding]), receipt,
+            FindingEvidenceRequestReceiptDecision.ReusedGreen);
         _recordFindingEvidenceOutcome(
             goal.Id, requestingTask.Id, finding.StableId, outcome, receipt);
-        _recordFindingEvidenceRequest(
+        RecordFindingEvidenceRequestReceipt(
             goal.Id,
             requestingTask.Id,
+            requestReceipt,
             $"finding-evidence disposition=reused-green; role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; " +
             $"finding_id={finding.StableId}; candidate_sha={receipt.CandidateSha}; receipt_id={receipt.ReceiptId}");
     }
@@ -244,13 +248,15 @@ internal sealed partial class ConductorDriver
         return false;
     }
 
-    private void ReattachReusableRedFindingEvidence(
+    internal void ReattachReusableRedFindingEvidence(
         Goal goal,
         TaskSpec requestingTask,
         ReviewFinding finding,
         string requestIdentity,
         FindingEvidenceReceipt receipt)
     {
+        var requestReceipt = BuildReusedFindingEvidenceRequestReceipt(
+            requestingTask, requestIdentity, receipt, FindingEvidenceRequestReceiptDecision.ReusedRed);
         var outcome = new FindingEvidenceOutcome(
             Honoured: true,
             ReceiptId: receipt.ReceiptId,
@@ -259,11 +265,25 @@ internal sealed partial class ConductorDriver
             DecisionReason: "reused-red",
             SourceReceiptIds: [receipt.ReceiptId]);
         _recordFindingEvidenceOutcome(goal.Id, requestingTask.Id, finding.StableId, outcome, receipt);
-        _recordFindingEvidenceRequest(
+        RecordFindingEvidenceRequestReceipt(
             goal.Id,
             requestingTask.Id,
+            requestReceipt,
             $"finding-evidence disposition=reused-red; role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; " +
             $"finding_id={finding.StableId}; candidate_sha={receipt.CandidateSha}; receipt_id={receipt.ReceiptId}");
+    }
+
+    private static FindingEvidenceRequestReceipt BuildReusedFindingEvidenceRequestReceipt(
+        TaskSpec requestingTask, string requestIdentity, FindingEvidenceReceipt receipt, FindingEvidenceRequestReceiptDecision decision)
+    {
+        var verification = requestingTask.LastVerification;
+        if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _, requestingTask.RequiredRole))
+        {
+            throw new InvalidOperationException("Reused finding evidence has no review finding round.");
+        }
+
+        return FindingEvidenceRequestReceipt.ForReuse(requestingTask.Id, receipt, requestIdentity,
+            BuildFindingRoundFingerprint(requestingTask.Id, verification!.CompletedAt, round), decision);
     }
 
     internal static bool TryResolveFindingEvidenceCoverage(
@@ -523,30 +543,8 @@ internal sealed partial class ConductorDriver
     internal static string BuildFindingRoundFingerprint(
         TaskId requestingTaskId,
         DateTimeOffset? verificationCompletedAt,
-        ReviewFindingRound round)
-    {
-        var verificationTicks = verificationCompletedAt?.ToUniversalTime().Ticks ?? 0;
-        var findings = round.Findings
-            .OrderBy(finding => finding.StableId, StringComparer.Ordinal)
-            .Select(finding => string.Join(
-                "\u001f",
-                finding.StableId,
-                finding.State,
-                finding.Severity,
-                finding.Category,
-                finding.Location.File,
-                finding.Location.Region,
-                finding.Description,
-                string.Join(
-                    "\u001e",
-                    (finding.EvidenceRequest?.Selections ?? [])
-                        .OrderBy(selection => selection.TestProject, StringComparer.Ordinal)
-                        .ThenBy(selection => selection.TestClass, StringComparer.Ordinal)
-                        .Select(selection => $"{selection.TestProject}:{selection.TestClass}"))));
-        var payload = $"{requestingTaskId.Value}\u001d{verificationTicks}\u001d{string.Join("\u001d", findings)}";
-        return "finding-round-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)))
-            .ToLowerInvariant()[..24];
-    }
+        ReviewFindingRound round) =>
+        FindingEvidenceRequestReceipt.BuildRoundFingerprint(requestingTaskId, verificationCompletedAt, round);
 
     internal static bool TryGetFindingEvidenceCoverage(
         FindingEvidenceRequest request,

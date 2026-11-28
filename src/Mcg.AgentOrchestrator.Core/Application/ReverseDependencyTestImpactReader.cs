@@ -13,12 +13,8 @@ internal static class ReverseDependencyTestImpactReader
     // The Infrastructure test closure reached 4,012 tracked source files on 2026-10-18. Keep
     // bounded growth headroom; exceeding this cap abandons selection for the full suite.
     internal const int MaximumIndexedSourceFiles = 8_000;
-    private const int MaximumRetainedSnapshots = 4;
     private const string CacheSchema = "reverse-dependency-index-v1";
-    private static readonly object CacheLock = new();
-    private static readonly Dictionary<string, LinkedListNode<CachedIndex>> CacheByFingerprint =
-        new(StringComparer.Ordinal);
-    private static readonly LinkedList<CachedIndex> CacheRecency = new();
+    private static readonly ReverseDependencyIndexCache DefaultCache = new();
 
     internal static ReverseDependencyTestSelection Read(
         string repositoryRoot,
@@ -29,7 +25,8 @@ internal static class ReverseDependencyTestImpactReader
         Action<string, string>? shippingReachDiagnostics = null,
         SelectionSourceTexts? sourceTexts = null,
         IReadOnlyList<string>? additionalTargetTestProjects = null,
-        IReadOnlyDictionary<string, IReadOnlyList<(int StartLine, int EndLine)>>? changedLineRanges = null)
+        IReadOnlyDictionary<string, IReadOnlyList<(int StartLine, int EndLine)>>? changedLineRanges = null,
+        ReverseDependencyIndexCache? cache = null)
     {
         var headroom = new RepositoryTestImpactHeadroom(
             null, maximumIndexedSourceFiles, null,
@@ -95,12 +92,13 @@ internal static class ReverseDependencyTestImpactReader
                 return ReverseDependencyTestSelection.Unreadable(snapshotFailure!, headroom: headroom);
             }
 
+            var selectedCache = cache ?? DefaultCache;
             var disposition = bypassCache
                 ? ReverseDependencyCacheDisposition.Bypass
                 : ReverseDependencyCacheDisposition.Miss;
             var reparsedFileCount = 0;
             ReverseDependencyIndex index;
-            if (!bypassCache && TryGetCachedIndex(snapshot.Fingerprint, out var cachedIndex, out var hitCount))
+            if (!bypassCache && selectedCache.TryGet(snapshot.Fingerprint, out var cachedIndex, out var hitCount))
             {
                 index = cachedIndex;
                 disposition = ReverseDependencyCacheDisposition.Hit;
@@ -115,13 +113,13 @@ internal static class ReverseDependencyTestImpactReader
                     snapshot,
                     disposition,
                     reparsedFileCount,
-                    RetainedSnapshotCount());
+                    selectedCache.Count);
                 return ReverseDependencyTestSelection.Unreadable(parseFailure!, failedReceipt, headroom);
             }
 
             var retainedSnapshotCount = bypassCache
-                ? RetainedSnapshotCount()
-                : RetainIndex(snapshot.Fingerprint, index);
+                ? selectedCache.Count
+                : selectedCache.Retain(snapshot.Fingerprint, index);
             var receipt = CreateReceipt(snapshot, disposition, reparsedFileCount, retainedSnapshotCount);
             return Select(index, changedSourcePaths, repositoryRoot, receipt, headroom, propagateShippingSourceReach, shippingReachDiagnostics, changedLineRanges);
         }
@@ -640,68 +638,7 @@ internal static class ReverseDependencyTestImpactReader
         return new ReverseDependencyIndex(files, knownMembersByType);
     }
 
-    private static bool TryGetCachedIndex(
-        string fingerprint,
-        out ReverseDependencyIndex index,
-        out int retainedSnapshotCount)
-    {
-        lock (CacheLock)
-        {
-            if (!CacheByFingerprint.TryGetValue(fingerprint, out var node))
-            {
-                index = null!;
-                retainedSnapshotCount = CacheByFingerprint.Count;
-                return false;
-            }
-
-            CacheRecency.Remove(node);
-            CacheRecency.AddFirst(node);
-            index = node.Value.Index;
-            retainedSnapshotCount = CacheByFingerprint.Count;
-            return true;
-        }
-    }
-
-    private static int RetainIndex(string fingerprint, ReverseDependencyIndex index)
-    {
-        lock (CacheLock)
-        {
-            if (CacheByFingerprint.TryGetValue(fingerprint, out var existing))
-            {
-                CacheRecency.Remove(existing);
-                CacheRecency.AddFirst(existing);
-                return CacheByFingerprint.Count;
-            }
-
-            var node = CacheRecency.AddFirst(new CachedIndex(fingerprint, index));
-            CacheByFingerprint.Add(fingerprint, node);
-            while (CacheByFingerprint.Count > MaximumRetainedSnapshots)
-            {
-                var expired = CacheRecency.Last!;
-                CacheRecency.RemoveLast();
-                CacheByFingerprint.Remove(expired.Value.Fingerprint);
-            }
-
-            return CacheByFingerprint.Count;
-        }
-    }
-
-    private static int RetainedSnapshotCount()
-    {
-        lock (CacheLock)
-        {
-            return CacheByFingerprint.Count;
-        }
-    }
-
-    internal static void ClearCacheForTests()
-    {
-        lock (CacheLock)
-        {
-            CacheByFingerprint.Clear();
-            CacheRecency.Clear();
-        }
-    }
+    internal static void ClearCacheForTests() => DefaultCache.Clear();
 
     private static ReverseDependencyCacheReceipt CreateReceipt(
         SourceSnapshot snapshot,
@@ -865,16 +802,14 @@ internal static class ReverseDependencyTestImpactReader
     private static string ToRepositoryPath(string repositoryRoot, string path) =>
         Path.GetRelativePath(repositoryRoot, path).Replace('\\', '/');
 
-    private sealed record IndexedSourceFile(
+    internal sealed record IndexedSourceFile(
         string Path,
         bool IsTargetTestProject,
         CSharpTestClassScanner.SourceSymbols? Symbols);
 
-    private sealed record ReverseDependencyIndex(
+    internal sealed record ReverseDependencyIndex(
         IReadOnlyDictionary<string, IndexedSourceFile> Files,
         IReadOnlyDictionary<string, HashSet<string>> KnownMembersByType);
-
-    private sealed record CachedIndex(string Fingerprint, ReverseDependencyIndex Index);
 
     private sealed record ProjectSnapshot(string Path, string ContentHash);
 

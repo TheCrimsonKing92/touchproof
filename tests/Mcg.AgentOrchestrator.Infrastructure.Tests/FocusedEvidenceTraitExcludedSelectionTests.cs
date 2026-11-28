@@ -177,6 +177,71 @@ public sealed class FocusedEvidenceTraitExcludedSelectionTests : RemoteFirstFocu
         AssertDrop(coverage);
     }
 
+    [Theory]
+    [InlineData("""using Xunit; [Trait("Category","HostIntegration")] class HostTests { [Fact] void A() {} }""", Reason, null)]
+    [InlineData("""class HostTests { [Xunit.Fact, Xunit.Trait("Category","HostIntegratio\u006E")] void A() {} }""", Reason, null)]
+    [InlineData("""class HostTests { const string Value = "HostIntegration"; [Xunit.Fact, Xunit.Trait("Category",Value)] void A() {} }""", null, null)]
+    [InlineData("""class HostTests { [Xunit.Fact, Xunit.Trait(name: "Category", value: "HostIntegration")] void A() {} }""", null, null)]
+    [InlineData("""class HostTests { [Xunit.Fact, Xunit.Trait("Category", Value = "HostIntegration")] void A() {} }""", null, null)]
+    [InlineData("""using Alias = System; class HostTests { [Xunit.Fact, Xunit.Trait("Category","HostIntegration")] void A() {} }""", null, null)]
+    [InlineData("""using Xunit; class FactAttribute : System.Attribute {} class HostTests { [Fact, Trait("Category","HostIntegration")] void A() {} }""", null, null)]
+    [InlineData("""class HostTests { [Xunit.Fact, Xunit.Trait("Category","HostIntegration")] void A() {} }""", null, "namespace Xunit { class FactAttribute {} }")]
+    [InlineData("""class HostTests { [OptInFact, Xunit.Trait("Category","HostIntegration")] void A() {} }""", Reason, "using Xunit; class OptInFactAttribute : FactAttribute {}")]
+    [InlineData("""class Outer { class HostTests { [Xunit.Fact, Xunit.Trait("Category","HostIntegration")] void A() {} } }""", null, null)]
+    [InlineData("""class HostTests : Base { [Xunit.Fact, Xunit.Trait("Category","HostIntegration")] void A() {} }""", null, null)]
+    [InlineData("""class HostTests<T> { [Xunit.Fact, Xunit.Trait("Category","HostIntegration")] void A() {} }""", null, null)]
+    [InlineData("""abstract class HostTests { [Xunit.Fact, Xunit.Trait("Category","HostIntegration")] void A() {} }""", null, null)]
+    [InlineData("""struct HostTests { [Xunit.Fact, Xunit.Trait("Category","HostIntegration")] void A() {} }""", null, null)]
+    [InlineData("""interface HostTests { [Xunit.Fact, Xunit.Trait("Category","HostIntegration")] void A(); }""", null, null)]
+    [InlineData("""record struct HostTests { [Xunit.Fact, Xunit.Trait("Category","HostIntegration")] void A() {} }""", null, null)]
+    [InlineData("class HostTests { [Xunit.Fact, Xunit.Trait(\"Category\",\"HostIntegration\")] void A() {} }\n#if DEBUG\n#endif", null, null)]
+    [InlineData("""class HostTests { [Xunit.Fact, Xunit.Trait("Category","HostIntegration")] void A() {} }""", Reason, "#if DEBUG\n#endif")]
+    [InlineData("""class HostTests { [Xunit.Fact, Xunit.Trait("Category","HostIntegration")] void A() {} } class Broken {""", "read-null", null)]
+    [InlineData("""[Trait("Category","HostIntegration")] class HostTests { [Fact] void A() {} }""", Reason, "global using Xunit;")]
+    [InlineData("""class HostTests { [Xunit.Fact, Xunit.Trait("Category","HostIntegration")] void A() {} }""", null, "global using Alias = System;")]
+    [InlineData("""using Xunit; [Trait("Category","HostIntegration")] partial class HostTests {}""", Reason, "partial class HostTests { [Xunit.Fact] void A() {} }")]
+    public void FactsBackedDiscovery_MatchesSyntaxReferenceOutcome(string source, string? expectedReason, string? companion)
+    {
+        using var fixture = new Fixture();
+        var ownerState = Directory.CreateDirectory(Path.Combine(fixture.Root, ".orchestrator")).FullName;
+        var marker = "\n// fixture " + Guid.NewGuid().ToString("N");
+        fixture.Write(source + marker);
+        if (companion is not null)
+            fixture.Write(companion + marker, "Companion.cs");
+
+        AssertReferenceOutcome();
+        var files = FocusedEvidenceRequestResolver.EnumerateFocusedEvidenceSourceFiles(fixture.Root, Project).ToArray();
+        Assert.Equal(companion is null ? 1 : 2, files.Length);
+        Assert.All(files, path =>
+        {
+            var hash = AcceptanceTestClassSourceExtractStore.HashText(File.ReadAllText(path));
+            var directory = Path.Combine(ownerState, FocusedEvidenceDeclarationFactStore.DirectoryName);
+            Assert.True(File.Exists(FocusedEvidenceDeclarationFactStore.EntryPath(directory, hash)), path);
+        });
+        AssertReferenceOutcome();
+
+        void AssertReferenceOutcome()
+        {
+            using var store = FocusedEvidenceDeclarationFactStore.Use(
+                new FocusedEvidenceDeclarationFactStore(new FocusedEvidenceParsedRootCache.Store(32)));
+            var discovery = FocusedEvidenceTraitExclusionDiscovery.Read(fixture.Root, Project);
+            if (expectedReason == "read-null")
+            {
+                Assert.Null(discovery);
+                return;
+            }
+
+            Assert.NotNull(discovery);
+            Assert.True(discovery.HasMatchingDeclaration("HostTests"));
+            Assert.False(discovery.HasMatchingDeclaration("Missing"));
+            var reasons = discovery.ProveExcluded("HostTests", [], [("Category", "HostIntegration")]);
+            if (expectedReason is null)
+                Assert.Null(reasons);
+            else
+                Assert.Equal(expectedReason, Assert.Single(reasons!));
+        }
+    }
+
     [Fact]
     public void VstestWithoutImplicitExclusion_RetainsHostClass()
     {

@@ -147,12 +147,7 @@ public sealed class WorkerContextArtifactsCharacterizationTests(Xunit.ITestOutpu
 
         var contextDirectory = WorkerContextArtifacts.Write(goal, currentTask, workingDirectory, ["profile valid"]);
         var evidence = File.ReadAllText(Path.Combine(contextDirectory, "prior-task-evidence.md"));
-        var brief = new TaskBrief(
-            goal.Id,
-            currentTask.Id,
-            currentTask.RequiredRole,
-            currentTask.Description,
-            $"# Agent Task Brief{Environment.NewLine}Goal: {goal.Objective}{Environment.NewLine}Goal id: {goal.Id.Value}{Environment.NewLine}Task: {currentTask.Description}{Environment.NewLine}Task role: {currentTask.RequiredRole}{Environment.NewLine}## Instructions{Environment.NewLine}Review the projected prior evidence.");
+        var brief = TypedBriefSourceFixture.Create(goal, currentTask, "Review the projected prior evidence.");
         var downstreamPackage = WorkerProfileDispatcher.BuildContextPackage(
             goal,
             currentTask,
@@ -232,12 +227,7 @@ public sealed class WorkerContextArtifactsCharacterizationTests(Xunit.ITestOutpu
         task = goal.Tasks.Single();
 
         var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory, ["profile valid"]);
-        var brief = new TaskBrief(
-            goal.Id,
-            task.Id,
-            task.RequiredRole,
-            task.Description,
-            $"# Agent Task Brief{Environment.NewLine}Goal: {goal.Objective}{Environment.NewLine}Goal id: {goal.Id.Value}{Environment.NewLine}Task: {task.Description}{Environment.NewLine}Task role: {task.RequiredRole}{Environment.NewLine}## Instructions{Environment.NewLine}Inspect the projected retry evidence.");
+        var brief = TypedBriefSourceFixture.Create(goal, task, "Inspect the projected retry evidence.");
         var package = WorkerProfileDispatcher.BuildContextPackage(
             goal,
             task,

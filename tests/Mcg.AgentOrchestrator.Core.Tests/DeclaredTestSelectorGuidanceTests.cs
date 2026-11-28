@@ -25,13 +25,13 @@ public sealed class DeclaredTestSelectorGuidanceTests
         var task = new TaskSpec(TaskId.New(), "Select test evidence", role);
         var goal = kernel.CreateGoal("Use declared project test results", [task]);
         var declared = kernel.BuildTaskBriefSource(goal.Id, task.Id, roleRequirementStack: ProjectStack.Declared)
-            .ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false).Content;
+            .ProjectLegacyMarkedTextV1().Content;
         Assert.Contains(Assert.Single(DeclaredTestSelectorGuidance.For(ProjectStack.Declared)), declared);
         Assert.Contains("Never construct selectors by joining suite and name with a dot", declared);
         foreach (var stack in new ProjectStack?[] { ProjectStack.Dotnet, ProjectStack.Go, ProjectStack.Node, null })
         {
             var other = kernel.BuildTaskBriefSource(goal.Id, task.Id, roleRequirementStack: stack)
-                .ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false).Content;
+                .ProjectLegacyMarkedTextV1().Content;
             Assert.DoesNotContain("Declared-test evidence selectors:", other);
         }
     }

@@ -196,6 +196,8 @@ public sealed class SelectedExecutionGateMissDetectorTests
                     _kernel.RecordFindingEvidenceRequestDispositions(goalId, taskId, dispositions),
                 recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
                     _kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+            _driver.FindingEvidenceRequestReceiptRecorder = (goalId, taskId, receipt, message) =>
+                _kernel.RecordFindingEvidenceRequest(goalId, taskId, receipt, message);
             if (detectorEnabled)
             {
                 var coordinator = observationFailure is null ? Backstop.Coordinator : new SelectedExecutionBackstopCoordinator(
@@ -240,8 +242,18 @@ public sealed class SelectedExecutionGateMissDetectorTests
         internal void AssertPath()
         {
             Assert.Equal(_path == "fresh" ? 1 : 0, _runs);
-            var reused = Goal.Timeline.Any(item => item.Message.Contains("disposition=reused-red;", StringComparison.Ordinal));
-            Assert.Equal(_path == "reused", reused);
+            var receipt = ReusedFindingEvidenceRequestReceiptTests.FindReuseRecord(
+                Goal.Timeline, Requester.Id, FindingEvidenceRequestReceiptDecision.ReusedRed)?.FindingEvidenceRequest;
+            if (_path == "reused")
+            {
+                Assert.NotNull(receipt);
+                Assert.Equal(BatchIdentity!.RoundFingerprint, receipt.FindingRoundFingerprint);
+                Assert.Equal(CandidateSha, receipt.CandidateSha, ignoreCase: true);
+            }
+            else
+            {
+                Assert.Null(receipt);
+            }
         }
 
         private FocusedEvidenceRunResult Evidence(string request)

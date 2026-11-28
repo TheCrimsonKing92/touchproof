@@ -171,6 +171,7 @@ public sealed class ReverseDependencyPartialMemberFilterTests
     {
         private const string TestDirectory = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests";
         private string Root { get; } = Path.Combine(Path.GetTempPath(), $"mcg-member-filter-{Guid.NewGuid():N}");
+        private ReverseDependencyIndexCache Cache { get; } = new();
         internal List<(string Type, string TestClass)> ShippingReach { get; } = [];
 
         internal Repository()
@@ -188,7 +189,8 @@ public sealed class ReverseDependencyPartialMemberFilterTests
             ShippingReach.Clear();
             return ReverseDependencyTestImpactReader.Read(Root, changedPaths,
                 bypassCache: bypassCache, changedLineRanges: ranges, propagateShippingSourceReach: true,
-                shippingReachDiagnostics: (type, testClass) => ShippingReach.Add((type, testClass)));
+                shippingReachDiagnostics: (type, testClass) => ShippingReach.Add((type, testClass)),
+                cache: Cache);
         }
 
         internal void WriteTest(string name, string expression, string attribute = "[Xunit.Fact]", string parameters = "") =>

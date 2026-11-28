@@ -25,6 +25,11 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceAllSkipped",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceTraitExcludedSelection",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceTraitExclusionDiscovery",
+            // Declaration facts are reached through trait-exclusion discovery.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceUsingDirectiveFact",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceAttributeUsageFact",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceDeclaredMethodFact",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceTypeShapeFact",
             // Rust evidence planning is reached through the focused request resolver.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RustNextestFocusedEvidence",
             // Cleanup evidence is reached through the independently owned failure-cause adjudicator.

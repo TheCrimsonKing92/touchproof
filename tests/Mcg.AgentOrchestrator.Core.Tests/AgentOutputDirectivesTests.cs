@@ -10,7 +10,7 @@ public sealed class AgentOutputDirectivesTests
         var markerText = "class_id:none|dispositive-misclassification";
         var goal = kernel.CreateGoal("Review a compatibility change mentioning " + markerText, [reviewer]);
         var source = kernel.BuildTaskBriefSource(goal.Id, reviewer.Id);
-        var prompt = source.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false);
+        var prompt = source.ProjectLegacyMarkedTextV1();
         var directive = Assert.Single(AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Reviewer),
             line => line.StartsWith("findings:", StringComparison.Ordinal));
         Assert.Contains(markerText, directive, StringComparison.Ordinal);
@@ -30,7 +30,7 @@ public sealed class AgentOutputDirectivesTests
             ]
         };
         Assert.Null(AgentOutputDirectives.GetFindingContractVersion(contentOnlySource,
-            contentOnlySource.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false)));
+            contentOnlySource.ProjectLegacyMarkedTextV1()));
     }
 
     [Xunit.Fact(DisplayName = "WorkerResultTemplate_requires_structured_tests_and_blockers_tokens")]

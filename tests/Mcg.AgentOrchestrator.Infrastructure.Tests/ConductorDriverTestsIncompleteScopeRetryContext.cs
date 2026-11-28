@@ -149,7 +149,7 @@ public sealed class ConductorDriverTestsIncompleteScopeRetryContext
 
         var feedback = developer.CriterionRetryFeedback.ToArray();
         var brief = kernel.BuildTaskBriefSource(goal.Id, developer.Id)
-            .ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false).Content;
+            .ProjectLegacyMarkedTextV1().Content;
         const string heading = "## Unmet acceptance criteria from the prior attempt - fix these:";
         var sectionStart = brief.IndexOf(heading, StringComparison.Ordinal);
         Assert.True(sectionStart >= 0, "The next Developer brief must contain retry feedback.");

@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -17,15 +18,18 @@ internal sealed class StoreInspectionSnapshot : IDisposable
     private const long LockLength = 512;
     private readonly bool _ownsDirectory;
     internal SqliteConnection Connection { get; }
+    internal static event Action<SqliteConnection, string>? ConnectionOpenedForDiagnostics;
 
     internal StoreInspectionSnapshot(string source, TimeProvider? timeProvider = null,
         Action<TimeSpan>? waitForLockRetry = null, string? stagingDirectory = null,
-        Func<string, FileStream>? createStagedFile = null, Action<string>? prepareStagedDatabase = null)
+        Func<string, FileStream>? createStagedFile = null, Action<string>? prepareStagedDatabase = null,
+        int busyTimeoutMilliseconds = StateDbConnectionFactory.DefaultBusyTimeoutMilliseconds)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(busyTimeoutMilliseconds);
         _ownsDirectory = stagingDirectory is null;
         try
         {
-            if (TryOpenLiveWal(source, out var live))
+            if (TryOpenLiveWal(source, busyTimeoutMilliseconds, out var live))
             {
                 Connection = live!;
                 return;
@@ -51,7 +55,7 @@ internal sealed class StoreInspectionSnapshot : IDisposable
                 {
                     ReleaseHandles();
                     // A writer may have activated WAL since the initial observation.
-                    if (TryOpenLiveWal(source, out live))
+                    if (TryOpenLiveWal(source, busyTimeoutMilliseconds, out live))
                     {
                         Connection = live!;
                         return;
@@ -92,7 +96,8 @@ internal sealed class StoreInspectionSnapshot : IDisposable
             ReleaseHandles();
             var stagedDatabase = Path.Combine(_directory, Path.GetFileName(source));
             prepareStagedDatabase?.Invoke(stagedDatabase);
-            Connection = Open(stagedDatabase);
+            Connection = Open(stagedDatabase, busyTimeoutMilliseconds);
+            ConnectionOpenedForDiagnostics?.Invoke(Connection, source);
         }
         catch
         {
@@ -109,7 +114,7 @@ internal sealed class StoreInspectionSnapshot : IDisposable
         return command.ExecuteScalar()?.ToString() ?? string.Empty;
     }
 
-    private bool TryOpenLiveWal(string source, out SqliteConnection? connection)
+    private bool TryOpenLiveWal(string source, int busyTimeoutMilliseconds, out SqliteConnection? connection)
     {
         connection = null;
         if (!StoreSetupRunner.TargetExists(source + "-wal") || !StoreSetupRunner.TargetExists(source + "-shm"))
@@ -126,26 +131,35 @@ internal sealed class StoreInspectionSnapshot : IDisposable
             ReleaseHandles();
             return false;
         }
-        connection = Open(source);
+        connection = Open(source, busyTimeoutMilliseconds);
         try
         {
             using var begin = connection.CreateCommand();
             begin.CommandText = "BEGIN";
             begin.ExecuteNonQuery();
+            ConnectionOpenedForDiagnostics?.Invoke(connection, source);
         }
         catch { connection.Dispose(); throw; }
         return true;
     }
 
-    private static SqliteConnection Open(string source)
+    private static SqliteConnection Open(string source, int busyTimeoutMilliseconds)
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = source, Mode = SqliteOpenMode.ReadOnly, Pooling = false
+            DataSource = source,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+            // Microsoft.Data.Sqlite retries BUSY independently. Its timeout is in whole seconds,
+            // and zero would make those retries unbounded.
+            DefaultTimeout = Math.Max(1, (int)Math.Ceiling(busyTimeoutMilliseconds / 1_000d))
         }.ToString());
         try
         {
             connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA busy_timeout=" + busyTimeoutMilliseconds.ToString(CultureInfo.InvariantCulture);
+            command.ExecuteNonQuery();
             return connection;
         }
         catch { connection.Dispose(); throw; }

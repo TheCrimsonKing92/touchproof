@@ -27,7 +27,7 @@ public sealed class DeclaredTestSelectorGuidanceRoutingTests : IDisposable
         var task = new TaskSpec(TaskId.New(), "Select test evidence", role);
         var goal = kernel.CreateGoal("Use declared project test results", [task]);
         var brief = kernel.BuildTaskBriefSource(goal.Id, task.Id, roleRequirementStack: stack)
-            .ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false).Content;
+            .ProjectLegacyMarkedTextV1().Content;
 
         Assert.Contains("Declared-test evidence selectors:", brief);
         Assert.Contains("Never construct selectors by joining suite and name with a dot", brief);

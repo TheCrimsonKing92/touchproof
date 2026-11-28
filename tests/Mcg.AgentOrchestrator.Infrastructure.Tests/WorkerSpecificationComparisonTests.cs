@@ -197,7 +197,7 @@ public sealed class WorkerSpecificationComparisonTests(Xunit.ITestOutputHelper o
         goal = kernel.GetGoal(goal.Id);
         task = goal.Tasks.Single();
         var source = kernel.BuildTaskBriefSource(goal.Id, task.Id);
-        var package = WorkerProfileDispatcher.BuildContextPackage(goal, task, root, root, source.ToTaskBrief(""), typedSource: source,
+        var package = WorkerProfileDispatcher.BuildContextPackage(goal, task, root, root, source,
             currentCandidateSha: "matched-fixture-candidate", comparisonBaseSha: "matched-fixture-main");
         var prompt = WorkerContextRenderer.Render(source, package, root, WorkerContextDeliveryPolicy.Initial);
         return new(root, kernel, goal, task, source, package, prompt);

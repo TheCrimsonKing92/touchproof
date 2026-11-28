@@ -13,7 +13,7 @@ public sealed class GoalRepositoryBriefSectionTests
         var goal = kernel.CreateGoal("Repository evidence", [task]);
         var worktrees = new Dictionary<string, string> { ["default"] = "home-goal", ["crosswalk"] = "crosswalk-goal" };
         var brief = kernel.BuildTaskBriefSource(goal.Id, task.Id, repositoryWorktrees: worktrees);
-        var text = brief.ProjectLegacyMarkedTextV1(false).Content;
+        var text = brief.ProjectLegacyMarkedTextV1().Content;
         Assert.Contains("- crosswalk: crosswalk-goal", text, StringComparison.Ordinal);
         Assert.Contains("- default: home-goal", text, StringComparison.Ordinal);
         Assert.Contains("Evidence-request declared repository keys: crosswalk, default.", text, StringComparison.Ordinal);

@@ -103,13 +103,13 @@ public sealed class DeveloperCompletionStructuralPreflightRetryFeedbackTests
             Assert.Equal(developer.LastDispatch!.BaseCommit, obligation.CandidateSha);
             Assert.Equal(RetryCorrectionObligation.HashFeedback(feedback), obligation.FeedbackSha256);
             var source = Assert.IsType<TaskBriefSource>(nextDeveloperBrief);
-            var legacy = source.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false);
-            AssertObligationBeforeHistory(legacy.Content, oldFinding, candidateSha);
+            AssertObligationBeforeHistory(source.ProjectLegacyMarkedTextV1().Content, oldFinding, candidateSha);
             var contextDirectory = Path.Combine(executionDirectory, "context");
             Directory.CreateDirectory(contextDirectory);
             File.WriteAllText(Path.Combine(contextDirectory, "artifact-registry.json"), "{\"artifacts\":[]}");
             var package = WorkerProfileDispatcher.BuildContextPackage(goal, developer, worktreePath,
-                contextDirectory, legacy, currentCandidateSha: candidateSha, typedSource: source);
+                contextDirectory, source,
+                currentCandidateSha: candidateSha);
             AssertObligationBeforeHistory(WorkerContextPackageBuilder.Render(package), oldFinding, candidateSha);
             Assert.Equal(RetryCause.NewSourceFinding, developer.PendingRetryCause);
             Assert.Equal(RetryRoundKind.Mechanical, developer.PendingRetryRoundKind);

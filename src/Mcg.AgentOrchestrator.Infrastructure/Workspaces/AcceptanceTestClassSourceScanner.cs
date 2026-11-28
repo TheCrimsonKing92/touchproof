@@ -1,3 +1,4 @@
+using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -5,7 +6,8 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-internal sealed record AcceptanceTestClassDescriptor(string FullName, string? Collection, string? Constraint = null);
+internal sealed record AcceptanceTestClassDescriptor(string FullName, string? Collection, string? Constraint = null,
+    bool CollectionUnknown = false);
 internal sealed record AcceptanceTestClassSource(string FullName, IReadOnlyList<string> SourcePaths, string SourceText);
 
 internal static class AcceptanceTestClassSourceScanner
@@ -35,12 +37,31 @@ internal static class AcceptanceTestClassSourceScanner
     // Strict inventory callers cannot interpret missing or malformed candidate input as no tests.
     internal static IReadOnlyList<AcceptanceTestClassDescriptor> ScanProject(string worktreePath, string project)
     {
-        var projectPath = Path.Combine(worktreePath, project.Replace('/', Path.DirectorySeparatorChar));
-        var document = System.Xml.Linq.XDocument.Load(projectPath);
+        var root = Path.GetFullPath(worktreePath);
+        var projectPath = Path.GetFullPath(project.Replace('\\', '/'), root);
+        var document = XDocument.Load(projectPath);
         if (document.Root?.Name.LocalName != "Project")
             throw new InvalidDataException($"Invalid test project '{project}'.");
-        var files = FocusedEvidenceRequestResolver.EnumerateFocusedEvidenceSourceFiles(worktreePath, project).ToArray();
+        var files = FocusedEvidenceRequestResolver.EnumerateFocusedEvidenceSourceFiles(root, projectPath).ToArray();
         if (files.Length == 0) throw new InvalidDataException($"No test sources in '{project}'.");
+        ValidateSources(files);
+        var referencedProjects = ReadReferencedProjects(root, projectPath, document);
+        var cache = AcceptanceTestClassSourceCache.Current;
+        var referencedConstants = new Lazy<IReadOnlyDictionary<string, string[]>>(() =>
+        {
+            var paths = referencedProjects.SelectMany(path =>
+                    FocusedEvidenceRequestResolver.EnumerateFocusedEvidenceSourceFiles(root, path))
+                .Except(files, SourcePathComparer).ToArray();
+            if (paths.Length == 0) return IndexConstants([]);
+            ValidateSources(paths);
+            return IndexConstants(cache.Extract(root, [.. files, .. paths]).Skip(files.Length));
+        });
+        var classes = ScanExtracts(cache.Extract(root, files), referencedConstants: referencedConstants);
+        return classes.Count > 0 ? classes : throw new InvalidDataException($"No runnable test classes in '{project}'.");
+    }
+
+    private static void ValidateSources(IEnumerable<string> files)
+    {
         var counter = ParseCounter.Value;
         foreach (var file in files)
         {
@@ -48,8 +69,42 @@ internal static class AcceptanceTestClassSourceScanner
             if (syntax.GetDiagnostics().Any(item => item.Severity == DiagnosticSeverity.Error))
                 throw new InvalidDataException($"Cannot parse test source '{file}'.");
         }
-        var classes = Scan(worktreePath, files);
-        return classes.Count > 0 ? classes : throw new InvalidDataException($"No runnable test classes in '{project}'.");
+    }
+
+    private static StringComparer SourcePathComparer =>
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    private static IReadOnlyList<string> ReadReferencedProjects(string root, string projectPath, XDocument document)
+    {
+        var visited = new HashSet<string>(SourcePathComparer) { projectPath };
+        var pending = new Queue<(string Path, XDocument Document)>();
+        var projects = new List<string>();
+        pending.Enqueue((projectPath, document));
+        while (pending.TryDequeue(out var current))
+        {
+            foreach (var reference in current.Document.Descendants().Where(item => item.Name.LocalName == "ProjectReference"))
+            {
+                var referenceOutput = reference.Attribute("ReferenceOutputAssembly")?.Value ??
+                    reference.Elements().FirstOrDefault(item => item.Name.LocalName == "ReferenceOutputAssembly")?.Value;
+                if (string.Equals(referenceOutput?.Trim(), "false", StringComparison.OrdinalIgnoreCase)) continue;
+                var includes = (reference.Attribute("Include")?.Value ?? "")
+                    .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                foreach (var include in includes)
+                {
+                    var path = Path.GetFullPath(include.Replace('\\', '/'), Path.GetDirectoryName(current.Path)!);
+                    if (!visited.Add(path)) continue;
+                    var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
+                    if (Path.IsPathRooted(relative) || relative.StartsWith("../", StringComparison.Ordinal))
+                        throw new InvalidDataException($"Referenced project '{include}' is outside the candidate worktree.");
+                    var referenced = XDocument.Load(path);
+                    if (referenced.Root?.Name.LocalName != "Project")
+                        throw new InvalidDataException($"Invalid referenced project '{relative}'.");
+                    projects.Add(path);
+                    pending.Enqueue((path, referenced));
+                }
+            }
+        }
+        return projects;
     }
 
     // The selection already read its closure. Preserve strict whole-project validation,
@@ -58,7 +113,7 @@ internal static class AcceptanceTestClassSourceScanner
         SelectionSourceTexts sourceTexts)
     {
         var projectPath = Path.Combine(worktreePath, project.Replace('/', Path.DirectorySeparatorChar));
-        var document = System.Xml.Linq.XDocument.Parse(SelectionFileReadProbe.ReadAllText(projectPath));
+        var document = XDocument.Parse(SelectionFileReadProbe.ReadAllText(projectPath));
         if (document.Root?.Name.LocalName != "Project")
             throw new InvalidDataException($"Invalid test project '{project}'.");
         var files = FocusedEvidenceRequestResolver.EnumerateFocusedEvidenceSourceFiles(worktreePath, project).ToArray();
@@ -186,20 +241,17 @@ internal static class AcceptanceTestClassSourceScanner
         ScanExtracts(trees.Select(tree => ExtractRoot(tree.GetRoot())).ToArray());
 
     private static IReadOnlyList<AcceptanceTestClassDescriptor> ScanExtracts(
-        IReadOnlyList<FileExtract> extracts, IEnumerable<FileExtract>? constantSources = null)
+        IReadOnlyList<FileExtract> extracts, IEnumerable<FileExtract>? constantSources = null,
+        Lazy<IReadOnlyDictionary<string, string[]>>? referencedConstants = null)
     {
         var derivedFacts = AcceptanceTestClassSourceScannerFactAncestry.Resolve(
             extracts.Select(extract => extract.Ancestry));
-        var constants = (constantSources is null ? extracts : extracts.Concat(constantSources))
-            .SelectMany(extract => extract.Constants)
-            .GroupBy(item => item.Key, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key,
-                group => group.Select(item => item.Value).Distinct(StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
+        var constants = IndexConstants(constantSources is null ? extracts : extracts.Concat(constantSources));
 
         var classes = extracts.SelectMany(extract => extract.Classes)
             .Select(item => new SourceClass(item.FullName, item.ShortName, item.Abstract, item.BaseName,
                 item.HasFacts || derivedFacts.Contains(item.FullName),
-                ResolveCollection(item.FullName, item.Collection, constants),
+                ResolveCollection(item.FullName, item.Collection, constants, referencedConstants),
                 item.IsolationTraits.Select(trait => ResolveIsolationTrait(item.FullName, trait, constants))
                     .Aggregate((string?)null, (left, right) => MergeConstraints(item.FullName, left, right))))
             .GroupBy(item => item.FullName, StringComparer.Ordinal)
@@ -215,12 +267,22 @@ internal static class AcceptanceTestClassSourceScanner
         var byName = classes.GroupBy(item => item.ShortName, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
         return classes.Where(item => !item.Abstract && HasRunnableFacts(item, byName, []))
-            .Select(item => new AcceptanceTestClassDescriptor(item.FullName,
-                InheritedValue(item, byName, source => source.Collection, []),
-                InheritedValue(item, byName, source => source.Constraint, [])))
+            .Select(item =>
+            {
+                var collection = InheritedValue(item, byName, source => source.Collection, []);
+                return new AcceptanceTestClassDescriptor(item.FullName, collection?.Name,
+                    InheritedValue(item, byName, source => source.Constraint, []),
+                    CollectionUnknown: collection is { Name: null });
+            })
             .OrderBy(item => item.FullName, StringComparer.Ordinal)
             .ToArray();
     }
+
+    private static IReadOnlyDictionary<string, string[]> IndexConstants(IEnumerable<FileExtract> extracts) =>
+        extracts.SelectMany(extract => extract.Constants)
+            .GroupBy(item => item.Key, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key,
+                group => group.Select(item => item.Value).Distinct(StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
 
     internal static FileExtract ExtractText(string text) => ExtractRoot(ParseText(text).GetRoot());
 
@@ -327,12 +389,25 @@ internal static class AcceptanceTestClassSourceScanner
             _ => null
         };
 
-    private static string? ResolveCollection(string fullName, CollectionExpression expression,
-        IReadOnlyDictionary<string, string[]> constants)
+    private static ResolvedCollection? ResolveCollection(string fullName, CollectionExpression expression,
+        IReadOnlyDictionary<string, string[]> constants, Lazy<IReadOnlyDictionary<string, string[]>>? referencedConstants)
     {
         if (expression.Kind == CollectionExpressionKind.None) return null;
         var value = ResolveExpression(expression, constants);
-        if (value is null && expression.Kind switch
+        if (value is not null) return new(value);
+        if (referencedConstants is not null)
+        {
+            // Local ambiguity stays unknown. Only missing local names can use the reference closure.
+            var useReferences = expression.Kind switch
+            {
+                CollectionExpressionKind.Member => !constants.ContainsKey(expression.Value!),
+                CollectionExpressionKind.Identifier => !constants.Keys.Any(key =>
+                    key.EndsWith($".{expression.Value}", StringComparison.Ordinal)),
+                _ => false
+            };
+            return new(useReferences ? ResolveExpression(expression, referencedConstants.Value) : null);
+        }
+        if (expression.Kind switch
             {
                 CollectionExpressionKind.Member => constants.TryGetValue(expression.Value!, out var values) &&
                                                    values.Length > 1,
@@ -341,7 +416,7 @@ internal static class AcceptanceTestClassSourceScanner
                     item.Value.Length > 1),
                 _ => false
             }) return null;
-        return value ?? throw new InvalidDataException($"Cannot resolve test collection on '{fullName}'.");
+        throw new InvalidDataException($"Cannot resolve test collection on '{fullName}'.");
     }
 
     private static string? ResolveUnqualifiedConstant(string name, IReadOnlyDictionary<string, string[]> constants)
@@ -360,8 +435,8 @@ internal static class AcceptanceTestClassSourceScanner
             bases.Any(parent => HasRunnableFacts(parent, byName, visited));
     }
 
-    private static string? InheritedValue(SourceClass item, IReadOnlyDictionary<string, SourceClass[]> byName,
-        Func<SourceClass, string?> select, HashSet<string> visited)
+    private static T? InheritedValue<T>(SourceClass item, IReadOnlyDictionary<string, SourceClass[]> byName,
+        Func<SourceClass, T?> select, HashSet<string> visited) where T : class
     {
         var declared = select(item);
         if (declared is not null || !visited.Add(item.FullName)) return declared;
@@ -371,7 +446,8 @@ internal static class AcceptanceTestClassSourceScanner
     }
 
     private sealed record SourceClass(string FullName, string ShortName, bool Abstract, string? BaseName,
-        bool HasFacts, string? Collection, string? Constraint);
+        bool HasFacts, ResolvedCollection? Collection, string? Constraint);
+    private sealed record ResolvedCollection(string? Name);
 
     // Only file-local syntax facts are cached; resolution against other files happens on every scan.
     internal sealed record FileExtract(IReadOnlyList<ConstantExtract> Constants, IReadOnlyList<ClassExtract> Classes,

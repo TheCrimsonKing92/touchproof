@@ -69,19 +69,24 @@ public sealed class ContextReworkUsageReportTests
     [Fact]
     public void RejectsInvalidReworkOptionsBeforeReadingGoals()
     {
-        using var output = new StringWriter();
-        using var error = new StringWriter();
-        string[][] invalid =
+        const string usage = CliCommandHelp.ContextUsageUsage;
+        const string reversedWindow = "--since must precede --until.";
+        (string[] Flags, string Message)[] invalid =
         [
-            ["--sections", "--rework"],
-            ["--top", "1"],
-            ["--until", Window[3]],
-            ["--rework", "--top", "0"],
-            ["--rework", "--until", "2026-09-15T12:10:00"],
-            ["--rework", "--since", Window[3], "--until", Window[3]]
+            (["--sections", "--rework"], usage),
+            (["--top", "1"], usage),
+            (["--sections", "--until", Window[3]], usage),
+            (["--since", Window[3], "--until", Window[3]], reversedWindow),
+            (["--since", Window[3], "--until", Window[1]], reversedWindow),
+            (["--until", "2026-09-15T12:10:00"], usage),
+            (["--rework", "--top", "0"], usage),
+            (["--rework", "--until", "2026-09-15T12:10:00"], usage),
+            (["--rework", "--since", Window[3], "--until", Window[3]], reversedWindow)
         ];
-        foreach (var flags in invalid)
+        foreach (var (flags, message) in invalid)
         {
+            using var output = new StringWriter();
+            using var error = new StringWriter();
             var loaded = false;
             var exit = CliContextUsageCommand.Run(["context-usage", .. flags], () =>
             {
@@ -90,8 +95,9 @@ public sealed class ContextReworkUsageReportTests
             }, output, error);
             Assert.Equal(1, exit);
             Assert.False(loaded);
+            Assert.Equal(string.Empty, output.ToString());
+            Assert.Equal($"Error: {message}{Environment.NewLine}", error.ToString());
         }
-        Assert.Equal(string.Empty, output.ToString());
     }
 
     private static Goal[] FixtureGoals() =>

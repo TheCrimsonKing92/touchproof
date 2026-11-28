@@ -41,7 +41,6 @@ public sealed class RoleRequirementIntegrationBranchTests
         {
             var actual = fixture.Build(branch);
             Assert.Equal(Render(baseline), Render(actual));
-            Assert.Equal(Render(baseline, true), Render(actual, true));
         }
     }
 
@@ -164,8 +163,8 @@ public sealed class RoleRequirementIntegrationBranchTests
     private static TaskBriefSegment Scope(TaskBriefSource source) =>
         Assert.Single(source.Segments, segment => segment.ReviewerChangedFiles is not null);
 
-    private static string Render(TaskBriefSource source, bool typed = false) =>
-        source.ProjectLegacyMarkedTextV1(typed).Content;
+    private static string Render(TaskBriefSource source) =>
+        source.ProjectLegacyMarkedTextV1().Content;
 
     private static IReadOnlyList<string> Apply(IReadOnlyList<string> lines, string? branch)
     {
