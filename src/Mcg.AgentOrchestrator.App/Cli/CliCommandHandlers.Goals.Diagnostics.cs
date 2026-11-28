@@ -401,14 +401,14 @@ private static bool TryResolveIntegrationCommitAuthoredAt(
 }
 
 internal static string ResolveGoalStatusText(OrchestratorWorkspace workspace, Goal goal,
-    Action<string>? reportDegradedRead = null, StartupSqliteRetryOptions? retry = null)
+    Action<string>? reportDegradedRead = null, StartupSqliteRetryOptions? retry = null,
+    int busyTimeoutMilliseconds = StateDbConnectionFactory.DefaultBusyTimeoutMilliseconds)
 {
-    // Keep the monitoring lifecycle facts, but read clarification items without creating a store.
     var executionDirectory = workspace.ExecutionDirectory;
     var workspaceExists = GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null;
     var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
     var collaborationPath = Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db");
-    var clarification = GoalClarificationItemsReader.Read(collaborationPath, goal.Id.Value, retry);
+    var clarification = GoalClarificationItemsReader.Read(collaborationPath, goal.Id.Value, retry, busyTimeoutMilliseconds);
     if (clarification.DegradedRead is { } line)
         reportDegradedRead?.Invoke(line);
     var hasOpenClarification = GoalRefinementService.HasOpenClarification(clarification.Items);

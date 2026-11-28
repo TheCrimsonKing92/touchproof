@@ -11,7 +11,8 @@ internal static class GoalClarificationItemsReader
 
     internal sealed record Result(IReadOnlyList<CollaborationItem> Items, string? DegradedRead);
 
-    internal static Result Read(string collaborationPath, string goalId, StartupSqliteRetryOptions? retry = null)
+    internal static Result Read(string collaborationPath, string goalId, StartupSqliteRetryOptions? retry = null,
+        int busyTimeoutMilliseconds = StateDbConnectionFactory.DefaultBusyTimeoutMilliseconds)
     {
         if (!File.Exists(collaborationPath))
             return new Result([], null);
@@ -19,7 +20,7 @@ internal static class GoalClarificationItemsReader
         try
         {
             var items = StartupSqliteRetry.Run(collaborationPath, Operation,
-                () => CollaborationItemStore.OpenReadOnly(collaborationPath)
+                () => CollaborationItemStore.OpenReadOnly(collaborationPath, busyTimeoutMilliseconds)
                     .ListAsync(goalId).GetAwaiter().GetResult(), retry);
             return new Result(items, null);
         }
