@@ -17,6 +17,18 @@ public static partial class GoalWorktrees
         "global.json", "NuGet.config"
     };
 
+    private static readonly AsyncLocal<Func<string, string, string, RepositoryChangeSummary, RepositoryTestImpactPlan?>?>
+        CandidateImpactPlanner = new();
+
+    internal static T WithCandidateImpactPlanner<T>(
+        Func<string, string, string, RepositoryChangeSummary, RepositoryTestImpactPlan?> planner, Func<T> resolve)
+    {
+        var previous = CandidateImpactPlanner.Value;
+        CandidateImpactPlanner.Value = planner;
+        try { return resolve(); }
+        finally { CandidateImpactPlanner.Value = previous; }
+    }
+
     public static bool TryComputeCandidateIdentity(
         string worktreePath,
         string integrationBranch,
@@ -46,9 +58,9 @@ public static partial class GoalWorktrees
                 return false;
             if (!TryHashBaseClosure(worktreePath, baseSha, changedFiles, out var closureHash, out failureReason))
                 return false;
-            var manifest = (manifestIdentity ?? ((path, files) =>
-                GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(path, files, projectHomeDirectory)))(
-                worktreePath, changedFiles);
+            var manifest = manifestIdentity is not null
+                ? manifestIdentity(worktreePath, changedFiles)
+                : ComputeCandidateManifestIdentity(worktreePath, integrationBranch, baseSha, changedFiles, projectHomeDirectory);
             if (string.IsNullOrWhiteSpace(manifest))
                 return Fail("manifest-unavailable", out failureReason);
             identity = new CandidateIdentity(patchId, closureHash, manifest);
@@ -58,6 +70,18 @@ public static partial class GoalWorktrees
         {
             return Fail($"candidate-computation-failed:{ex.GetType().Name}:{ex.Message}", out failureReason);
         }
+    }
+
+    private static string ComputeCandidateManifestIdentity(string worktreePath, string integrationBranch,
+        string mergeBase, IReadOnlyList<string> changedFiles, string? projectHomeDirectory)
+    {
+        string Compute() => GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+            worktreePath, changedFiles, projectHomeDirectory);
+        return CandidateImpactPlanner.Value is { } planner
+            ? ManifestScopedImpactPlan.WithRawPlanner(
+                (summary, root) => string.Equals(root, worktreePath, StringComparison.Ordinal)
+                    ? planner(root, integrationBranch, mergeBase, summary) : null, Compute)
+            : Compute();
     }
 
     internal static bool TryResolveCandidateMergeBase(string worktreePath, string integrationBranch, out string mergeBase)

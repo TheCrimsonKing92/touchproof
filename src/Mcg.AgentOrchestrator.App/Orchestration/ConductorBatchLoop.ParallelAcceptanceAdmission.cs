@@ -439,20 +439,19 @@ internal sealed partial class ConductorBatchLoop
         if (suppressNewAcceptanceAdmission()) return;
         var oldestWaiter = state.OldestWaiterObservation.Waiter;
         var oldestServedThisTick = false;
+        var selectorInventory = new GateObligationSelectorPreAdmissionClassifier.SoloInventoryPass(
+            _declaredInventoryStore, line => RecordParallelAcceptanceProgress(line, changedGoalLines));
         foreach (var goal in state.OrderedEligible)
         {
             // An inline completion can schedule a relaunch before the next candidate.
             if (suppressNewAcceptanceAdmission()) break;
-            if (state.Results.ContainsKey(goal.Id.Value))
-            {
-                continue;
-            }
+            if (state.Results.ContainsKey(goal.Id.Value)) continue;
             try
             {
             var soloAdmission = ActivationAdmissionProbeScope.RecordSolo(goal.Id, EvaluateSoloAcceptanceAdmissibility(
                 kernel, driver, goal, policy, state.AcceptanceCensus, state.ConfiguredAcceptanceWidth,
                 state.ActiveAttemptSlotIndexes, state.ActiveCandidates, state.LiveAttemptGoalIds,
-                state.OldestWaiterObservation, oldestServedThisTick, tick));
+                state.OldestWaiterObservation, oldestServedThisTick, tick, selectorInventory));
             if (soloAdmission.Kind != SoloAcceptanceAdmissionKind.Admissible)
             {
                 if (soloAdmission.Kind == SoloAcceptanceAdmissionKind.Capacity) state.DeferredByAdmission++;
