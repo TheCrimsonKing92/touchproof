@@ -8,7 +8,7 @@ internal sealed partial class ConductorBatchLoop
     internal enum SoloAcceptanceAdmissionKind
     {
         Admissible, Completed, VerificationGate, EngineCircuit, SlotSettings,
-        Capacity, Fairness, CandidateUnavailable, ResourceConflict, WorkspaceProbeBackoff
+        Capacity, Fairness, CandidateUnavailable, ResourceConflict, WorkspaceProbeBackoff, UnresolvedObligationSelector
     }
 
     internal sealed record SoloAcceptanceAdmission(
@@ -25,7 +25,7 @@ internal sealed partial class ConductorBatchLoop
         ConductorAutonomyPolicy policy, LiveAcceptanceCensus census, int configuredWidth,
         IReadOnlySet<int> activeSlots, IReadOnlyList<ConductorParallelAcceptanceCandidate> activeCandidates,
         IReadOnlySet<string> liveGoalIds, ParallelAcceptanceOldestWaiterObservation oldestObservation,
-        bool oldestServedThisTick, int tick)
+        bool oldestServedThisTick, int tick, GateObligationSelectorPreAdmissionClassifier.SoloInventoryPass? selectorInventory = null)
     {
         if (goal.Status == GoalStatus.Completed)
         {
@@ -111,8 +111,8 @@ internal sealed partial class ConductorBatchLoop
         {
             return conflict;
         }
-        return new(SoloAcceptanceAdmissionKind.Admissible, candidate,
-            StalledOldestBypass: fairnessApplies ? oldestObservation : null);
+        return GateObligationSelectorPreAdmissionClassifier.CheckSolo(kernel, driver, goal, policy, _workspace, selectorInventory,
+            new(SoloAcceptanceAdmissionKind.Admissible, candidate, StalledOldestBypass: fairnessApplies ? oldestObservation : null));
     }
 
     internal static SoloAcceptanceAdmission? DetectSoloAcceptanceResourceConflict(
@@ -136,7 +136,7 @@ internal sealed partial class ConductorBatchLoop
                 driver.EscalateParallelLandingAcceptance(goal, policy, admission.Reason!),
             SoloAcceptanceAdmissionKind.Capacity =>
                 AdmissionDeniedHeld(goal, policy, admission.CapacityDecision!),
-            SoloAcceptanceAdmissionKind.WorkspaceProbeBackoff =>
+            SoloAcceptanceAdmissionKind.WorkspaceProbeBackoff or SoloAcceptanceAdmissionKind.UnresolvedObligationSelector =>
                 ParallelAcceptanceHeld(admission.Candidate!, policy, admission.Reason!),
             SoloAcceptanceAdmissionKind.Fairness or SoloAcceptanceAdmissionKind.ResourceConflict =>
                 ParallelAcceptanceHeld(admission.Candidate!, policy, admission.Reason!, ConductorHoldOwner.AcceptanceQueue),

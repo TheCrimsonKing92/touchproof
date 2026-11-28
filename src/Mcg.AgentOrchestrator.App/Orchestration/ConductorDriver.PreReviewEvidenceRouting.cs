@@ -123,29 +123,16 @@ internal sealed partial class ConductorDriver
         return true;
     }
 
-    internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(Goal goal, string executionDirectory, string integrationBranch, WorkerTargetHome? targetHome = null, string? orchestratorDirectory = null)
-    {
-        var worktreePath = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
-        var candidateSha = worktreePath is null ? null : TryResolveGitHead(worktreePath);
-        var changedFiles = worktreePath is null
-            ? Array.Empty<string>()
-            : GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath, integrationBranch);
-        return BuildPreReviewEvidenceContext(
-            candidateSha,
-            changedFiles,
-            worktreePath, targetHome, orchestratorDirectory ?? targetHome?.ProjectHomeDirectory ?? OrchestratorWorkspace.ForDirectory(executionDirectory).OrchestratorDirectory, goal);
-    }
+    internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(Goal goal, string executionDirectory, string integrationBranch,
+        WorkerTargetHome? targetHome = null, string? orchestratorDirectory = null, TickTestImpactPlanMemo? memo = null) =>
+        GoalTargetImpactPlanScope.BuildEvidenceContext(goal, executionDirectory, integrationBranch, targetHome, orchestratorDirectory, memo);
 
     internal PreReviewEvidenceContext GetPreReviewEvidenceContext(Goal goal) => _getPreReviewEvidenceContext(goal);
 
     internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(
-        string? candidateSha, IReadOnlyList<string> changedFiles, string? repositoryRoot = null, WorkerTargetHome? targetHome = null, string? orchestratorDirectory = null, Goal? goal = null)
-    {
-        var changeSummary = RepositoryChangeClassifier.Classify(changedFiles);
-        var boundedPlan = ReverseDependencyBreadthBound.Apply(GoalTargetImpactPlanScope.Plan(changeSummary, repositoryRoot, targetHome), changeSummary.Files.Select(file => file.Path));
-        var plan = ReverseDependencyEvidenceCostGate.Apply(boundedPlan, selections => ReverseDependencyEvidenceCostHistory.Read(repositoryRoot, orchestratorDirectory, selections, changedFiles, targetHome?.ProjectHomeDirectory));
-        return BuildPreReviewEvidenceContext(candidateSha, changeSummary, plan, goal, repositoryRoot);
-    }
+        string? candidateSha, IReadOnlyList<string> changedFiles, string? repositoryRoot = null, WorkerTargetHome? targetHome = null,
+        string? orchestratorDirectory = null, Goal? goal = null) =>
+        GoalTargetImpactPlanScope.BuildEvidenceContext(candidateSha, changedFiles, repositoryRoot, targetHome, orchestratorDirectory, goal);
 
     internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(
         string? candidateSha, RepositoryChangeSummary changeSummary, RepositoryTestImpactPlan plan, Goal? goal = null, string? worktreePath = null) =>

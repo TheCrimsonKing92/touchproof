@@ -897,7 +897,7 @@ internal sealed partial class ConductorDriver
         SliceBatchParentExecutionGuard = new SliceBatchParentExecutionGuard(() => kernel.Goals);
         _isVerificationGateSatisfied = goal => kernel.BuildVerificationGate(goal.Id).IsSatisfied;
         _gateReadyCandidateProjector = GateReadyCandidateProjector.CreateForRepository(dir, workspace.IntegrationBranch);
-        _getPreReviewEvidenceContext = goal => ConductorTickStepLedger.MeasureWithinWalk("walk-candidate-context", () => BuildPreReviewEvidenceContext(goal, dir, workspace.IntegrationBranch, WorkerTargetHomeFactory.For(OrchestratorHome.ResolveForLaunch(workspace.ExecutionDirectory), workspace), workspace.OrchestratorDirectory));
+        _getPreReviewEvidenceContext = goal => ConductorTickStepLedger.MeasureWithinWalk("walk-candidate-context", () => BuildPreReviewEvidenceContext(goal, dir, workspace.IntegrationBranch, WorkerTargetHomeFactory.For(OrchestratorHome.ResolveForLaunch(workspace.ExecutionDirectory), workspace), workspace.OrchestratorDirectory, _testImpactPlanMemo));
         RecoveryCandidateRevision = goal => GoalWorktrees.TryResolve(dir, goal.Id) is { } worktree ? TryResolveGitHead(worktree) : null;
         _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
             GoalWorktrees.TryResolve(dir, goal.Id) ?? dir, workspace.ProjectHomeDirectoryOrNull);
@@ -1215,13 +1215,13 @@ internal sealed partial class ConductorDriver
 
     internal void BeginTick(AgentOrchestratorKernel? kernel, int tick)
     {
-        _isConductorTick = true;
-        _conductorTickKernel = kernel;
-        _conductorTick = tick;
+        (_isConductorTick, _conductorTickKernel, _conductorTick) = (true, kernel, tick);
         _buildServerShutdownRanThisTick = false;
         SliceBatchParentExecutionGuard?.BeginTick();
         SliceBatchAdmissionEvaluator?.BeginTick();
     }
+
+    internal IDisposable BeginTestImpactPlanTick() => TickTestImpactPlanMemo.ActivateForTick(TestImpactPlanMemoFactory(), memo => _testImpactPlanMemo = memo);
 
     internal static DispatchStartOutcome ClassifySubscriptionStartForConductor(SubscriptionStartResult result)
     {

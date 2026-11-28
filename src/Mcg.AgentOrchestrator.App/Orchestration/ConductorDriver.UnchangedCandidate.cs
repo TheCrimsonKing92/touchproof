@@ -9,6 +9,8 @@ internal sealed partial class ConductorDriver
 {
     private ConductEventLogWriter? _candidateIdentityEventWriter;
     private AgentOrchestratorKernel? _unchangedCandidateReinstatementKernel;
+    private TickTestImpactPlanMemo? _testImpactPlanMemo;
+    internal Func<TickTestImpactPlanMemo> TestImpactPlanMemoFactory { get; set; } = () => new();
 
     internal Func<Goal, (CandidateIdentity? Identity, string Failure)> _resolveCandidateIdentity =
         _ => (null, "resolver-unavailable");
@@ -26,7 +28,8 @@ internal sealed partial class ConductorDriver
     private void ConfigureCandidateIdentity(AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace)
     {
         _candidateIdentityEventWriter = new ConductEventLogWriter(workspace.ConductEventsLogPath);
-        _resolveCandidateIdentity = GoalWorktreeCandidateContext.Configure(kernel, workspace);
+        var resolve = GoalWorktreeCandidateContext.Configure(kernel, workspace);
+        _resolveCandidateIdentity = goal => _testImpactPlanMemo?.ResolveCandidateIdentity(() => resolve(goal)) ?? resolve(goal);
         kernel.ConfigureCandidateIdentityResolver(goal => _resolveCandidateIdentity(goal).Identity);
     }
 

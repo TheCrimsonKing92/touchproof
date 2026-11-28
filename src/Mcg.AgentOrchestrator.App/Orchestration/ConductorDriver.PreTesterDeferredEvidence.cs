@@ -120,10 +120,10 @@ internal sealed partial class ConductorDriver
             task.RequiredRole == AgentRole.Tester && (task.LastDispatch is not null || task.DispatchHistory.Count != 0))
             ? new PreTesterReverseDependencyObservation.Boundary(goal.Id.Value, tester.Id.Value, candidateSha!)
             : null;
-        var (guards, augmented, abandoned) = PreTesterGuardSelections.CreateForRequest(_preTesterChangedFileGuards, worktreePath,
+        var (guards, augmented, abandoned) = CreatePreTesterGuardRequest(worktreePath,
             _getLandingFileScopes(goal), PreTesterMainRevision?.Invoke(worktreePath) ??
             PreTesterGuardSelections.ReadMainRevision(worktreePath, _cohortWorkspace), new(selected, notRun), settings, prior,
-            FormatFindingEvidenceSelection, (entry, line) => recorder.Run(goal.Id, tester.Id, entry, line),
+            (entry, line) => recorder.Run(goal.Id, tester.Id, entry, line),
             resolverTick, resolverBoundary);
         if (abandoned) prior = null;
         needsReplacementStartedEntry |= abandoned;
@@ -212,6 +212,15 @@ internal sealed partial class ConductorDriver
             refreshed, goalPrefix, policy, GoalLifecycle.ResolveState(refreshed, GetFacts(refreshed)));
         return true;
     }
+
+    internal (PreTesterGuardSelections Guards, DeveloperDeferredTestSelection Selection, bool Abandoned) CreatePreTesterGuardRequest(
+        string worktreePath, IReadOnlyList<string> changedPaths, string mainRevision,
+        DeveloperDeferredTestSelection declaration, AcceptanceGateEngineSettings settings, PreTesterEvidenceEntry? prior,
+        Action<PreTesterEvidenceEntry, string> record, PreTesterReverseDependencyObservation.Tick? resolverTick = null,
+        PreTesterReverseDependencyObservation.Boundary? resolverBoundary = null) =>
+        TickTestImpactPlanMemo.CreateGuardRequest(_testImpactPlanMemo, _cohortWorkspace?.IntegrationBranch, _preTesterChangedFileGuards,
+            worktreePath, changedPaths, mainRevision, declaration, settings, prior, FormatFindingEvidenceSelection, record,
+            resolverTick, resolverBoundary);
 
     private bool TryEscalatePreTesterRedLoop(
         Goal goal,
